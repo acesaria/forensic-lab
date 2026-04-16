@@ -1,0 +1,120 @@
+---
+- name: Volatility 3 ISF build
+  hosts: all
+  become: yes
+
+  vars:
+    kernel_version: "{{ ansible_kernel }}"
+    isf_filename: "ubuntu_{{ ansible_kernel }}.json"
+    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"
+    local_isf_dir: "{{ playbook_dir }}/../shared/isf"
+    local_isf_path: "{{ local_isf_dir }}/{{ isf_filename }}"
+
+  pre_tasks:
+    - name: Check if ISF JSON already exists on host
+      ansible.builtin.stat:
+        path: "{{ local_isf_path }}"
+      register: host_isf
+      delegate_to: localhost
+      become: no
+
+    - name: Skip ISF build when file already exists
+      ansible.builtin.meta: end_play
+      when: host_isf.stat.exists
+
+  tasks:
+    - name: Install base dependencies
+      ansible.builtin.apt:
+        name:
+          - git
+          - golang-go
+          - ubuntu-dbgsym-keyring
+          - software-properties-common
+        state: present
+        update_cache: yes
+
+    - name: Add apt-fast PPA
+      ansible.builtin.apt_repository:
+        repo: ppa:apt-fast/stable
+        state: present
+
+    - name: Install apt-fast and aria2
+      ansible.builtin.apt:
+        name:
+          - apt-fast
+          - aria2
+        state: present
+        update_cache: yes
+
+    - name: Configure apt-fast for ddebs mirror
+      ansible.builtin.lineinfile:
+        path: /etc/apt-fast.conf
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        create: yes
+      loop:
+        - { regexp: '^_MAXNUM=',  line: '_MAXNUM=16' }
+        - { regexp: '^_MIRRORS=', line: "_MIRRORS=( 'http://ddebs.ubuntu.com' )" }
+
+    - name: Enable Ubuntu debug symbol repositories
+      ansible.builtin.apt_repository:
+        repo: "deb http://ddebs.ubuntu.com {{ ansible_distribution_release }}{{ item }} main restricted universe multiverse"
+        state: present
+      loop: ["", "-updates", "-proposed"]
+
+    - name: Update package cache via apt-fast
+      ansible.builtin.command:
+        cmd: apt-fast update
+      changed_when: false
+
+    - name: Install matching Linux debug symbols via apt-fast
+      ansible.builtin.command:
+        cmd: "apt-fast install -y linux-image-{{ kernel_version }}-dbgsym"
+      args:
+        creates: "{{ debug_vmlinux_path }}"
+
+    - name: Clone dwarf2json source
+      ansible.builtin.git:
+        repo: https://github.com/volatilityfoundation/dwarf2json.git
+        dest: /opt/dwarf2json
+        version: master
+        update: yes
+
+    - name: Build dwarf2json
+      ansible.builtin.command:
+        cmd: go build -o dwarf2json .
+        chdir: /opt/dwarf2json
+
+    - name: Verify debug kernel ELF exists
+      ansible.builtin.stat:
+        path: "{{ debug_vmlinux_path }}"
+      register: debug_elf
+
+    - name: Abort when debug symbols are missing
+      ansible.builtin.fail:
+        msg: "Missing debug symbols at {{ debug_vmlinux_path }}. Check dbgsym repository and package installation."
+      when: not debug_elf.stat.exists
+
+    - name: Generate ISF JSON using dwarf2json
+      ansible.builtin.command:
+        cmd: "/opt/dwarf2json/dwarf2json linux --elf {{ debug_vmlinux_path }}"
+      register: dwarf2json_output
+
+    - name: Write ISF JSON to temporary file
+      ansible.builtin.copy:
+        content: "{{ dwarf2json_output.stdout }}"
+        dest: "/tmp/{{ isf_filename }}"
+
+    - name: Ensure local shared ISF directory exists
+      ansible.builtin.file:
+        path: "{{ local_isf_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      become: no
+
+    - name: Fetch ISF file to host shared/isf directory
+      ansible.builtin.fetch:
+        src: "/tmp/{{ isf_filename }}"
+        dest: "{{ local_isf_path }}"
+        flat: yes

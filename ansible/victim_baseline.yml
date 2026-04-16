@@ -1,0 +1,25 @@
+---
+- name: Victim environment baseline
+  hosts: all
+  become: yes
+
+  tasks:
+    - name: Disable host-based security mechanisms (ufw, apparmor)
+      ansible.builtin.service:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - ufw
+        - apparmor
+
+    - name: Remove unattended upgrades to reduce background noise
+      ansible.builtin.apt:
+        name: unattended-upgrades
+        state: absent
+
+    - name: Ensure SSH service is running for orchestration
+      ansible.builtin.service:
+        name: ssh
+        state: started
+        enabled: yes

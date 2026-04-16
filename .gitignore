@@ -1,0 +1,40 @@
+# Large files
+*.log
+*.tar
+*.zip
+*.gz
+*.iso
+*.dmg
+*.exe
+*.bin
+*.raw
+*.dd
+*.img
+*.mem
+*.vmem
+*.lime
+*.dmp
+*.E[0-9][0-9]
+*.e[0-9][0-9]
+
+# Unused directories
+node_modules/
+venv/
+env/
+.venv/
+dist/
+build/
+.cache/
+.pytest_cache/
+__pycache__/
+*.egg-info/
+.vagrant/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp

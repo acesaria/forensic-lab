@@ -1,0 +1,24 @@
+{
+    "scenario_id": "victim_baseline_ubuntu22",
+    "created_at": 1775667316.287518,
+    "memory_image": {
+        "path": "shared/dumps/victim_baseline_ubuntu22/memory/baseline_memory.raw",
+        "tool": "virsh dump --memory-only --live",
+        "sha256": "263a7714e6059fa32a966f7772d70101658979361b18dbc954393eb66077a02b",
+        "size_bytes": 2151876731,
+        "timestamp": 1775666619.414373,
+        "acquisition_seconds": 3.1219255924224854,
+        "virtual_size_bytes": null,
+        "ewf_size_bytes": null
+    },
+    "disk_image": {
+        "path": "shared/dumps/victim_baseline_ubuntu22/disk/baseline_disk.E01",
+        "tool": "qemu-nbd --read-only + ewfacquire -c fast -j 4",
+        "sha256": "3ebb496a5ade7051391d530a72101e6bd01ec9c07ed7c90a460cd647b924f292",
+        "size_bytes": 1572832871,
+        "timestamp": 1775667311.9958227,
+        "acquisition_seconds": 688.56525182724,
+        "virtual_size_bytes": null,
+        "ewf_size_bytes": 1572832871
+    }
+}
