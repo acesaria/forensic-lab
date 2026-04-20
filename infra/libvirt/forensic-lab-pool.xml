@@ -1,0 +1,6 @@
+<pool type="dir">
+  <name>thesis-lab-pool</name>
+  <target>
+    <path>/srv/thesis-lab/disks</path>
+  </target>
+</pool>

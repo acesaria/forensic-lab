@@ -1,0 +1,7 @@
+# infra/profiles/ubuntu-22.04.yaml
+distro_id: ubuntu-22.04
+os_variant: ubuntu22.04
+image:
+  url: https://cloud-images.ubuntu.com/releases/jammy/release-20260320/ubuntu-22.04-server-cloudimg-amd64-disk-kvm.img
+  checksum_url: https://cloud-images.ubuntu.com/releases/jammy/release-20260320/SHA256SUMS
+  checksum_algo: sha256

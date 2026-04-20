@@ -1,0 +1,7 @@
+distro_id: ubuntu-24.04
+os_variant: ubuntu24.04        # opzionale, null = "generic"
+image:
+  url: https://cloud-images.ubuntu.com/noble/20260323/noble-server-cloudimg-amd64.img
+  filename: noble-server-cloudimg-amd64.img
+  checksum_url: https://cloud-images.ubuntu.com/noble/20260323/SHA256SUMS
+  checksum_algo: sha256         # sha256 | sha512
