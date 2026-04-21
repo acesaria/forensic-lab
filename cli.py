@@ -39,6 +39,7 @@ def _load_config(repo_root: Path) -> dict[str, Any]:
             "pool_path": cfg["pool_path"],
             "ssh_user": cfg["ssh_user"],
             "ssh_key": cfg["ssh_key"],
+            "ssh_authorized_keys_path": cfg.get("ssh_authorized_keys_path"),
             "shared_dir": cfg["shared_dir"],
             "networks": {
                 "isolated": networks.get("isolated", "forensics-isolated"),

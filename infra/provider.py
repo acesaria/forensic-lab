@@ -62,6 +62,13 @@ class Provider:
         self._uri: str = lab["libvirt_uri"]
         self._pool_name: str = lab["pool_name"]
         self._pool_path: Path = Path(lab["pool_path"]).expanduser().resolve()
+        self._ssh_key_path: Path = Path(lab["ssh_key"]).expanduser().resolve()
+        auth_path = lab.get("ssh_authorized_keys_path")
+        self._ssh_authorized_keys_path: Path = (
+            Path(auth_path).expanduser().resolve()
+            if auth_path
+            else Path(f"{self._ssh_key_path}.pub")
+        )
         self._net_isolated: str = lab["networks"]["isolated"]
         self._net_internet: str = lab["networks"]["internet"]
         self._cloud_init_dir: Path = repo_root / "infra" / "cloud-init"
@@ -170,9 +177,11 @@ class Provider:
             meta_data.write_text(
                 f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n"
             )
+            rendered_user_data = Path(tmp) / "user-data"
+            rendered_user_data.write_text(self._render_user_data(role))
             subprocess.run(
                 ["cloud-localds", str(seed_path),
-                 str(user_data), str(meta_data)],
+                 str(rendered_user_data), str(meta_data)],
                 check=True, capture_output=True, text=True,
             )
 
@@ -331,3 +340,23 @@ class Provider:
             if src is not None:
                 return src.attrib["file"]
         raise RuntimeError(f"Could not find disk path for '{vm_name}'")
+
+    def _render_user_data(self, role: str) -> str:
+        user_data_path = self._cloud_init_dir / role / "user-data"
+        data = user_data_path.read_text()
+        if not self._ssh_authorized_keys_path.exists():
+            raise FileNotFoundError(
+                f"SSH authorized key not found: {self._ssh_authorized_keys_path}"
+            )
+        pubkey = self._ssh_authorized_keys_path.read_text().strip()
+        rendered_lines: list[str] = []
+        replaced = False
+        for line in data.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("- ssh-") and not replaced:
+                indent = line.split("-")[0]
+                rendered_lines.append(f"{indent}- {pubkey}")
+                replaced = True
+                continue
+            rendered_lines.append(line)
+        return "\n".join(rendered_lines) + "\n"
