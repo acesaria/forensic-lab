@@ -1,0 +1,25 @@
+# Copy this file to config.yaml and adjust paths for your machine.
+# config.yaml is gitignored — never commit it.
+
+lab:
+libvirt_uri: qemu:///system
+pool_name: forensic-lab-pool
+pool_path: ~/.local/share/forensic-lab/disks
+ssh_user: labuser
+ssh_key: ~/.ssh/forensics-lab
+shared_dir: ./shared
+
+networks:
+ isolated: forensics-isolated
+ internet: default
+
+role_defaults:
+lab:
+ disk_size: 10G
+ ram_mb: 2048
+ vcpus: 2
+build-isf:
+ disk_size: 15G
+ ram_mb: 6144
+ vcpus: 4
+ ephemeral: true

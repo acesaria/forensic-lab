@@ -13,7 +13,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from infra.provider import Provider
@@ -23,12 +23,12 @@ if TYPE_CHECKING:
 class ImageMetadata:
     path: str
     tool: str
-    sha256: Optional[str]
-    size_bytes: Optional[int]
+    sha256: str | None
+    size_bytes: int | None
     timestamp: float
-    acquisition_seconds: Optional[float] = None
-    virtual_size_bytes: Optional[int] = None
-    ewf_size_bytes: Optional[int] = None
+    acquisition_seconds: float | None = None
+    virtual_size_bytes: int | None = None
+    ewf_size_bytes: int | None = None
 
 
 @dataclass
@@ -59,10 +59,10 @@ class Dumper:
         """
         scenario_dir = self._scenario_dir(scenario_id)
         memory_path = scenario_dir / "memory" / "baseline_memory.raw"
-        disk_path   = scenario_dir / "disk"   / "baseline_disk.E01"
+        disk_path = scenario_dir / "disk" / "baseline_disk.E01"
 
         memory_meta = self._acquire_memory(domain, memory_path)
-        disk_meta   = self._acquire_disk(domain, disk_path, provider)
+        disk_meta = self._acquire_disk(domain, disk_path, provider)
 
         manifest = AcquisitionManifest(
             scenario_id=scenario_id,
@@ -96,7 +96,7 @@ class Dumper:
         started = time.time()
         print(f"[*] Acquiring memory from '{domain}'...")
         subprocess.run(
-            ["virsh", "dump", domain, str(dest), "--memory-only", "--live"],
+            ["sudo", "virsh", "dump", domain, str(dest), "--memory-only", "--live"],
             check=True,
         )
         elapsed = time.time() - started
@@ -119,67 +119,58 @@ class Dumper:
         dest: Path,
         provider: "Provider",
     ) -> ImageMetadata:
-        disk_source = provider.get_disk_path(domain)
+        _ = provider
         prefix = str(dest.with_suffix(""))
 
         # clean up any previous EWF segments
         for seg in glob.glob(f"{prefix}.E??"):
             os.remove(seg)
 
-        virtual_size = self._qemu_virtual_size(disk_source)
         started = time.time()
-        nbd: Optional[str] = None
-        was_running = False
+        disk_source = self._get_domain_disk_source(domain)
+        virtual_size = self._qemu_virtual_size(disk_source)
 
         try:
-            # check if running
-            result = subprocess.run(
-                ["virsh", "domstate", domain],
-                capture_output=True, text=True, check=True,
-            )
-            was_running = "running" in result.stdout.lower()
-
-            if was_running:
-                print(f"[*] Shutting down '{domain}' for disk acquisition...")
-                provider.shutdown_vm(domain)
-
-            # load nbd module and connect
-            subprocess.run(["modprobe", "nbd", "max_part=16"], check=True)
-            nbd = self._free_nbd()
+            self._shutdown_for_acquisition(domain)
+            print(f"[*] Acquiring disk from '{disk_source}' -> {dest}...")
             subprocess.run(
-                ["qemu-nbd", "--read-only", "--connect", nbd, disk_source],
+                [
+                    "sudo",
+                    "ewfacquire",
+                    "-u",
+                    "-c",
+                    "fast",
+                    "-j",
+                    "4",
+                    "-t",
+                    prefix,
+                    disk_source,
+                ],
                 check=True,
             )
-
-            print(f"[*] Acquiring disk via {nbd} -> {dest}...")
-            subprocess.run(
-                ["ewfacquire", "-u", "-c", "fast", "-j", "4", "-t", prefix, nbd],
-                check=True,
-            )
-
         finally:
-            if nbd:
-                subprocess.run(["qemu-nbd", "--disconnect", nbd], check=False)
-            if was_running:
-                print(f"[*] Restarting '{domain}'...")
-                provider.start_vm(domain)
+            print(f"[*] Restarting '{domain}'...")
+            state = self._domain_state(domain)
+            if "running" not in state:
+                subprocess.run(["sudo", "virsh", "start", domain], check=True)
 
-        if not dest.exists():
-            raise RuntimeError(f"EWF output not found at {dest}")
+        segments = sorted(glob.glob(f"{prefix}.E??"))
+        if not segments:
+            raise RuntimeError(f"EWF output not found for prefix {prefix}.E??")
 
         elapsed = time.time() - started
-        size = dest.stat().st_size
-        print(f"[+] Disk acquisition done ({elapsed:.1f}s): {dest}")
+        ewf_size = sum(Path(p).stat().st_size for p in segments)
+        print(f"[+] Disk acquisition done ({elapsed:.1f}s): {segments[0]}")
 
         return ImageMetadata(
-            path=str(dest.relative_to(self.repo_root)),
-            tool="qemu-nbd --read-only + ewfacquire -c fast -j 4",
-            sha256=self._sha256(dest),
-            size_bytes=size,
+            path=str(Path(segments[0]).relative_to(self.repo_root)),
+            tool="ewfacquire -u -c fast -j 4",
+            sha256=self._sha256(Path(segments[0])),
+            size_bytes=Path(segments[0]).stat().st_size,
             timestamp=time.time(),
             acquisition_seconds=elapsed,
             virtual_size_bytes=virtual_size,
-            ewf_size_bytes=size,
+            ewf_size_bytes=ewf_size,
         )
 
     # --- helpers ----------------------------------------------------------
@@ -193,20 +184,60 @@ class Dumper:
         return h.hexdigest()
 
     @staticmethod
-    def _free_nbd() -> str:
-        for i in range(32):
-            pid = Path(f"/sys/class/block/nbd{i}/pid")
-            if not pid.exists():
-                return f"/dev/nbd{i}"
-        raise RuntimeError("No free NBD device found")
-
-    @staticmethod
-    def _qemu_virtual_size(disk_source: str) -> Optional[int]:
+    def _qemu_virtual_size(disk_source: str) -> int | None:
         try:
             r = subprocess.run(
                 ["qemu-img", "info", "--output", "json", disk_source],
-                capture_output=True, text=True, check=True,
+                capture_output=True,
+                text=True,
+                check=True,
             )
             return json.loads(r.stdout).get("virtual-size")
         except Exception:
             return None
+
+    @staticmethod
+    def _domain_state(domain: str) -> str:
+        r = subprocess.run(
+            ["sudo", "virsh", "domstate", domain],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return r.stdout.strip().lower()
+
+    def _shutdown_for_acquisition(self, domain: str, timeout: int = 90) -> None:
+        state = self._domain_state(domain)
+        if "running" not in state:
+            return
+
+        print(f"[*] Shutting down '{domain}' for disk acquisition...")
+        subprocess.run(["sudo", "virsh", "shutdown", domain], check=True)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            state = self._domain_state(domain)
+            if "shut off" in state:
+                return
+            time.sleep(2)
+
+        print(f"[!] Graceful shutdown timed out, forcing off '{domain}'")
+        subprocess.run(["sudo", "virsh", "destroy", domain], check=True)
+
+    @staticmethod
+    def _get_domain_disk_source(domain: str) -> str:
+        r = subprocess.run(
+            ["sudo", "virsh", "domblklist", domain, "--details"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        for line in r.stdout.splitlines():
+            parts = line.split()
+            if len(parts) < 4:
+                continue
+            typ, device, _target, source = parts[0], parts[1], parts[2], parts[3]
+            if typ == "file" and device == "disk":
+                return source
+
+        raise RuntimeError(f"Could not locate disk source for domain '{domain}'")
