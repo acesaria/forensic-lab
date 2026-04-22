@@ -19,34 +19,6 @@ import libvirt
 
 
 # ---------------------------------------------------------------------------
-# Inline XML definitions
-# ---------------------------------------------------------------------------
-
-_ISOLATED_NETWORK_XML = """
-<network>
-  <name>forensics-isolated</name>
-  <bridge name="virbr-forensics" stp="on" delay="0"/>
-  <ip address="192.168.100.1" netmask="255.255.255.0">
-    <dhcp>
-      <range start="192.168.100.10" end="192.168.100.50"/>
-    </dhcp>
-  </ip>
-</network>
-"""
-
-
-def _pool_xml(name: str, path: str) -> str:
-    return f"""
-<pool type="dir">
-  <name>{name}</name>
-  <target>
-    <path>{path}</path>
-  </target>
-</pool>
-"""
-
-
-# ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
 
@@ -71,7 +43,12 @@ class Provider:
         )
         self._net_isolated: str = lab["networks"]["isolated"]
         self._net_internet: str = lab["networks"]["internet"]
-        self._cloud_init_dir: Path = repo_root / "infra" / "cloud-init"
+        self._infra_dir: Path = repo_root / "infra"
+        self._cloud_init_dir: Path = self._infra_dir / "cloud-init"
+        self._cloud_init_template: Path = self._cloud_init_dir / "user-data"
+        self._cloud_init_meta_data: Path = self._cloud_init_dir / "meta-data"
+        self._network_xml: Path = self._infra_dir / "forensics-isolated.xml"
+        self._pool_xml: Path = self._infra_dir / "pool.xml"
         self._conn: Optional[libvirt.virConnect] = None
 
     # --- connection --------------------------------------------------------
@@ -103,7 +80,7 @@ class Provider:
             pass
 
         print(f"[*] Defining network '{self._net_isolated}'...")
-        net = conn.networkDefineXML(_ISOLATED_NETWORK_XML)
+        net = conn.networkDefineXML(self._network_xml.read_text())
         net.setAutostart(1)
         net.create()
         print(f"[+] Network '{self._net_isolated}' created")
@@ -125,9 +102,14 @@ class Provider:
             pass
 
         print(f"[*] Defining pool '{self._pool_name}' at {self._pool_path}...")
-        pool = conn.storagePoolDefineXML(
-            _pool_xml(self._pool_name, str(self._pool_path))
+        pool_xml = self._render_template(
+            self._pool_xml,
+            {
+                "__POOL_NAME__": self._pool_name,
+                "__POOL_PATH__": str(self._pool_path),
+            },
         )
+        pool = conn.storagePoolDefineXML(pool_xml)
         pool.setAutostart(1)
         pool.build(0)
         pool.create()
@@ -162,31 +144,12 @@ class Provider:
         disk_path = self._pool_path / f"{vm_name}.qcow2"
         seed_path = self._pool_path / f"{vm_name}-seed.iso"
 
-        # overlay on top of the immutable base image
-        subprocess.run(
-            ["qemu-img", "create", "-f", "qcow2",
-             "-b", str(base_image), "-F", "qcow2",
-             str(disk_path), role_cfg["disk_size"]],
-            check=True, capture_output=True, text=True,
-        )
+        self._create_disk_overlay(base_image, disk_path, role_cfg["disk_size"])
+        self._create_cloud_init_seed(vm_name, seed_path)
 
-        # cloud-init seed ISO (user-data + meta-data, no network-config)
-        user_data = self._cloud_init_dir / role / "user-data"
-        with tempfile.TemporaryDirectory() as tmp:
-            meta_data = Path(tmp) / "meta-data"
-            meta_data.write_text(
-                f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n"
-            )
-            rendered_user_data = Path(tmp) / "user-data"
-            rendered_user_data.write_text(self._render_user_data(role))
-            subprocess.run(
-                ["cloud-localds", str(seed_path),
-                 str(rendered_user_data), str(meta_data)],
-                check=True, capture_output=True, text=True,
-            )
-
-        network = role_cfg.get("network",
-            self._net_isolated if role == "lab" else self._net_internet
+        network = role_cfg.get(
+            "network",
+            self._net_isolated if role == "lab" else self._net_internet,
         )
         os_variant = profile.get("os_variant") or "generic"
 
@@ -211,6 +174,44 @@ class Provider:
         print(f"[+] VM '{vm_name}' created")
         return vm_name
 
+    def _create_disk_overlay(self, base_image: Path, disk_path: Path, disk_size: str) -> None:
+        if disk_path.exists():
+            disk_path.unlink()
+
+        subprocess.run(
+            [
+                "qemu-img",
+                "create",
+                "-f",
+                "qcow2",
+                "-b",
+                str(base_image),
+                "-F",
+                "qcow2",
+                str(disk_path),
+                disk_size,
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def _create_cloud_init_seed(self, vm_name: str, seed_path: Path) -> None:
+        if seed_path.exists():
+            seed_path.unlink()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            meta_data = Path(tmp) / "meta-data"
+            meta_data.write_text(self._render_meta_data(vm_name))
+            rendered_user_data = Path(tmp) / "user-data"
+            rendered_user_data.write_text(self._render_user_data())
+            subprocess.run(
+                ["cloud-localds", str(seed_path), str(rendered_user_data), str(meta_data)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
     # --- VM destruction ----------------------------------------------------
 
     def destroy_vm(self, vm_name: str) -> None:
@@ -222,13 +223,69 @@ class Provider:
             print(f"[i] VM '{vm_name}' not found, nothing to destroy")
             return
 
+        self._stop_domain_if_active(dom)
+        self._undefine_domain(conn, dom, vm_name)
+        self._verify_domain_removed(conn, vm_name)
+        self._remove_domain_artifacts(vm_name)
+
+    def _stop_domain_if_active(self, dom: libvirt.virDomain) -> None:
         state, _ = dom.state()
-        if state == libvirt.VIR_DOMAIN_RUNNING:
+        if state in (
+            libvirt.VIR_DOMAIN_RUNNING,
+            libvirt.VIR_DOMAIN_BLOCKED,
+            libvirt.VIR_DOMAIN_PAUSED,
+            libvirt.VIR_DOMAIN_PMSUSPENDED,
+        ):
             dom.destroy()  # force off
 
-        dom.undefineWithSnapshots()
-        print(f"[+] VM '{vm_name}' undefined")
+    def _undefine_domain(self, conn: libvirt.virConnect, dom: libvirt.virDomain, vm_name: str) -> None:
+        # Some local libvirt/python bindings do not expose undefineWithSnapshots,
+        # and some domains require extra flags (managed-save/NVRAM) to undefine.
+        undefined = False
+        try:
+            undefine_with_snapshots = getattr(dom, "undefineWithSnapshots", None)
+            if callable(undefine_with_snapshots):
+                undefine_with_snapshots()
+                undefined = True
+        except (AttributeError, libvirt.libvirtError):
+            pass
 
+        if not undefined:
+            try:
+                flags = 0
+                flags |= getattr(libvirt, "VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA", 0)
+                flags |= getattr(libvirt, "VIR_DOMAIN_UNDEFINE_MANAGED_SAVE", 0)
+                flags |= getattr(libvirt, "VIR_DOMAIN_UNDEFINE_NVRAM", 0)
+                dom.undefineFlags(flags)
+                undefined = True
+            except (AttributeError, libvirt.libvirtError):
+                pass
+
+        if not undefined:
+            try:
+                conn.lookupByName(vm_name)
+            except libvirt.libvirtError:
+                undefined = True
+
+        if not undefined:
+            subprocess.run(
+                ["virsh", "undefine", vm_name, "--snapshots-metadata", "--managed-save", "--nvram"],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+    def _verify_domain_removed(self, conn: libvirt.virConnect, vm_name: str) -> None:
+        try:
+            conn.lookupByName(vm_name)
+        except libvirt.libvirtError:
+            print(f"[+] VM '{vm_name}' undefined")
+        else:
+            raise RuntimeError(
+                f"VM '{vm_name}' still defined after destroy attempt; manual cleanup may be required"
+            )
+
+    def _remove_domain_artifacts(self, vm_name: str) -> None:
         for suffix in (".qcow2", "-seed.iso"):
             p = self._pool_path / f"{vm_name}{suffix}"
             if p.exists():
@@ -278,15 +335,26 @@ class Provider:
         print(f"[*] Waiting for IP on '{vm_name}'...")
         while time.time() < deadline:
             try:
-                ifaces = dom.interfaceAddresses(
+                raw_ifaces = dom.interfaceAddresses(
                     libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE
                 )
-                for iface in ifaces.values():
-                    for addr in iface.get("addrs", []):
-                        if addr["type"] == libvirt.VIR_IP_ADDR_TYPE_IPV4:
-                            ip = addr["addr"]
-                            print(f"[+] {vm_name}: {ip}")
-                            return ip
+                iface_values = raw_ifaces.values() if isinstance(raw_ifaces, dict) else ()
+
+                for iface in iface_values:
+                    if not isinstance(iface, dict):
+                        continue
+                    addrs = iface.get("addrs", [])
+                    if not isinstance(addrs, list):
+                        continue
+
+                    for addr in addrs:
+                        if not isinstance(addr, dict):
+                            continue
+                        if addr.get("type") == libvirt.VIR_IP_ADDR_TYPE_IPV4:
+                            ip = addr.get("addr")
+                            if isinstance(ip, str):
+                                print(f"[+] {vm_name}: {ip}")
+                                return ip
             except libvirt.libvirtError:
                 pass
             time.sleep(5)
@@ -341,22 +409,31 @@ class Provider:
                 return src.attrib["file"]
         raise RuntimeError(f"Could not find disk path for '{vm_name}'")
 
-    def _render_user_data(self, role: str) -> str:
-        user_data_path = self._cloud_init_dir / role / "user-data"
-        data = user_data_path.read_text()
+    def _render_user_data(self) -> str:
         if not self._ssh_authorized_keys_path.exists():
             raise FileNotFoundError(
                 f"SSH authorized key not found: {self._ssh_authorized_keys_path}"
             )
         pubkey = self._ssh_authorized_keys_path.read_text().strip()
-        rendered_lines: list[str] = []
-        replaced = False
-        for line in data.splitlines():
-            stripped = line.strip()
-            if stripped.startswith("- ssh-") and not replaced:
-                indent = line.split("-")[0]
-                rendered_lines.append(f"{indent}- {pubkey}")
-                replaced = True
-                continue
-            rendered_lines.append(line)
-        return "\n".join(rendered_lines) + "\n"
+        return self._render_template(
+            self._cloud_init_template,
+            {"__SSH_PUBLIC_KEY__": pubkey},
+        )
+
+    def _render_meta_data(self, vm_name: str) -> str:
+        return self._render_template(
+            self._cloud_init_meta_data,
+            {
+                "__INSTANCE_ID__": vm_name,
+                "__LOCAL_HOSTNAME__": vm_name,
+            },
+        )
+
+    @staticmethod
+    def _render_template(path: Path, replacements: dict[str, str]) -> str:
+        data = path.read_text()
+        for placeholder, value in replacements.items():
+            if placeholder not in data:
+                raise ValueError(f"Template {path} missing placeholder {placeholder}")
+            data = data.replace(placeholder, value)
+        return data

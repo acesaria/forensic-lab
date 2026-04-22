@@ -102,7 +102,7 @@ Copy `config.yaml.example` to `config.yaml` and adjust paths for your machine. T
 lab:
   libvirt_uri: qemu:///system
   pool_name: forensic-lab-pool
-  pool_path: ~/.local/share/forensic-lab/disks
+  pool_path: /var/lib/forensic-lab/disks
   ssh_user: labuser
   ssh_key: ~/.ssh/forensics-lab
   shared_dir: ./shared

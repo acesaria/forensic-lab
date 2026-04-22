@@ -6,33 +6,17 @@ below attack modules — it knows the sequence, not the details.
 """
 
 import json
-import os
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
-
+from infra.image_store import ensure_image
 from infra.provider import Provider
+from orchestrator.core.config import load_config, load_profile
+from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics.dumper import Dumper
-
-
-def _load_config(repo_root: Path) -> dict[str, Any]:
-    path = repo_root / "config.yaml"
-    with open(path) as f:
-        return yaml.safe_load(f)
-
-
-def _load_profile(repo_root: Path, distro_id: str) -> dict[str, Any]:
-    path = repo_root / "infra" / "profiles" / f"{distro_id}.yaml"
-    if not path.exists():
-        raise FileNotFoundError(
-            f"No profile found for '{distro_id}' at {path}\n"
-            "Add a YAML file in infra/profiles/ to support this distro."
-        )
-    with open(path) as f:
-        return yaml.safe_load(f)
 
 
 class ForensicOrchestrator:
@@ -47,7 +31,7 @@ class ForensicOrchestrator:
 
     def __init__(self, repo_root: Optional[Path] = None) -> None:
         self.repo_root = repo_root or Path(__file__).resolve().parents[2]
-        self.cfg = _load_config(self.repo_root)
+        self.cfg = load_config(self.repo_root)
         self.provider = Provider(self.cfg, self.repo_root)
         self.vm_manager = VMManager(self.cfg, self.provider, self.repo_root)
         self.dumper = Dumper(self.repo_root)
@@ -68,9 +52,54 @@ class ForensicOrchestrator:
         Download image, create lab VM, take baseline snapshot.
         Safe to run multiple times — skips steps already done.
         """
-        profile = _load_profile(self.repo_root, distro_id)
-        self.vm_manager.prepare_lab(distro_id, profile)
+        self._prepare_lab(distro_id)
         print(f"[+] '{distro_id}' ready for experiments")
+
+    def build_isf(self, distro_id: str) -> Path:
+        """Ensure ISF exists for the running lab kernel and return its path."""
+        profile = self._prepare_lab(distro_id)
+        lab_ip = self.vm_manager.wait_ssh_ready(f"lab-{distro_id}")
+        kernel_release = self._kernel_release(lab_ip)
+
+        isf_name = self._isf_filename(distro_id, kernel_release)
+        isf_path = self.repo_root / "shared" / "isf" / isf_name
+        if isf_path.exists():
+            print(f"[i] ISF already present: {isf_path}")
+            return isf_path
+
+        role_cfg = self.cfg["role_defaults"].get("build-isf")
+        if not isinstance(role_cfg, dict):
+            raise RuntimeError("Missing 'role_defaults.build-isf' config for ISF build VM")
+
+        build_vm_name = f"build-isf-{distro_id}"
+        images_dir = Path(self.cfg["lab"]["pool_path"]).expanduser().resolve().parent / "images"
+        base_image = ensure_image(profile, images_dir)
+
+        self.provider.create_vm(
+            role="build-isf",
+            distro_id=distro_id,
+            profile=profile,
+            role_cfg=role_cfg,
+            base_image=base_image,
+        )
+        self.provider.start_vm(build_vm_name)
+
+        try:
+            build_ip = self.vm_manager.wait_ssh_ready(build_vm_name)
+            playbook = self.repo_root / "ansible" / "isf_build.yml"
+            cmd = self._build_isf_command(build_ip, playbook, kernel_release, isf_name)
+            print("[*] Building ISF via ephemeral build VM...")
+            print(f"[*] Kernel version: {kernel_release}")
+            print(f"[*] ISF filename: {isf_name}")
+            subprocess.run(cmd, check=True)
+        finally:
+            self.provider.destroy_vm(build_vm_name)
+
+        if not isf_path.exists():
+            raise RuntimeError(f"ISF build completed but output not found: {isf_path}")
+
+        print(f"[+] ISF exported: {isf_path}")
+        return isf_path
 
     # --- experiment run ---------------------------------------------------
 
@@ -89,16 +118,12 @@ class ForensicOrchestrator:
 
         Returns manifest path if acquired, else None.
         """
-        profile = _load_profile(self.repo_root, distro_id)
-        vm_name = f"lab-{distro_id}"
-
         print(f"\n[*] Setting up experiment: {scenario} on {distro_id}")
-        self.vm_manager.revert_to_baseline(distro_id)
-        ip = self.vm_manager.wait_ssh_ready(vm_name)
+        vm_name, ip = self._revert_lab_and_wait(distro_id)
 
         scenario_id = f"{distro_id}__{scenario}__{int(time.time())}"
 
-        ground_truth = self._run_attack(scenario, vm_name, ip, scenario_id)
+        ground_truth = self._run_attack(scenario, ip, scenario_id)
         if ground_truth:
             gt_path = self.results_path / f"gt_{scenario_id}.json"
             with open(gt_path, "w") as f:
@@ -118,7 +143,6 @@ class ForensicOrchestrator:
     def _run_attack(
         self,
         scenario: str,
-        vm_name: str,
         ip: str,
         scenario_id: str,
     ) -> Optional[dict]:
@@ -140,7 +164,6 @@ class ForensicOrchestrator:
         user = self.cfg["lab"]["ssh_user"]
         key  = self.cfg["lab"]["ssh_key"]
 
-        from orchestrator.core.ssh_client import SSHClient
         with SSHClient(ip, user, key) as ssh:
             mod = importlib.import_module(module_map[scenario])
             return mod.run(ssh, scenario_id)
@@ -152,9 +175,7 @@ class ForensicOrchestrator:
         Revert to baseline and acquire RAM + disk without running any attack.
         Useful for building a pristine reference image.
         """
-        vm_name = f"lab-{distro_id}"
-        self.vm_manager.revert_to_baseline(distro_id)
-        self.vm_manager.wait_ssh_ready(vm_name)
+        vm_name, _ = self._revert_lab_and_wait(distro_id)
 
         scenario_id = f"{distro_id}__baseline__{int(time.time())}"
         return self.dumper.acquire(
@@ -162,6 +183,53 @@ class ForensicOrchestrator:
             scenario_id=scenario_id,
             provider=self.provider,
         )
+
+    def _kernel_release(self, ip: str) -> str:
+        user = self.cfg["lab"]["ssh_user"]
+        key = self.cfg["lab"]["ssh_key"]
+        with SSHClient(ip, user, key) as ssh:
+            return ssh.run_checked("uname -r")
+
+    def _prepare_lab(self, distro_id: str) -> dict[str, Any]:
+        profile = load_profile(self.repo_root, distro_id)
+        self.vm_manager.prepare_lab(distro_id, profile)
+        return profile
+
+    def _revert_lab_and_wait(self, distro_id: str) -> tuple[str, str]:
+        vm_name = f"lab-{distro_id}"
+        self.vm_manager.revert_to_baseline(distro_id)
+        ip = self.vm_manager.wait_ssh_ready(vm_name)
+        return vm_name, ip
+
+    def _build_isf_command(
+        self,
+        build_ip: str,
+        playbook: Path,
+        kernel_release: str,
+        isf_name: str,
+    ) -> list[str]:
+        return [
+            "ansible-playbook",
+            "-i",
+            f"{build_ip},",
+            "-u",
+            self.cfg["lab"]["ssh_user"],
+            "--private-key",
+            str(Path(self.cfg["lab"]["ssh_key"]).expanduser()),
+            "--ssh-common-args",
+            "-o StrictHostKeyChecking=no",
+            str(playbook),
+            "-v",
+            "-e",
+            f"kernel_version={kernel_release}",
+            "-e",
+            f"isf_filename={isf_name}",
+        ]
+
+    @staticmethod
+    def _isf_filename(distro_id: str, kernel_release: str) -> str:
+        distro_family = distro_id.split("-", 1)[0]
+        return f"{distro_family}_{kernel_release}.json"
 
     # --- teardown ---------------------------------------------------------
 

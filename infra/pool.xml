@@ -1,0 +1,6 @@
+<pool type="dir">
+  <name>__POOL_NAME__</name>
+  <target>
+    <path>__POOL_PATH__</path>
+  </target>
+</pool>

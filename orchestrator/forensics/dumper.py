@@ -96,12 +96,13 @@ class Dumper:
         started = time.time()
         print(f"[*] Acquiring memory from '{domain}'...")
         subprocess.run(
-            ["sudo", "virsh", "dump", domain, str(dest), "--memory-only", "--live"],
+            ["virsh", "dump", domain, str(dest), "--memory-only", "--live"],
             check=True,
         )
         elapsed = time.time() - started
         print(f"[+] Memory dump done ({elapsed:.1f}s): {dest}")
 
+        self._ensure_user_ownership(dest)
         return ImageMetadata(
             path=str(dest.relative_to(self.repo_root)),
             tool="virsh dump --memory-only --live",
@@ -119,7 +120,6 @@ class Dumper:
         dest: Path,
         provider: "Provider",
     ) -> ImageMetadata:
-        _ = provider
         prefix = str(dest.with_suffix(""))
 
         # clean up any previous EWF segments
@@ -127,15 +127,14 @@ class Dumper:
             os.remove(seg)
 
         started = time.time()
-        disk_source = self._get_domain_disk_source(domain)
+        disk_source = provider.get_disk_path(domain)
         virtual_size = self._qemu_virtual_size(disk_source)
 
         try:
-            self._shutdown_for_acquisition(domain)
+            provider.shutdown_vm(domain)
             print(f"[*] Acquiring disk from '{disk_source}' -> {dest}...")
             subprocess.run(
                 [
-                    "sudo",
                     "ewfacquire",
                     "-u",
                     "-c",
@@ -150,13 +149,14 @@ class Dumper:
             )
         finally:
             print(f"[*] Restarting '{domain}'...")
-            state = self._domain_state(domain)
-            if "running" not in state:
-                subprocess.run(["sudo", "virsh", "start", domain], check=True)
+            provider.start_vm(domain)
 
         segments = sorted(glob.glob(f"{prefix}.E??"))
         if not segments:
             raise RuntimeError(f"EWF output not found for prefix {prefix}.E??")
+
+        for seg in segments:
+            self._ensure_user_ownership(Path(seg))
 
         elapsed = time.time() - started
         ewf_size = sum(Path(p).stat().st_size for p in segments)
@@ -184,6 +184,18 @@ class Dumper:
         return h.hexdigest()
 
     @staticmethod
+    def _ensure_user_ownership(path: Path) -> None:
+        uid = os.getuid()
+        gid = os.getgid()
+        stat_result = path.stat()
+        if stat_result.st_uid == uid and stat_result.st_gid == gid:
+            return
+        subprocess.run(
+            ["sudo", "chown", f"{uid}:{gid}", str(path)],
+            check=True,
+        )
+
+    @staticmethod
     def _qemu_virtual_size(disk_source: str) -> int | None:
         try:
             r = subprocess.run(
@@ -195,49 +207,3 @@ class Dumper:
             return json.loads(r.stdout).get("virtual-size")
         except Exception:
             return None
-
-    @staticmethod
-    def _domain_state(domain: str) -> str:
-        r = subprocess.run(
-            ["sudo", "virsh", "domstate", domain],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return r.stdout.strip().lower()
-
-    def _shutdown_for_acquisition(self, domain: str, timeout: int = 90) -> None:
-        state = self._domain_state(domain)
-        if "running" not in state:
-            return
-
-        print(f"[*] Shutting down '{domain}' for disk acquisition...")
-        subprocess.run(["sudo", "virsh", "shutdown", domain], check=True)
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            state = self._domain_state(domain)
-            if "shut off" in state:
-                return
-            time.sleep(2)
-
-        print(f"[!] Graceful shutdown timed out, forcing off '{domain}'")
-        subprocess.run(["sudo", "virsh", "destroy", domain], check=True)
-
-    @staticmethod
-    def _get_domain_disk_source(domain: str) -> str:
-        r = subprocess.run(
-            ["sudo", "virsh", "domblklist", domain, "--details"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-
-        for line in r.stdout.splitlines():
-            parts = line.split()
-            if len(parts) < 4:
-                continue
-            typ, device, _target, source = parts[0], parts[1], parts[2], parts[3]
-            if typ == "file" and device == "disk":
-                return source
-
-        raise RuntimeError(f"Could not locate disk source for domain '{domain}'")

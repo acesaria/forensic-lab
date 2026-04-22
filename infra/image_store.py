@@ -56,8 +56,20 @@ def _expected_checksum(checksum_url: str, filename: str, algo: str) -> str:
 
 def _set_readonly(path: Path) -> None:
     current = stat.S_IMODE(os.stat(path).st_mode)
+    if (current & (stat.S_IWRITE | stat.S_IWGRP | stat.S_IWOTH)) == 0:
+        return
     readonly = current & ~(stat.S_IWRITE | stat.S_IWGRP | stat.S_IWOTH)
-    os.chmod(path, readonly)
+    try:
+        os.chmod(path, readonly)
+    except PermissionError as e:
+        # If we cannot chmod but the file is already read-only, continue.
+        now = stat.S_IMODE(os.stat(path).st_mode)
+        if (now & (stat.S_IWRITE | stat.S_IWGRP | stat.S_IWOTH)) == 0:
+            return
+        raise RuntimeError(
+            f"Unable to mark base image read-only: {path}. "
+            "Fix file ownership/permissions and retry."
+        ) from e
 
 
 def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:

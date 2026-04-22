@@ -11,6 +11,22 @@
     local_isf_path: "{{ local_isf_dir }}/{{ isf_filename }}"
 
   pre_tasks:
+    - name: Wait for cloud-init to complete
+      ansible.builtin.command:
+        cmd: cloud-init status --wait
+      changed_when: false
+      timeout: 300
+
+    - name: Wait for dpkg lock to be released
+      ansible.builtin.shell:
+        cmd: |
+          until ! fuser /var/lib/dpkg/lock* > /dev/null 2>&1; do
+            echo "Waiting for dpkg lock..."
+            sleep 2
+          done
+      changed_when: false
+      timeout: 120
+
     - name: Check if ISF JSON already exists on host
       ansible.builtin.stat:
         path: "{{ local_isf_path }}"
@@ -23,6 +39,10 @@
       when: host_isf.stat.exists
 
   tasks:
+    - name: Announce ISF build context
+      ansible.builtin.debug:
+        msg: "Building ISF for kernel={{ kernel_version }} output={{ isf_filename }}"
+
     - name: Install base dependencies
       ansible.builtin.apt:
         name:
@@ -30,21 +50,33 @@
           - golang-go
           - ubuntu-dbgsym-keyring
           - software-properties-common
+          - aria2
         state: present
         update_cache: yes
+        lock_timeout: 120
+      retries: 3
+      delay: 5
 
     - name: Add apt-fast PPA
       ansible.builtin.apt_repository:
         repo: ppa:apt-fast/stable
         state: present
+        update_cache: yes
+      register: apt_fast_ppa
+      ignore_errors: true
 
-    - name: Install apt-fast and aria2
+    - name: Try installing apt-fast
       ansible.builtin.apt:
-        name:
-          - apt-fast
-          - aria2
+        name: apt-fast
         state: present
         update_cache: yes
+        lock_timeout: 120
+      register: apt_fast_install
+      ignore_errors: true
+
+    - name: Set apt-fast availability
+      ansible.builtin.set_fact:
+        use_apt_fast: "{{ apt_fast_install is succeeded }}"
 
     - name: Configure apt-fast for ddebs mirror
       ansible.builtin.lineinfile:
@@ -55,35 +87,68 @@
       loop:
         - { regexp: '^_MAXNUM=',  line: '_MAXNUM=16' }
         - { regexp: '^_MIRRORS=', line: "_MIRRORS=( 'http://ddebs.ubuntu.com' )" }
+      when: use_apt_fast
+
+    - name: Show package downloader mode
+      ansible.builtin.debug:
+        msg: "Using {{ 'apt-fast' if use_apt_fast else 'apt' }} for debug symbols"
 
     - name: Enable Ubuntu debug symbol repositories
       ansible.builtin.apt_repository:
         repo: "deb http://ddebs.ubuntu.com {{ ansible_distribution_release }}{{ item }} main restricted universe multiverse"
         state: present
       loop: ["", "-updates", "-proposed"]
+      retries: 2
+      delay: 5
 
-    - name: Update package cache via apt-fast
+    - name: Refresh apt-fast indexes
       ansible.builtin.command:
         cmd: apt-fast update
       changed_when: false
+      when: use_apt_fast
 
-    - name: Install matching Linux debug symbols via apt-fast
+    - name: Check if debug kernel ELF is already present
+      ansible.builtin.stat:
+        path: "{{ debug_vmlinux_path }}"
+      register: debug_elf_before
+
+    - name: Install matching Linux debug symbols with apt-fast
       ansible.builtin.command:
         cmd: "apt-fast install -y linux-image-{{ kernel_version }}-dbgsym"
-      args:
-        creates: "{{ debug_vmlinux_path }}"
+      when: not debug_elf_before.stat.exists and use_apt_fast
+      retries: 3
+      delay: 5
+      register: dbgsym_install
+      until: dbgsym_install is succeeded
 
-    - name: Clone dwarf2json source
+    - name: Install matching Linux debug symbols with apt fallback
+      ansible.builtin.apt:
+        name: "linux-image-{{ kernel_version }}-dbgsym"
+        state: present
+        update_cache: yes
+        lock_timeout: 120
+      when: not debug_elf_before.stat.exists and not use_apt_fast
+      retries: 3
+      delay: 5
+
+    - name: Check if dwarf2json is already built
+      ansible.builtin.stat:
+        path: /opt/dwarf2json/dwarf2json
+      register: dwarf2json_binary
+
+    - name: Clone dwarf2json source if not present
       ansible.builtin.git:
         repo: https://github.com/volatilityfoundation/dwarf2json.git
         dest: /opt/dwarf2json
         version: master
         update: yes
+      when: not dwarf2json_binary.stat.exists
 
-    - name: Build dwarf2json
+    - name: Build dwarf2json if not present
       ansible.builtin.command:
         cmd: go build -o dwarf2json .
         chdir: /opt/dwarf2json
+      when: not dwarf2json_binary.stat.exists
 
     - name: Verify debug kernel ELF exists
       ansible.builtin.stat:
