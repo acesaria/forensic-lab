@@ -69,6 +69,8 @@ class VMManager:
             base_image=base_image,
         )
 
+        self._provider.start_vm(vm_name)
+
         self.wait_ssh_ready(vm_name)
 
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):

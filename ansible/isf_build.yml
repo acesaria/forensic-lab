@@ -5,7 +5,7 @@
 
   vars:
     kernel_version: "{{ ansible_kernel }}"
-    isf_filename: "ubuntu_{{ ansible_kernel }}.json"
+    isf_filename: "{{ ansible_distribution | lower }}_{{ ansible_kernel }}.json"
     debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"
     local_isf_dir: "{{ playbook_dir }}/../shared/isf"
     local_isf_path: "{{ local_isf_dir }}/{{ isf_filename }}"
