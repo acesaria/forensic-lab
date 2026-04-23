@@ -87,7 +87,10 @@ def main() -> None:
                 orchestrator.prepare(distro_id)
                 orchestrator.build_isf(distro_id)
                 manifest_path = orchestrator.acquire_baseline(distro_id)
+                
+                
                 print(f"[+] Baseline acquisition manifest: {manifest_path}")
+            
     except FileNotFoundError as e:
         print(f"[!] {e}")
         raise SystemExit(2)

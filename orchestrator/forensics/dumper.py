@@ -102,7 +102,7 @@ class Dumper:
         elapsed = time.time() - started
         print(f"[+] Memory dump done ({elapsed:.1f}s): {dest}")
 
-        self._ensure_user_ownership(dest)
+        # self._ensure_user_ownership(dest)
         return ImageMetadata(
             path=str(dest.relative_to(self.repo_root)),
             tool="virsh dump --memory-only --live",
