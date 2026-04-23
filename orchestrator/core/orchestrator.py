@@ -58,7 +58,8 @@ class ForensicOrchestrator:
     def build_isf(self, distro_id: str) -> Path:
         """Ensure ISF exists for the running lab kernel and return its path."""
         profile = self._prepare_lab(distro_id)
-        lab_ip = self.vm_manager.wait_ssh_ready(f"lab-{distro_id}")
+        lab_vm_name = f"lab-{distro_id}"
+        lab_ip = self.vm_manager.wait_ssh_ready(lab_vm_name)
         kernel_release = self._kernel_release(lab_ip)
 
         isf_name = self._isf_filename(distro_id, kernel_release)
@@ -75,6 +76,7 @@ class ForensicOrchestrator:
         images_dir = Path(self.cfg["lab"]["pool_path"]).expanduser().resolve().parent / "images"
         base_image = ensure_image(profile, images_dir)
 
+        self.provider.shutdown_vm(lab_vm_name)
         self.provider.create_vm(
             role="build-isf",
             distro_id=distro_id,
@@ -94,6 +96,7 @@ class ForensicOrchestrator:
             subprocess.run(cmd, check=True)
         finally:
             self.provider.destroy_vm(build_vm_name)
+            self.provider.start_vm(lab_vm_name)
 
         if not isf_path.exists():
             raise RuntimeError(f"ISF build completed but output not found: {isf_path}")

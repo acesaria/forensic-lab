@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any, Optional
 
+import xml.etree.ElementTree as ET
+
 import libvirt
 
 
@@ -115,6 +117,27 @@ class Provider:
         pool.create()
         print(f"[+] Pool '{self._pool_name}' created")
 
+    # --- seclabel (used by dumper) --------------------------------------------------
+    def _inject_dac_seclabel(self, conn: libvirt.virConnect, vm_name: str) -> None:
+        uid, gid = os.getuid(), os.getgid()
+
+        # Load and render the seclabel snippet
+        seclabel_xml = self._render_template(
+            self._infra_dir / "domain-seclabel.xml",
+            {"__UID__": str(uid), "__GID__": str(gid)},
+        )
+        seclabel_elem = ET.fromstring(seclabel_xml)
+
+        # Patch domain XML
+        dom = conn.lookupByName(vm_name)
+        root = ET.fromstring(dom.XMLDesc(0))
+        for existing in root.findall("seclabel[@model='dac']"):
+            root.remove(existing)
+        root.append(seclabel_elem)
+
+        conn.defineXML(ET.tostring(root, encoding="unicode"))
+        print(f"[i] DAC seclabel injected: QEMU will run as {uid}:{gid}")
+
     # --- VM creation -------------------------------------------------------
 
     def create_vm(
@@ -154,7 +177,7 @@ class Provider:
         os_variant = profile.get("os_variant") or "generic"
 
         print(f"[*] Creating VM '{vm_name}'...")
-        subprocess.run(
+        result = subprocess.run(
             [
                 "virt-install",
                 "--name",       vm_name,
@@ -171,6 +194,12 @@ class Provider:
             ],
             check=True, capture_output=True, text=True,
         )
+        if result.returncode != 0:
+            raise RuntimeError(f"virt-install failed:\n{result.stderr}")
+
+        # Inject DAC seclabel so QEMU runs as current user → dump files owned by us
+        self._inject_dac_seclabel(conn, vm_name)
+        
         print(f"[+] VM '{vm_name}' created")
         return vm_name
 
