@@ -1,4 +1,0 @@
-<seclabel type="dynamic" model="dac" relabel="yes">
-  <label>+__UID__:+__GID__</label>
-  <imagelabel>+__UID__:+__GID__</imagelabel>
-</seclabel>
