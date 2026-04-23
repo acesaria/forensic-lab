@@ -174,7 +174,9 @@ class Provider:
             ],
             check=True, capture_output=True, text=True,
         )
-    
+        if result.returncode != 0:
+            raise RuntimeError(f"virt-install failed:\n{result.stderr.strip()}")
+
         self.shutdown_vm(vm_name)
         self.start_vm(vm_name)      
         
@@ -185,23 +187,12 @@ class Provider:
         if disk_path.exists():
             disk_path.unlink()
 
-        subprocess.run(
-            [
-                "qemu-img",
-                "create",
-                "-f",
-                "qcow2",
-                "-b",
-                str(base_image),
-                "-F",
-                "qcow2",
-                str(disk_path),
-                disk_size,
-            ],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        result = subprocess.run(
+        ["qemu-img", "create", "-f", "qcow2", "-b", str(base_image), "-F", "qcow2", str(disk_path), disk_size],
+        capture_output=True, text=True,)
+
+        if result.returncode != 0:
+            raise RuntimeError(f"qemu-img failed:\n{result.stderr.strip()}")
 
     def _create_cloud_init_seed(self, vm_name: str, seed_path: Path) -> None:
         if seed_path.exists():
@@ -212,12 +203,12 @@ class Provider:
             meta_data.write_text(self._render_meta_data(vm_name))
             rendered_user_data = Path(tmp) / "user-data"
             rendered_user_data.write_text(self._render_user_data())
-            subprocess.run(
-                ["cloud-localds", str(seed_path), str(rendered_user_data), str(meta_data)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
+            result = subprocess.run(
+            ["cloud-localds", str(seed_path), str(rendered_user_data), str(meta_data)],
+            capture_output=True, text=True,)
+            
+            if result.returncode != 0:
+                raise RuntimeError(f"cloud-localds failed:\n{result.stderr.strip()}")
 
     # --- VM destruction ----------------------------------------------------
 
@@ -414,7 +405,6 @@ class Provider:
         dom = conn.lookupByName(vm_name)
         xml = dom.XMLDesc()
         # simple parse: find first <source file='...'> inside a <disk> block
-        import xml.etree.ElementTree as ET
         root = ET.fromstring(xml)
         for disk in root.findall(".//disk[@type='file'][@device='disk']"):
             src = disk.find("source")
@@ -443,10 +433,9 @@ class Provider:
         )
 
     @staticmethod
+    @staticmethod
     def _render_template(path: Path, replacements: dict[str, str]) -> str:
         data = path.read_text()
         for placeholder, value in replacements.items():
-            if placeholder not in data:
-                raise ValueError(f"Template {path} missing placeholder {placeholder}")
             data = data.replace(placeholder, value)
         return data
