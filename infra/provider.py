@@ -117,27 +117,7 @@ class Provider:
         pool.create()
         print(f"[+] Pool '{self._pool_name}' created")
 
-    # --- seclabel (used by dumper) --------------------------------------------------
-    def _inject_dac_seclabel(self, conn: libvirt.virConnect, vm_name: str) -> None:
-        uid, gid = os.getuid(), os.getgid()
-
-        # Load and render the seclabel snippet
-        seclabel_xml = self._render_template(
-            self._infra_dir / "domain-seclabel.xml",
-            {"__UID__": str(uid), "__GID__": str(gid)},
-        )
-        seclabel_elem = ET.fromstring(seclabel_xml)
-
-        # Patch domain XML
-        dom = conn.lookupByName(vm_name)
-        root = ET.fromstring(dom.XMLDesc(0))
-        for existing in root.findall("seclabel[@model='dac']"):
-            root.remove(existing)
-        root.append(seclabel_elem)
-
-        conn.defineXML(ET.tostring(root, encoding="unicode"))
-        print(f"[i] DAC seclabel injected: QEMU will run as {uid}:{gid}")
-
+    
     # --- VM creation -------------------------------------------------------
 
     def create_vm(
@@ -194,11 +174,9 @@ class Provider:
             ],
             check=True, capture_output=True, text=True,
         )
-        if result.returncode != 0:
-            raise RuntimeError(f"virt-install failed:\n{result.stderr}")
-
-        # Inject DAC seclabel so QEMU runs as current user → dump files owned by us
-        self._inject_dac_seclabel(conn, vm_name)
+    
+        self.shutdown_vm(vm_name)
+        self.start_vm(vm_name)      
         
         print(f"[+] VM '{vm_name}' created")
         return vm_name
@@ -330,6 +308,12 @@ class Provider:
         if state != libvirt.VIR_DOMAIN_RUNNING:
             dom.create()
             print(f"[+] VM '{vm_name}' started")
+
+    def restart_vm(self, vm_name: str) -> None:
+        conn = self._connect()
+        dom = conn.lookupByName(vm_name)
+        dom.destroy()          # force off immediately — VM just booted, nothing to lose
+        dom.create()           # cold start with new XML config applied
 
     def shutdown_vm(self, vm_name: str, timeout: int = 90) -> None:
         """Graceful shutdown with fallback to force-off."""

@@ -5,6 +5,7 @@ RAM and disk acquisition pipeline. Decoupled from any VM management —
 receives a domain name and a Provider instance, does the rest.
 """
 
+from concurrent.futures import process
 import glob
 import hashlib
 import json
@@ -102,7 +103,13 @@ class Dumper:
         elapsed = time.time() - started
         print(f"[+] Memory dump done ({elapsed:.1f}s): {dest}")
 
-        # self._ensure_user_ownership(dest)
+        
+        subprocess.run(
+        ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
+        check=True,
+        )
+
+
         return ImageMetadata(
             path=str(dest.relative_to(self.repo_root)),
             tool="virsh dump --memory-only --live",
@@ -154,9 +161,11 @@ class Dumper:
         segments = sorted(glob.glob(f"{prefix}.E??"))
         if not segments:
             raise RuntimeError(f"EWF output not found for prefix {prefix}.E??")
-
+        
         for seg in segments:
-            self._ensure_user_ownership(Path(seg))
+            subprocess.run(
+            ["sudo", "chown", f"{os.getuid()}:{os.getuid()}", seg],
+            check=True,)
 
         elapsed = time.time() - started
         ewf_size = sum(Path(p).stat().st_size for p in segments)
@@ -182,18 +191,6 @@ class Dumper:
             for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
                 h.update(chunk)
         return h.hexdigest()
-
-    @staticmethod
-    def _ensure_user_ownership(path: Path) -> None:
-        uid = os.getuid()
-        gid = os.getgid()
-        stat_result = path.stat()
-        if stat_result.st_uid == uid and stat_result.st_gid == gid:
-            return
-        subprocess.run(
-            ["sudo", "chown", f"{uid}:{gid}", str(path)],
-            check=True,
-        )
 
     @staticmethod
     def _qemu_virtual_size(disk_source: str) -> int | None:
