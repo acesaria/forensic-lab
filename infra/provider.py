@@ -13,7 +13,7 @@ import subprocess
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 import xml.etree.ElementTree as ET
 
@@ -51,7 +51,7 @@ class Provider:
         self._cloud_init_meta_data: Path = self._cloud_init_dir / "meta-data"
         self._network_xml: Path = self._infra_dir / "forensics-isolated.xml"
         self._pool_xml: Path = self._infra_dir / "pool.xml"
-        self._conn: Optional[libvirt.virConnect] = None
+        self._conn: libvirt.virConnect | None = None
 
     # --- connection --------------------------------------------------------
 
@@ -172,7 +172,8 @@ class Provider:
                 "--console",    "pty,target_type=virtio",
                 "--noautoconsole",
             ],
-            check=True, capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             raise RuntimeError(f"virt-install failed:\n{result.stderr.strip()}")
@@ -188,8 +189,21 @@ class Provider:
             disk_path.unlink()
 
         result = subprocess.run(
-        ["qemu-img", "create", "-f", "qcow2", "-b", str(base_image), "-F", "qcow2", str(disk_path), disk_size],
-        capture_output=True, text=True,)
+            [
+                "qemu-img",
+                "create",
+                "-f",
+                "qcow2",
+                "-b",
+                str(base_image),
+                "-F",
+                "qcow2",
+                str(disk_path),
+                disk_size,
+            ],
+            capture_output=True,
+            text=True,
+        )
 
         if result.returncode != 0:
             raise RuntimeError(f"qemu-img failed:\n{result.stderr.strip()}")
@@ -204,9 +218,11 @@ class Provider:
             rendered_user_data = Path(tmp) / "user-data"
             rendered_user_data.write_text(self._render_user_data())
             result = subprocess.run(
-            ["cloud-localds", str(seed_path), str(rendered_user_data), str(meta_data)],
-            capture_output=True, text=True,)
-            
+                ["cloud-localds", str(seed_path), str(rendered_user_data), str(meta_data)],
+                capture_output=True,
+                text=True,
+            )
+
             if result.returncode != 0:
                 raise RuntimeError(f"cloud-localds failed:\n{result.stderr.strip()}")
 
@@ -236,6 +252,9 @@ class Provider:
         ):
             dom.destroy()  # force off
 
+    # TODO(refactor): simplify to a single undefineFlags call —
+    # the multi-layer fallback was written for edge cases that don't
+    # occur in a controlled lab environment
     def _undefine_domain(self, conn: libvirt.virConnect, dom: libvirt.virDomain, vm_name: str) -> None:
         # Some local libvirt/python bindings do not expose undefineWithSnapshots,
         # and some domains require extra flags (managed-save/NVRAM) to undefine.
@@ -336,7 +355,6 @@ class Provider:
         dom = conn.lookupByName(vm_name)
         deadline = time.time() + timeout
 
-        print(f"[*] Waiting for IP on '{vm_name}'...")
         while time.time() < deadline:
             try:
                 raw_ifaces = dom.interfaceAddresses(
@@ -357,7 +375,6 @@ class Provider:
                         if addr.get("type") == libvirt.VIR_IP_ADDR_TYPE_IPV4:
                             ip = addr.get("addr")
                             if isinstance(ip, str):
-                                print(f"[+] {vm_name}: {ip}")
                                 return ip
             except libvirt.libvirtError:
                 pass
@@ -432,7 +449,6 @@ class Provider:
             },
         )
 
-    @staticmethod
     @staticmethod
     def _render_template(path: Path, replacements: dict[str, str]) -> str:
         data = path.read_text()

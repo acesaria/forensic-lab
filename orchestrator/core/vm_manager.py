@@ -71,7 +71,7 @@ class VMManager:
 
         self._provider.start_vm(vm_name)
 
-        self.wait_ssh_ready(vm_name)
+        self.wait_ssh_ready(vm_name, reason="initial boot")
 
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
@@ -106,15 +106,17 @@ class VMManager:
         self,
         vm_name: str,
         timeout: int = 180,
+        reason: str = "",
     ) -> str:
         """
         Wait until SSH is accepting connections on the VM.
         Returns the IP once ready.
         """
         ip = self._provider.get_vm_ip(vm_name)
+        label = f" [{reason}]" if reason else ""
         user, key = self._ssh_cfg()
 
-        print(f"[*] Waiting for SSH on {ip}...")
+        print(f"[*] Waiting for SSH on {vm_name} ({ip}){label}...")
         deadline = time.time() + timeout
         last_error = ""
 
@@ -122,7 +124,7 @@ class VMManager:
             try:
                 with SSHClient(ip, user, key) as ssh:
                     ssh.run_checked("true")
-                print(f"[+] SSH ready on {vm_name} ({ip})")
+                print(f"[+] SSH ready on {vm_name} ({ip}){label}")
                 return ip
             except Exception as e:
                 last_error = str(e)

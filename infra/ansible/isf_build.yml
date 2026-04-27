@@ -49,7 +49,6 @@
           - git
           - golang-go
           - ubuntu-dbgsym-keyring
-          - software-properties-common
           - aria2
         state: present
         update_cache: yes
@@ -57,79 +56,45 @@
       retries: 3
       delay: 5
 
-    - name: Add apt-fast PPA
-      ansible.builtin.apt_repository:
-        repo: ppa:apt-fast/stable
-        state: present
-        update_cache: yes
-      register: apt_fast_ppa
-      ignore_errors: true
-
-    - name: Try installing apt-fast
-      ansible.builtin.apt:
-        name: apt-fast
-        state: present
-        update_cache: yes
-        lock_timeout: 120
-      register: apt_fast_install
-      ignore_errors: true
-
-    - name: Set apt-fast availability
-      ansible.builtin.set_fact:
-        use_apt_fast: "{{ apt_fast_install is succeeded }}"
-
-    - name: Configure apt-fast for ddebs mirror
-      ansible.builtin.lineinfile:
-        path: /etc/apt-fast.conf
-        regexp: "{{ item.regexp }}"
-        line: "{{ item.line }}"
-        create: yes
-      loop:
-        - { regexp: '^_MAXNUM=',  line: '_MAXNUM=16' }
-        - { regexp: '^_MIRRORS=', line: "_MIRRORS=( 'http://ddebs.ubuntu.com' )" }
-      when: use_apt_fast
-
-    - name: Show package downloader mode
-      ansible.builtin.debug:
-        msg: "Using {{ 'apt-fast' if use_apt_fast else 'apt' }} for debug symbols"
-
-    - name: Enable Ubuntu debug symbol repositories
-      ansible.builtin.apt_repository:
-        repo: "deb http://ddebs.ubuntu.com {{ ansible_distribution_release }}{{ item }} main restricted universe multiverse"
-        state: present
-      loop: ["", "-updates", "-proposed"]
-      retries: 2
-      delay: 5
-
-    - name: Refresh apt-fast indexes
-      ansible.builtin.command:
-        cmd: apt-fast update
-      changed_when: false
-      when: use_apt_fast
-
     - name: Check if debug kernel ELF is already present
       ansible.builtin.stat:
         path: "{{ debug_vmlinux_path }}"
       register: debug_elf_before
 
-    - name: Install matching Linux debug symbols with apt-fast
-      ansible.builtin.command:
-        cmd: "apt-fast install -y linux-image-{{ kernel_version }}-dbgsym"
-      when: not debug_elf_before.stat.exists and use_apt_fast
-      retries: 3
-      delay: 5
-      register: dbgsym_install
-      until: dbgsym_install is succeeded
+    - name: Create temp directory for debug symbols
+      ansible.builtin.file:
+        path: /tmp/dbgsym
+        state: directory
+        mode: "0755"
+      when: not debug_elf_before.stat.exists
 
-    - name: Install matching Linux debug symbols with apt fallback
-      ansible.builtin.apt:
-        name: "linux-image-{{ kernel_version }}-dbgsym"
-        state: present
-        update_cache: yes
-        lock_timeout: 120
-      when: not debug_elf_before.stat.exists and not use_apt_fast
+    - name: Download debug symbols with aria2c (parallel, with progress)
+      ansible.builtin.command:
+        cmd: >
+          aria2c
+          --console-log-level=notice
+          --summary-interval=10
+          --max-connection-per-server=8
+          --split=8
+          --dir=/tmp/dbgsym
+          --out=linux-dbgsym.ddeb
+          http://ddebs.ubuntu.com/pool/main/l/linux/linux-image-{{ kernel_version }}-dbgsym_{{ kernel_version }}_amd64.ddeb
+      when: not debug_elf_before.stat.exists
       retries: 3
-      delay: 5
+      delay: 10
+      register: aria2c_download
+      until: aria2c_download is succeeded
+
+    - name: Install debug symbols package
+      ansible.builtin.command:
+        cmd: dpkg -i /tmp/dbgsym/linux-dbgsym.ddeb
+      when: not debug_elf_before.stat.exists
+
+    - name: Clean up downloaded ddeb
+      ansible.builtin.file:
+        path: /tmp/dbgsym
+        state: absent
+      when: not debug_elf_before.stat.exists
 
     - name: Check if dwarf2json is already built
       ansible.builtin.stat:

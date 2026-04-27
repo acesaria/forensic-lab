@@ -9,7 +9,7 @@ import json
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from infra.image_store import ensure_image
 from infra.provider import Provider
@@ -29,7 +29,7 @@ class ForensicOrchestrator:
         orch.run("ubuntu-22.04", "ptrace")     # repeatable
     """
 
-    def __init__(self, repo_root: Optional[Path] = None) -> None:
+    def __init__(self, repo_root: Path | None = None) -> None:
         self.repo_root = repo_root or Path(__file__).resolve().parents[2]
         self.cfg = load_config(self.repo_root)
         self.provider = Provider(self.cfg, self.repo_root)
@@ -55,11 +55,12 @@ class ForensicOrchestrator:
         self._prepare_lab(distro_id)
         print(f"[+] '{distro_id}' ready for experiments")
 
-    def build_isf(self, distro_id: str) -> Path:
+    def build_isf(self, distro_id: str, profile: dict[str, Any] | None = None) -> Path:
         """Ensure ISF exists for the running lab kernel and return its path."""
-        profile = self._prepare_lab(distro_id)
+        if profile is None:
+            profile = self._prepare_lab(distro_id)
         lab_vm_name = f"lab-{distro_id}"
-        lab_ip = self.vm_manager.wait_ssh_ready(lab_vm_name)
+        lab_ip = self.vm_manager.wait_ssh_ready(lab_vm_name, reason="kernel detection")
         kernel_release = self._kernel_release(lab_ip)
 
         isf_name = self._isf_filename(distro_id, kernel_release)
@@ -73,6 +74,8 @@ class ForensicOrchestrator:
             raise RuntimeError("Missing 'role_defaults.build-isf' config for ISF build VM")
 
         build_vm_name = f"build-isf-{distro_id}"
+        # TODO(refactor): move images_dir to an explicit config key instead of
+        # inferring it from pool_path parent — see config.yaml.example
         images_dir = Path(self.cfg["lab"]["pool_path"]).expanduser().resolve().parent / "images"
         base_image = ensure_image(profile, images_dir)
 
@@ -87,8 +90,8 @@ class ForensicOrchestrator:
         self.provider.start_vm(build_vm_name)
 
         try:
-            build_ip = self.vm_manager.wait_ssh_ready(build_vm_name)
-            playbook = self.repo_root / "ansible" / "isf_build.yml"
+            build_ip = self.vm_manager.wait_ssh_ready(build_vm_name, reason="isf build provisioning")
+            playbook = self.repo_root / "infra" / "ansible" / "isf_build.yml"
             cmd = self._build_isf_command(build_ip, playbook, kernel_release, isf_name)
             print("[*] Building ISF via ephemeral build VM...")
             print(f"[*] Kernel version: {kernel_release}")
@@ -111,7 +114,7 @@ class ForensicOrchestrator:
         distro_id: str,
         scenario: str,
         acquire: bool = True,
-    ) -> Optional[str]:
+    ) -> str | None:
         """
         Full experiment cycle:
           1. Revert VM to baseline snapshot
@@ -148,7 +151,7 @@ class ForensicOrchestrator:
         scenario: str,
         ip: str,
         scenario_id: str,
-    ) -> Optional[dict]:
+    ) -> dict | None:
         """
         Dynamically load and run the attack module for the given scenario.
         Each attack module must expose: run(ssh, scenario_id) -> dict
@@ -187,6 +190,13 @@ class ForensicOrchestrator:
             provider=self.provider,
         )
 
+    def _run_pipeline(self, distro_id: str) -> str:
+        profile = self._prepare_lab(distro_id)
+        self.build_isf(distro_id, profile=profile)
+        manifest_path = self.acquire_baseline(distro_id)
+        print(f"[+] Baseline acquisition manifest: {manifest_path}")
+        return manifest_path
+
     def _kernel_release(self, ip: str) -> str:
         user = self.cfg["lab"]["ssh_user"]
         key = self.cfg["lab"]["ssh_key"]
@@ -201,7 +211,7 @@ class ForensicOrchestrator:
     def _revert_lab_and_wait(self, distro_id: str) -> tuple[str, str]:
         vm_name = f"lab-{distro_id}"
         self.vm_manager.revert_to_baseline(distro_id)
-        ip = self.vm_manager.wait_ssh_ready(vm_name)
+        ip = self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")
         return vm_name, ip
 
     def _build_isf_command(

@@ -28,6 +28,8 @@ class ImageMetadata:
     size_bytes: int | None
     timestamp: float
     acquisition_seconds: float | None = None
+    # TODO(milestone-2): expose virtual_size_bytes and ewf_size_bytes
+    # in acquisition report / analysis pipeline
     virtual_size_bytes: int | None = None
     ewf_size_bytes: int | None = None
 
