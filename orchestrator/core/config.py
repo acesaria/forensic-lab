@@ -15,6 +15,8 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     if "lab" in cfg and isinstance(cfg["lab"], dict) and "libvirt_uri" in cfg["lab"]:
         return cfg
 
+    # TODO(refactor): remove legacy flat-schema compatibility once all
+    # config.yaml files have been migrated to the canonical nested schema
     # Legacy compatibility path.
     role_lab = cfg.get("lab", {}) if isinstance(cfg.get("lab", {}), dict) else {}
     role_build_isf = cfg.get("build-isf", {})

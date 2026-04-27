@@ -1,0 +1,5 @@
+***
+# TODO(milestone-2): implement rootkit deployment playbook
+# This playbook will deploy the kernel rootkit scenario on the victim VM.
+# Required variables: kernel_version, scenario_id
+# See orchestrator/attacks/attack_06_kernel.py for the Python counterpart.
