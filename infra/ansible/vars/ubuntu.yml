@@ -1,0 +1,28 @@
+# infra/ansible/vars/ubuntu.yml
+
+# Packages needed for ISF build and baseline configuration on Ubuntu
+isf_base_packages:
+  - git
+  - golang-go
+  - ubuntu-dbgsym-keyring
+  - aria2
+
+# Debug symbols acquisition for Ubuntu cloud images
+debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"
+debug_pkg_url: >-
+  http://ddebs.ubuntu.com/pool/main/l/linux/
+  linux-image-{{ kernel_version }}-dbgsym_{{ kernel_version }}_amd64.ddeb
+debug_pkg_path: "/tmp/dbgsym/linux-dbgsym.ddeb"
+debug_pkg_install_cmd: "dpkg -i {{ debug_pkg_path }}"
+
+# For Debian we’ll use a debug repo; for Ubuntu we don't need extra repo lines
+dbgsym_repo_setup: []
+
+# Baseline tuning for lab VMs
+baseline_disable_services:
+  - ufw
+  - apparmor
+
+baseline_absent_pkgs:
+  - unattended-upgrades
+  - cloud-init

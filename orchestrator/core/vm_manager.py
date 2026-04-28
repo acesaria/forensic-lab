@@ -7,6 +7,7 @@ This layer sits between the orchestrator and provider:
 - vm_manager knows when and why to do those things
 """
 
+import subprocess
 import time
 from pathlib import Path
 from typing import Any
@@ -43,6 +44,23 @@ class VMManager:
 
     # --- prepare (one-time per distro) ------------------------------------
 
+    def _run_baseline_playbook(self, ip: str) -> None:
+        """
+        Apply lab baseline via Ansible before taking the snapshot.
+        """
+        playbook = self._repo_root / "infra" / "ansible" / "lab_baseline.yml"
+        user, key = self._ssh_cfg()
+        cmd = [
+            "ansible-playbook",
+            "-i", f"{ip},",
+            "-u", user,
+            "--private-key", str(Path(key).expanduser()),
+            "--ssh-common-args", "-o StrictHostKeyChecking=no",
+            str(playbook),
+        ]
+        print(f"[*] Running baseline playbook on {ip}...")
+        subprocess.run(cmd, check=True)
+
     def prepare_lab(
         self,
         distro_id: str,
@@ -74,6 +92,7 @@ class VMManager:
         self.wait_ssh_ready(vm_name, reason="initial boot")
 
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
+            self._run_baseline_playbook(ip)
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         else:
             print(f"[i] Snapshot '{BASELINE_SNAPSHOT}' already exists on '{vm_name}'")

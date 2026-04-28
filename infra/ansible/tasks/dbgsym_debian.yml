@@ -1,0 +1,17 @@
+# infra/ansible/tasks/dbgsym_debian.yml
+
+- name: Ensure debug repo file exists (Debian)
+  ansible.builtin.lineinfile:
+    path: /etc/apt/sources.list.d/debug.list
+    line: "{{ item }}"
+    create: yes
+  loop: "{{ dbgsym_repo_setup }}"
+
+- name: Update APT cache after adding debug repo (Debian)
+  ansible.builtin.apt:
+    update_cache: yes
+
+- name: Install linux-image-dbg for current kernel (Debian)
+  ansible.builtin.apt:
+    name: "linux-image-{{ kernel_version }}-dbg"
+    state: present

@@ -1,22 +1,35 @@
----
+# infra/ansible/lab_baseline.yml
 - name: Victim environment baseline
   hosts: all
   become: yes
 
+  vars_files:
+    - "vars/{{ ansible_distribution | lower }}.yml"
+
   tasks:
-    - name: Disable host-based security mechanisms (ufw, apparmor)
+    - name: Disable host-based security mechanisms (per-distro)
       ansible.builtin.service:
         name: "{{ item }}"
         state: stopped
         enabled: no
-      loop:
-        - ufw
-        - apparmor
+      loop: "{{ baseline_disable_services }}"
+      failed_when: false
 
-    - name: Remove unattended upgrades to reduce background noise
+    - name: Remove noisy packages (per-distro)
       ansible.builtin.apt:
-        name: unattended-upgrades
+        name: "{{ baseline_absent_pkgs }}"
         state: absent
+      when: baseline_absent_pkgs | length > 0
+
+    - name: Remove cloud-init state directories (if any)
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /var/lib/cloud
+        - /etc/cloud
+        - /var/log/cloud-init.log
+        - /var/log/cloud-init-output.log
 
     - name: Ensure SSH service is running for orchestration
       ansible.builtin.service:
