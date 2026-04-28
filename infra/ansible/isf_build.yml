@@ -1,4 +1,4 @@
----
+# infra/ansible/isf_build.yml
 - name: Volatility 3 ISF build
   hosts: all
   become: yes
@@ -6,9 +6,11 @@
   vars:
     kernel_version: "{{ ansible_kernel }}"
     isf_filename: "{{ ansible_distribution | lower }}_{{ ansible_kernel }}.json"
-    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"
     local_isf_dir: "{{ playbook_dir }}/../shared/isf"
     local_isf_path: "{{ local_isf_dir }}/{{ isf_filename }}"
+
+  vars_files:
+    - "vars/{{ ansible_distribution | lower }}.yml"
 
   pre_tasks:
     - name: Wait for cloud-init to complete
@@ -18,12 +20,11 @@
       timeout: 300
 
     - name: Wait for dpkg lock to be released
-      ansible.builtin.shell:
-        cmd: |
-          until ! fuser /var/lib/dpkg/lock* > /dev/null 2>&1; do
-            echo "Waiting for dpkg lock..."
-            sleep 2
-          done
+      ansible.builtin.shell: |
+        until ! fuser /var/lib/dpkg/lock* > /dev/null 2>&1; do
+          echo "Waiting for dpkg lock..."
+          sleep 2
+        done
       changed_when: false
       timeout: 120
 
@@ -39,62 +40,27 @@
       when: host_isf.stat.exists
 
   tasks:
-    - name: Announce ISF build context
-      ansible.builtin.debug:
-        msg: "Building ISF for kernel={{ kernel_version }} output={{ isf_filename }}"
-
     - name: Install base dependencies
-      ansible.builtin.apt:
-        name:
-          - git
-          - golang-go
-          - ubuntu-dbgsym-keyring
-          - aria2
+      ansible.builtin.package:
+        name: "{{ isf_base_packages }}"
         state: present
-        update_cache: yes
-        lock_timeout: 120
+      register: pkg_install
       retries: 3
       delay: 5
+      until: pkg_install is succeeded
 
-    - name: Check if debug kernel ELF is already present
+    - name: Include debug symbols acquisition flow
+      ansible.builtin.include_tasks: "tasks/dbgsym_{{ ansible_distribution | lower }}.yml"
+
+    - name: Check debug kernel ELF exists
       ansible.builtin.stat:
         path: "{{ debug_vmlinux_path }}"
-      register: debug_elf_before
+      register: debug_elf
 
-    - name: Create temp directory for debug symbols
-      ansible.builtin.file:
-        path: /tmp/dbgsym
-        state: directory
-        mode: "0755"
-      when: not debug_elf_before.stat.exists
-
-    - name: Download debug symbols with aria2c (parallel, with progress)
-      ansible.builtin.command:
-        cmd: >
-          aria2c
-          --console-log-level=notice
-          --summary-interval=10
-          --max-connection-per-server=8
-          --split=8
-          --dir=/tmp/dbgsym
-          --out=linux-dbgsym.ddeb
-          http://ddebs.ubuntu.com/pool/main/l/linux/linux-image-{{ kernel_version }}-dbgsym_{{ kernel_version }}_amd64.ddeb
-      when: not debug_elf_before.stat.exists
-      retries: 3
-      delay: 10
-      register: aria2c_download
-      until: aria2c_download is succeeded
-
-    - name: Install debug symbols package
-      ansible.builtin.command:
-        cmd: dpkg -i /tmp/dbgsym/linux-dbgsym.ddeb
-      when: not debug_elf_before.stat.exists
-
-    - name: Clean up downloaded ddeb
-      ansible.builtin.file:
-        path: /tmp/dbgsym
-        state: absent
-      when: not debug_elf_before.stat.exists
+    - name: Abort when debug symbols are missing
+      ansible.builtin.fail:
+        msg: "Missing debug symbols at {{ debug_vmlinux_path }}. Check dbgsym repo and package installation."
+      when: not debug_elf.stat.exists
 
     - name: Check if dwarf2json is already built
       ansible.builtin.stat:
@@ -115,22 +81,12 @@
         chdir: /opt/dwarf2json
       when: not dwarf2json_binary.stat.exists
 
-    - name: Verify debug kernel ELF exists
-      ansible.builtin.stat:
-        path: "{{ debug_vmlinux_path }}"
-      register: debug_elf
-
-    - name: Abort when debug symbols are missing
-      ansible.builtin.fail:
-        msg: "Missing debug symbols at {{ debug_vmlinux_path }}. Check dbgsym repository and package installation."
-      when: not debug_elf.stat.exists
-
     - name: Generate ISF JSON using dwarf2json
       ansible.builtin.command:
         cmd: "/opt/dwarf2json/dwarf2json linux --elf {{ debug_vmlinux_path }}"
       register: dwarf2json_output
 
-    - name: Write ISF JSON to temporary file
+    - name: Write ISF JSON to temporary file on guest
       ansible.builtin.copy:
         content: "{{ dwarf2json_output.stdout }}"
         dest: "/tmp/{{ isf_filename }}"
