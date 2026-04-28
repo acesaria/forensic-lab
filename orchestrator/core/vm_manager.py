@@ -89,7 +89,7 @@ class VMManager:
 
         self._provider.start_vm(vm_name)
 
-        self.wait_ssh_ready(vm_name, reason="initial boot")
+        ip = self.wait_ssh_ready(vm_name, reason="initial boot")
 
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
             self._run_baseline_playbook(ip)
