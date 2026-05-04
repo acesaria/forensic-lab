@@ -17,6 +17,8 @@ from infra.provider import Provider
 from orchestrator.core.ssh_client import SSHClient
 
 BASELINE_SNAPSHOT = "baseline"
+LAB_BASELINE_PLAYBOOK = Path("infra/ansible/lab_baseline.yml")
+ISF_BUILD_PLAYBOOK = Path("infra/ansible/isf_build.yml")
 
 
 class VMManager:
@@ -28,9 +30,7 @@ class VMManager:
     ) -> None:
         self._cfg = cfg
         self._provider = provider
-        self._images_dir = (
-            Path(cfg["lab"]["pool_path"]).expanduser().resolve().parent / "images"
-        )
+        self._images_dir = Path(cfg["lab"]["images_path"]).expanduser().resolve()
         self._repo_root = repo_root
 
     def _role_cfg(self, role: str) -> dict[str, Any]:
@@ -118,7 +118,7 @@ class VMManager:
         ip = self.wait_ssh_ready(vm_name, reason="initial boot")
 
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
-            self.run_playbook_on_vm(vm_name, self._repo_root / "infra" / "ansible" / "lab_baseline.yml", reason="isf build prep") #THODO: Hande playbook path better
+            self.run_playbook_on_vm(vm_name, self._repo_root / LAB_BASELINE_PLAYBOOK, reason="baseline provisioning")
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         else:
             print(f"[i] Snapshot '{BASELINE_SNAPSHOT}' already exists on '{vm_name}'")

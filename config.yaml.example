@@ -5,6 +5,7 @@ lab:
 libvirt_uri: qemu:///system
 pool_name: forensic-lab-pool
 pool_path: /var/lib/forensic-lab/disks
+images_path: /var/lib/forensic-lab/images
 ssh_user: labuser
 ssh_key: ~/.ssh/forensics-lab
 shared_dir: ./shared

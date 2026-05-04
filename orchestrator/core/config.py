@@ -10,6 +10,8 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     """Load project config and normalize legacy flat schema when needed."""
     with open(repo_root / "config.yaml") as f:
         cfg = yaml.safe_load(f)
+        if "lab" not in cfg or not isinstance(cfg["lab"], dict):
+            raise ValueError("config.yaml must contain a 'lab' mapping")
 
     # Canonical schema already present.
     if "lab" in cfg and isinstance(cfg["lab"], dict) and "libvirt_uri" in cfg["lab"]:
@@ -27,11 +29,12 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     if not isinstance(networks, dict):
         networks = {}
 
-    return {
+        return {
         "lab": {
             "libvirt_uri": cfg["libvirt_uri"],
             "pool_name": cfg["pool_name"],
             "pool_path": cfg["pool_path"],
+            "images_path": cfg.get("images_path"),
             "ssh_user": cfg["ssh_user"],
             "ssh_key": cfg["ssh_key"],
             "ssh_authorized_keys_path": cfg.get("ssh_authorized_keys_path"),

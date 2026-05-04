@@ -61,7 +61,7 @@ def _write_sudoers(path: str, content: str) -> None:
 
     print(f"[+] Sudoers rules installed: {path}")
 
-def _run_init(repo_root: Path) -> None:
+def run_init(repo_root: Path) -> None:
     if not _confirm_init():
         print("[-] Aborted.")
         return
