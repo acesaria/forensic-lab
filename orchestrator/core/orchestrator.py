@@ -74,7 +74,7 @@ class ForensicOrchestrator:
             raise RuntimeError("Missing 'role_defaults.build-isf' config for ISF build VM")
 
         build_vm_name = f"build-isf-{distro_id}"
-        base_image = ensure_image(profile)
+        base_image = self.vm_manager.ensure_base_image(profile)
 
         self.provider.shutdown_vm(lab_vm_name)
         self.provider.create_vm(
