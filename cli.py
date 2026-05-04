@@ -3,7 +3,7 @@
 import argparse
 
 from pathlib import Path
-from orchestrator.core.bootstrap import _run_init
+from orchestrator.core.bootstrap import run_init
 from orchestrator.core.orchestrator import ForensicOrchestrator
 
 
@@ -35,7 +35,7 @@ def main() -> None:
     try:
         with ForensicOrchestrator(repo_root) as orchestrator:
             if args.command == "init":
-                _run_init(repo_root)
+                run_init(repo_root)
                 orchestrator.setup()
                 return
 
@@ -52,6 +52,7 @@ def main() -> None:
             elif args.command == "destroy":
                 distro_id: str = args.distro
                 orchestrator.destroy(distro_id)
+                # TODO: add error handling for non existent distro/profile
                 return
             else:
                 print(f"[!] Unknown command: {args.command}")
