@@ -3,9 +3,8 @@
 - name: Ensure debug repo file exists (Debian)
   ansible.builtin.lineinfile:
     path: /etc/apt/sources.list.d/debug.list
-    line: "{{ item }}"
+    line: "deb http://deb.debian.org/debian-debug/ {{ ansible_distribution_release }}-debug main"
     create: yes
-  loop: "{{ dbgsym_repo_setup }}"
 
 - name: Update APT cache after adding debug repo (Debian)
   ansible.builtin.apt:

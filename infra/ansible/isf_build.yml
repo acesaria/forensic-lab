@@ -6,7 +6,7 @@
   vars:
     kernel_version: "{{ ansible_kernel }}"
     isf_filename: "{{ ansible_distribution | lower }}_{{ ansible_kernel }}.json"
-    local_isf_dir: "{{ playbook_dir }}/../shared/isf"
+    local_isf_dir: "{{ playbook_dir }}/../../shared/isf" #todo: path handling
     local_isf_path: "{{ local_isf_dir }}/{{ isf_filename }}"
 
   vars_files:
@@ -38,6 +38,19 @@
     - name: Skip ISF build when file already exists
       ansible.builtin.meta: end_play
       when: host_isf.stat.exists
+
+    - name: Ensure Debian sources.list has main repos
+      ansible.builtin.copy:
+        dest: /etc/apt/sources.list
+        content: |
+          deb http://deb.debian.org/debian {{ ansible_distribution_release }} main contrib non-free non-free-firmware
+          deb http://deb.debian.org/debian {{ ansible_distribution_release }}-updates main contrib non-free non-free-firmware
+      when: ansible_distribution == "Debian"
+
+    - name: Update APT cache on Debian-based systems
+      ansible.builtin.apt:
+        update_cache: yes
+      when: ansible_os_family == "Debian"
 
   tasks:
     - name: Install base dependencies

@@ -179,7 +179,7 @@ class Provider:
             raise RuntimeError(f"virt-install failed:\n{result.stderr.strip()}")
 
         self.shutdown_vm(vm_name)
-        self.start_vm(vm_name)      
+        self.start_vm(vm_name) # TODO(refactor): is start_vm needed here?
         
         print(f"[+] VM '{vm_name}' created")
         return vm_name

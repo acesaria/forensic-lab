@@ -43,12 +43,14 @@ class VMManager:
         )
 
     # --- prepare (one-time per distro) ------------------------------------
+        
+    def _run_playbook(
+        self,
+        ip: str,
+        playbook: Path,
+        extra_vars: dict[str, str] | None = None,
+    ) -> None:
 
-    def _run_baseline_playbook(self, ip: str) -> None:
-        """
-        Apply lab baseline via Ansible before taking the snapshot.
-        """
-        playbook = self._repo_root / "infra" / "ansible" / "lab_baseline.yml"
         user, key = self._ssh_cfg()
         cmd = [
             "ansible-playbook",
@@ -58,8 +60,28 @@ class VMManager:
             "--ssh-common-args", "-o StrictHostKeyChecking=no",
             str(playbook),
         ]
-        print(f"[*] Running baseline playbook on {ip}...")
+
+        if extra_vars:
+            for k, v in extra_vars.items():
+                cmd.extend(["-e", f"{k}={v}"])
+
         subprocess.run(cmd, check=True)
+
+    def run_playbook_on_vm(
+        self,
+        vm_name: str,
+        playbook: Path,
+        extra_vars: dict[str, str] | None = None,
+        reason: str = "",
+    ) -> str:
+        """
+        Wait for SSH on a VM, then run an Ansible playbook on it.
+        Returns the VM IP used.
+        """
+        ip = self.wait_ssh_ready(vm_name, reason=reason)
+        self._run_playbook(ip, playbook, extra_vars=extra_vars)
+        return ip
+
 
     def prepare_lab(
         self,
@@ -92,7 +114,7 @@ class VMManager:
         ip = self.wait_ssh_ready(vm_name, reason="initial boot")
 
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
-            self._run_baseline_playbook(ip)
+            self.run_playbook_on_vm(vm_name, self._repo_root / "infra" / "ansible" / "lab_baseline.yml", reason="isf build prep") #THODO: Hande playbook path better
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         else:
             print(f"[i] Snapshot '{BASELINE_SNAPSHOT}' already exists on '{vm_name}'")
