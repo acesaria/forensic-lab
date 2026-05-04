@@ -39,17 +39,17 @@ def main() -> None:
                 orchestrator.setup()
                 return
 
-            if args.command == "distro-setup":
+            elif args.command == "distro-setup":
                 distro_id: str = args.distro
                 orchestrator.prepare(distro_id)
                 return
 
-            if args.command == "run":
+            elif args.command == "run":
                 distro_id: str = args.distro
                 orchestrator._run_pipeline(distro_id)
                 return
             
-            if args.command == "destroy":
+            elif args.command == "destroy":
                 distro_id: str = args.distro
                 orchestrator.destroy(distro_id)
                 return
