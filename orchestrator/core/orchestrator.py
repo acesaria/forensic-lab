@@ -90,13 +90,20 @@ class ForensicOrchestrator:
         self.provider.start_vm(build_vm_name)
 
         try:
-            build_ip = self.vm_manager.wait_ssh_ready(build_vm_name, reason="isf build provisioning")
             playbook = self.repo_root / "infra" / "ansible" / "isf_build.yml"
-            cmd = self._build_isf_command(build_ip, playbook, kernel_release, isf_name)
             print("[*] Building ISF via ephemeral build VM...")
             print(f"[*] Kernel version: {kernel_release}")
             print(f"[*] ISF filename: {isf_name}")
-            subprocess.run(cmd, check=True)
+
+            self.vm_manager.run_playbook_on_vm(
+                build_vm_name,
+                playbook,
+                extra_vars={
+                    "kernel_version": kernel_release,
+                    "isf_filename": isf_name,
+                },
+                reason="isf build provisioning",
+            )
         finally:
             self.provider.destroy_vm(build_vm_name)
             self.provider.start_vm(lab_vm_name)
@@ -214,32 +221,7 @@ class ForensicOrchestrator:
         ip = self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")
         return vm_name, ip
 
-    def _build_isf_command(
-        self,
-        build_ip: str,
-        playbook: Path,
-        kernel_release: str,
-        isf_name: str,
-    ) -> list[str]:
-        return [
-            "ansible-playbook",
-            "-i",
-            f"{build_ip},",
-            "-u",
-            self.cfg["lab"]["ssh_user"],
-            "--private-key",
-            str(Path(self.cfg["lab"]["ssh_key"]).expanduser()),
-            "--ssh-common-args",
-            "-o StrictHostKeyChecking=no",
-            str(playbook),
-            "-v",
-            "-e",
-            f"kernel_version={kernel_release}",
-            "-e",
-            f"isf_filename={isf_name}",
-        ]
     
-
     @staticmethod
     def _isf_filename(distro_id: str, kernel_release: str) -> str:
         distro_family = distro_id.split("-", 1)[0]

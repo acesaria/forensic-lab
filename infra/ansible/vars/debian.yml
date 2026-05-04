@@ -1,24 +1,16 @@
 # infra/ansible/vars/debian.yml
 
-# Packages needed for ISF build and baseline configuration on Debian
 isf_base_packages:
   - git
   - golang-go
   - aria2
 
-# Debug vmlinux path – same default layout as Ubuntu for Debian debug packages
 debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"
-
-# For Debian we install debug symbols via APT, not direct URL
 debug_pkg_url: ""
 debug_pkg_path: ""
 debug_pkg_install_cmd: ""
 
-# Enable Debian debug repository (trixie-debug)
-dbgsym_repo_setup:
-  - "deb http://deb.debian.org/debian-debug/ trixie-debug main"
+baseline_disable_services: []
 
-# Baseline tuning for lab VMs
-baseline_disable_services: []        # adjust later if you want (eg nftables)
 baseline_absent_pkgs:
   - cloud-init
