@@ -19,6 +19,7 @@ from orchestrator.core.ssh_client import SSHClient
 BASELINE_SNAPSHOT = "baseline"
 LAB_BASELINE_PLAYBOOK = Path("infra/ansible/lab_baseline.yml")
 ISF_BUILD_PLAYBOOK = Path("infra/ansible/isf_build.yml")
+ISF_SHARED_DIR = Path("shared/isf")
 
 
 class VMManager:
@@ -42,6 +43,9 @@ class VMManager:
             self._cfg["lab"]["ssh_key"],
         )
 
+
+    def ensure_base_image(self, profile: dict[str, Any]) -> Path:
+        return ensure_image(profile, self._images_dir)
     # --- prepare (one-time per distro) ------------------------------------
         
     def _run_playbook(

@@ -29,30 +29,30 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     if not isinstance(networks, dict):
         networks = {}
 
-        return {
+    return {
+    "lab": {
+        "libvirt_uri": cfg["libvirt_uri"],
+        "pool_name": cfg["pool_name"],
+        "pool_path": cfg["pool_path"],
+        "images_path": cfg.get("images_path"),
+        "ssh_user": cfg["ssh_user"],
+        "ssh_key": cfg["ssh_key"],
+        "ssh_authorized_keys_path": cfg.get("ssh_authorized_keys_path"),
+        "shared_dir": cfg["shtared_dir"],
+        "networks": {
+            "isolated": networks.get("isolated", "forensics-isolated"),
+            "internet": networks.get("internet", "default"),
+        },
+    },
+    "role_defaults": {
         "lab": {
-            "libvirt_uri": cfg["libvirt_uri"],
-            "pool_name": cfg["pool_name"],
-            "pool_path": cfg["pool_path"],
-            "images_path": cfg.get("images_path"),
-            "ssh_user": cfg["ssh_user"],
-            "ssh_key": cfg["ssh_key"],
-            "ssh_authorized_keys_path": cfg.get("ssh_authorized_keys_path"),
-            "shared_dir": cfg["shared_dir"],
-            "networks": {
-                "isolated": networks.get("isolated", "forensics-isolated"),
-                "internet": networks.get("internet", "default"),
-            },
+            "disk_size": role_lab["disk_size"],
+            "ram_mb": role_lab["ram_mb"],
+            "vcpus": role_lab["vcpus"],
         },
-        "role_defaults": {
-            "lab": {
-                "disk_size": role_lab["disk_size"],
-                "ram_mb": role_lab["ram_mb"],
-                "vcpus": role_lab["vcpus"],
-            },
-            "build-isf": role_build_isf,
-        },
-    }
+        "build-isf": role_build_isf,
+    },
+}
 
 
 def load_profile(repo_root: Path, distro_id: str) -> dict[str, Any]:
