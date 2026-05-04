@@ -65,7 +65,11 @@ class VMManager:
             for k, v in extra_vars.items():
                 cmd.extend(["-e", f"{k}={v}"])
 
-        subprocess.run(cmd, check=True)
+        result = subprocess.run(cmd, check=False, capture_output=False)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Ansible playbook failed (rc={result.returncode}): {playbook}"
+            )
 
     def run_playbook_on_vm(
         self,
