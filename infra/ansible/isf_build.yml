@@ -6,7 +6,7 @@
   vars:
     kernel_version: "{{ ansible_kernel }}"
     isf_filename: "{{ ansible_distribution | lower }}_{{ ansible_kernel }}.json"
-    local_isf_dir: "{{ playbook_dir }}/../../shared/isf" #todo: path handling
+    local_isf_dir: "{{ shared_isf_dir }}"
     local_isf_path: "{{ local_isf_dir }}/{{ isf_filename }}"
 
   vars_files:
