@@ -74,9 +74,7 @@ class ForensicOrchestrator:
             raise RuntimeError("Missing 'role_defaults.build-isf' config for ISF build VM")
 
         build_vm_name = f"build-isf-{distro_id}"
-        # TODO(refactor): move images_dir to an explicit config key instead of
-        # inferring it from pool_path parent — see config.yaml.example
-        images_dir = Path(self.cfg["lab"]["pool_path"]).expanduser().resolve().parent / "images"
+        images_dir = Path(self.cfg["lab"]["images_path"]).expanduser().resolve()
         base_image = ensure_image(profile, images_dir)
 
         self.provider.shutdown_vm(lab_vm_name)
@@ -90,7 +88,7 @@ class ForensicOrchestrator:
         self.provider.start_vm(build_vm_name)
 
         try:
-            playbook = self.repo_root / "infra" / "ansible" / "isf_build.yml"
+            playbook = self.repo_root / ISF_BUILD_PLAYBOOK
             print("[*] Building ISF via ephemeral build VM...")
             print(f"[*] Kernel version: {kernel_release}")
             print(f"[*] ISF filename: {isf_name}")
