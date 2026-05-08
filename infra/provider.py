@@ -215,7 +215,7 @@ class Provider:
             return
 
         self._stop_domain_if_active(dom)
-        self._undefine_domain(conn, dom, vm_name)
+        self._undefine_domain(dom, vm_name)
         self._verify_domain_removed(conn, vm_name)
         self._remove_domain_artifacts(vm_name)
 
@@ -229,45 +229,16 @@ class Provider:
         ):
             dom.destroy()  # force off
 
-    # TODO(refactor): simplify to a single undefineFlags call —
-    # the multi-layer fallback was written for edge cases that don't
-    # occur in a controlled lab environment
-    def _undefine_domain(self, conn: libvirt.virConnect, dom: libvirt.virDomain, vm_name: str) -> None:
-        # Some local libvirt/python bindings do not expose undefineWithSnapshots,
-        # and some domains require extra flags (managed-save/NVRAM) to undefine.
-        undefined = False
+    def _undefine_domain(self, dom: libvirt.virDomain, vm_name: str) -> None:
+        flags = (
+            getattr(libvirt, "VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA", 0)
+            | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_MANAGED_SAVE", 0)
+            | getattr(libvirt, "VIR_DOMAIN_UNDEFINE_NVRAM", 0)
+        )
         try:
-            undefine_with_snapshots = getattr(dom, "undefineWithSnapshots", None)
-            if callable(undefine_with_snapshots):
-                undefine_with_snapshots()
-                undefined = True
-        except (AttributeError, libvirt.libvirtError):
-            pass
-
-        if not undefined:
-            try:
-                flags = 0
-                flags |= getattr(libvirt, "VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA", 0)
-                flags |= getattr(libvirt, "VIR_DOMAIN_UNDEFINE_MANAGED_SAVE", 0)
-                flags |= getattr(libvirt, "VIR_DOMAIN_UNDEFINE_NVRAM", 0)
-                dom.undefineFlags(flags)
-                undefined = True
-            except (AttributeError, libvirt.libvirtError):
-                pass
-
-        if not undefined:
-            try:
-                conn.lookupByName(vm_name)
-            except libvirt.libvirtError:
-                undefined = True
-
-        if not undefined:
-            subprocess.run(
-                ["virsh", "undefine", vm_name, "--snapshots-metadata", "--managed-save", "--nvram"],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
+            dom.undefineFlags(flags)
+        except libvirt.libvirtError as exc:
+            raise RuntimeError(f"Failed to undefine '{vm_name}': {exc}") from exc
 
     def _verify_domain_removed(self, conn: libvirt.virConnect, vm_name: str) -> None:
         try:
@@ -303,63 +274,53 @@ class Provider:
         dom.create()           # cold start with new XML config applied
 
     def shutdown_vm(self, vm_name: str, timeout: int = 90) -> None:
-        """Graceful shutdown with fallback to force-off."""
+        """Graceful ACPI shutdown with fallback to force-off."""
         conn = self._connect()
         dom = conn.lookupByName(vm_name)
-        state, _ = dom.state()
-        if state != libvirt.VIR_DOMAIN_RUNNING:
+        if dom.state()[0] != libvirt.VIR_DOMAIN_RUNNING:
             return
 
         dom.shutdown()
         deadline = time.time() + timeout
         while time.time() < deadline:
-            state, _ = dom.state()
+            try:
+                state = conn.lookupByName(vm_name).state()[0]
+            except libvirt.libvirtError:
+                # domain disappeared — already gone
+                return
             if state == libvirt.VIR_DOMAIN_SHUTOFF:
+                print(f"[+] '{vm_name}' shut down gracefully")
                 return
             time.sleep(2)
 
         print(f"[!] Graceful shutdown timed out, forcing off '{vm_name}'")
-        dom.destroy()
+        conn.lookupByName(vm_name).destroy()
 
     # --- IP resolution -----------------------------------------------------
 
     def get_vm_ip(self, vm_name: str, timeout: int = 120) -> str:
-        """
-        Poll until the VM acquires a DHCP lease and return its IP.
-        Raises RuntimeError on timeout.
-        """
         conn = self._connect()
         dom = conn.lookupByName(vm_name)
         deadline = time.time() + timeout
 
         while time.time() < deadline:
             try:
-                raw_ifaces = dom.interfaceAddresses(
-                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE
+                raw = dom.interfaceAddresses(
+                    libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE,
+                    0,
                 )
-                iface_values = raw_ifaces.values() if isinstance(raw_ifaces, dict) else ()
+                # Tell the type checker what this really is
+                ifaces: Dict[str, Any] = raw  # type: ignore[assignment]
 
-                for iface in iface_values:
-                    if not isinstance(iface, dict):
-                        continue
-                    addrs = iface.get("addrs", [])
-                    if not isinstance(addrs, list):
-                        continue
-
-                    for addr in addrs:
-                        if not isinstance(addr, dict):
-                            continue
+                for iface in ifaces.values():
+                    for addr in iface.get("addrs", []):
                         if addr.get("type") == libvirt.VIR_IP_ADDR_TYPE_IPV4:
-                            ip = addr.get("addr")
-                            if isinstance(ip, str):
-                                return ip
+                            return addr["addr"]
             except libvirt.libvirtError:
                 pass
             time.sleep(5)
 
-        raise RuntimeError(
-            f"Timed out waiting for IP on '{vm_name}' after {timeout}s"
-        )
+        raise RuntimeError(f"Timed out waiting for IP on '{vm_name}' after {timeout}s")
 
     # --- snapshots ---------------------------------------------------------
 
