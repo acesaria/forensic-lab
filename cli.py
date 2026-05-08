@@ -160,7 +160,7 @@ def main() -> None:
                 distro_id: str = args.distro
                 if not orchestrator.lab_exists(distro_id):
                     orchestrator.prepare_lab(distro_id)
-                orchestrator._run_pipeline(distro_id)
+                orchestrator.run_pipeline(distro_id)
                 return
             
             elif args.command == "destroy":
