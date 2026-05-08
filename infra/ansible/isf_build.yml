@@ -4,115 +4,94 @@
   become: yes
 
   vars:
-    kernel_version: "{{ ansible_kernel }}"
     isf_filename: "{{ ansible_distribution | lower }}_{{ ansible_kernel }}.json"
-    local_isf_dir: "{{ shared_isf_dir }}"
-    local_isf_path: "{{ local_isf_dir }}/{{ isf_filename }}"
+    local_isf_path: "{{ shared_isf_dir }}/{{ isf_filename }}"
 
   vars_files:
     - "vars/{{ ansible_distribution | lower }}.yml"
 
   pre_tasks:
     - name: Wait for cloud-init to complete
-      ansible.builtin.command:
-        cmd: cloud-init status --wait
+      ansible.builtin.shell: |
+        if command -v cloud-init >/dev/null 2>&1; then
+          cloud-init status --wait
+        fi
       changed_when: false
       timeout: 300
 
     - name: Wait for dpkg lock to be released
       ansible.builtin.shell: |
-        until ! fuser /var/lib/dpkg/lock* > /dev/null 2>&1; do
-          echo "Waiting for dpkg lock..."
+        until ! fuser /var/lib/dpkg/lock* >/dev/null 2>&1; do
           sleep 2
         done
       changed_when: false
       timeout: 120
 
-    - name: Check if ISF JSON already exists on host
+    - name: Check if ISF already exists locally
       ansible.builtin.stat:
         path: "{{ local_isf_path }}"
-      register: host_isf
+      register: local_isf
       delegate_to: localhost
       become: no
 
-    - name: Skip ISF build when file already exists
+    - name: Skip if ISF already exists locally
       ansible.builtin.meta: end_play
-      when: host_isf.stat.exists
+      when: local_isf.stat.exists
 
-    - name: Ensure Debian sources.list has main repos
-      ansible.builtin.copy:
-        dest: /etc/apt/sources.list
-        content: |
-          deb http://deb.debian.org/debian {{ ansible_distribution_release }} main contrib non-free non-free-firmware
-          deb http://deb.debian.org/debian {{ ansible_distribution_release }}-updates main contrib non-free non-free-firmware
-      when: ansible_distribution == "Debian"
-
-    - name: Update APT cache on Debian-based systems
+    - name: Refresh APT cache
       ansible.builtin.apt:
         update_cache: yes
-      when: ansible_os_family == "Debian"
 
   tasks:
     - name: Install base dependencies
-      ansible.builtin.package:
+      ansible.builtin.apt:
         name: "{{ isf_base_packages }}"
         state: present
-      register: pkg_install
-      retries: 3
-      delay: 5
-      until: pkg_install is succeeded
 
-    - name: Include debug symbols acquisition flow
+    # This includes the distro task which sets up repos, 
+    # installs the package, and sets the 'debug_vmlinux_path' fact
+    - name: Acquire kernel debug symbols
       ansible.builtin.include_tasks: "tasks/dbgsym_{{ ansible_distribution | lower }}.yml"
 
-    - name: Check debug kernel ELF exists
+    - name: Check installed vmlinux path
       ansible.builtin.stat:
         path: "{{ debug_vmlinux_path }}"
-      register: debug_elf
+      register: vmlinux_stat
 
-    - name: Abort when debug symbols are missing
+    - name: Fail if vmlinux is missing
       ansible.builtin.fail:
-        msg: "Missing debug symbols at {{ debug_vmlinux_path }}. Check dbgsym repo and package installation."
-      when: not debug_elf.stat.exists
+        msg: "Expected vmlinux not found at {{ debug_vmlinux_path }}"
+      when: not vmlinux_stat.stat.exists
 
-    - name: Check if dwarf2json is already built
-      ansible.builtin.stat:
-        path: /opt/dwarf2json/dwarf2json
-      register: dwarf2json_binary
-
-    - name: Clone dwarf2json source if not present
+    # --- dwarf2json build (once) ---
+    
+    - name: Clone dwarf2json
       ansible.builtin.git:
         repo: https://github.com/volatilityfoundation/dwarf2json.git
         dest: /opt/dwarf2json
         version: master
         update: yes
-      when: not dwarf2json_binary.stat.exists
 
-    - name: Build dwarf2json if not present
+    - name: Build dwarf2json
       ansible.builtin.command:
         cmd: go build -o dwarf2json .
         chdir: /opt/dwarf2json
-      when: not dwarf2json_binary.stat.exists
+        creates: /opt/dwarf2json/dwarf2json
 
-    - name: Generate ISF JSON using dwarf2json
-      ansible.builtin.command:
-        cmd: "/opt/dwarf2json/dwarf2json linux --elf {{ debug_vmlinux_path }}"
-      register: dwarf2json_output
+    # --- ISF generation + fetch ---
+    
+    - name: Generate ISF JSON to guest tmp
+      ansible.builtin.shell: "/opt/dwarf2json/dwarf2json linux --elf {{ debug_vmlinux_path }} > /tmp/{{ isf_filename }}"
 
-    - name: Write ISF JSON to temporary file on guest
-      ansible.builtin.copy:
-        content: "{{ dwarf2json_output.stdout }}"
-        dest: "/tmp/{{ isf_filename }}"
-
-    - name: Ensure local shared ISF directory exists
+    - name: Ensure local ISF directory exists
       ansible.builtin.file:
-        path: "{{ local_isf_dir }}"
+        path: "{{ shared_isf_dir }}"
         state: directory
         mode: "0755"
       delegate_to: localhost
       become: no
 
-    - name: Fetch ISF file to host shared/isf directory
+    - name: Fetch ISF to controller
       ansible.builtin.fetch:
         src: "/tmp/{{ isf_filename }}"
         dest: "{{ local_isf_path }}"

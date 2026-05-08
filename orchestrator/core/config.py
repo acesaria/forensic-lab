@@ -1,64 +1,34 @@
-"""Shared configuration and profile loading helpers."""
+"""Project constants and configuration loader."""
 
 from pathlib import Path
 from typing import Any
-
 import yaml
 
+# --- Project constants (never change unless you restructure the project) ---
+BASELINE_SNAPSHOT = "baseline"
+LAB_BASELINE_PLAYBOOK = Path("infra/ansible/lab_baseline.yml")
+ISF_BUILD_PLAYBOOK = Path("infra/ansible/isf_build.yml")
+ISF_SHARED_DIR = Path("shared/isf")
+PROFILES_DIR = Path("infra/profiles")
+CLOUD_INIT_DIR = Path("infra/cloud-init")
+CLOUD_INIT_USER_DATA = CLOUD_INIT_DIR / "user-data"
+CLOUD_INIT_META_DATA = CLOUD_INIT_DIR / "meta-data"
+
+# --- Loaders ---
 
 def load_config(repo_root: Path) -> dict[str, Any]:
-    """Load project config and normalize legacy flat schema when needed."""
-    with open(repo_root / "config.yaml") as f:
+    """Load and validate config.yaml. Returns raw validated dict."""
+    config_path = repo_root / "config.yaml"
+    with open(config_path) as f:
         cfg = yaml.safe_load(f)
-        if "lab" not in cfg or not isinstance(cfg["lab"], dict):
-            raise ValueError("config.yaml must contain a 'lab' mapping")
-
-    # Canonical schema already present.
-    if "lab" in cfg and isinstance(cfg["lab"], dict) and "libvirt_uri" in cfg["lab"]:
-        return cfg
-
-    # TODO(refactor): remove legacy flat-schema compatibility once all
-    # config.yaml files have been migrated to the canonical nested schema
-    # Legacy compatibility path.
-    role_lab = cfg.get("lab", {}) if isinstance(cfg.get("lab", {}), dict) else {}
-    role_build_isf = cfg.get("build-isf", {})
-    if not isinstance(role_build_isf, dict):
-        role_build_isf = {}
-
-    networks = cfg.get("networks", {})
-    if not isinstance(networks, dict):
-        networks = {}
-
-    return {
-    "lab": {
-        "libvirt_uri": cfg["libvirt_uri"],
-        "pool_name": cfg["pool_name"],
-        "pool_path": cfg["pool_path"],
-        "images_path": cfg.get("images_path"),
-        "ssh_user": cfg["ssh_user"],
-        "ssh_key": cfg["ssh_key"],
-        "ssh_authorized_keys_path": cfg.get("ssh_authorized_keys_path"),
-        "shared_dir": cfg["shtared_dir"],
-        "networks": {
-            "isolated": networks.get("isolated", "forensics-isolated"),
-            "internet": networks.get("internet", "default"),
-        },
-    },
-    "role_defaults": {
-        "lab": {
-            "disk_size": role_lab["disk_size"],
-            "ram_mb": role_lab["ram_mb"],
-            "vcpus": role_lab["vcpus"],
-        },
-        "build-isf": role_build_isf,
-    },
-}
-
+    if "host" not in cfg or not isinstance(cfg["host"], dict):
+        raise ValueError("config.yaml must contain a 'host' mapping")
+    return cfg
 
 def load_profile(repo_root: Path, distro_id: str) -> dict[str, Any]:
-    """Load distro profile by id from infra/profiles."""
-    path = repo_root / "infra" / "profiles" / f"{distro_id}.yaml"
+    """Load distro profile YAML by id."""
+    path = repo_root / PROFILES_DIR / f"{distro_id}.yaml"
     if not path.exists():
-        raise FileNotFoundError(f"No profile found for distro '{distro_id}' at {path}")
+        raise FileNotFoundError(f"No profile for '{distro_id}' at {path}")
     with open(path) as f:
         return yaml.safe_load(f)

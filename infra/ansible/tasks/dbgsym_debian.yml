@@ -1,16 +1,19 @@
-# infra/ansible/tasks/dbgsym_debian.yml
+- name: Add Debian debug repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/debian-debug.list
+    content: |
+      deb http://deb.debian.org/debian-debug/ {{ ansible_distribution_release }}-debug main
+    mode: "0644"
 
-- name: Ensure debug repo file exists (Debian)
-  ansible.builtin.lineinfile:
-    path: /etc/apt/sources.list.d/debug.list
-    line: "deb http://deb.debian.org/debian-debug/ {{ ansible_distribution_release }}-debug main"
-    create: yes
-
-- name: Update APT cache after adding debug repo (Debian)
+- name: Update APT cache
   ansible.builtin.apt:
     update_cache: yes
 
-- name: Install linux-image-dbg for current kernel (Debian)
+- name: Install kernel debug symbols
   ansible.builtin.apt:
-    name: "linux-image-{{ kernel_version }}-dbg"
+    name: "linux-image-{{ ansible_kernel }}-dbg"
     state: present
+
+- name: Set vmlinux path
+  ansible.builtin.set_fact:
+    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ ansible_kernel }}"
