@@ -1,40 +1,36 @@
-# infra/ansible/tasks/dbgsym_ubuntu.yml
+- name: Install Ubuntu debug symbol keyring
+  ansible.builtin.apt:
+    name: ubuntu-dbgsym-keyring
+    state: present
 
-- name: Check if debug kernel ELF is already present (Ubuntu)
-  ansible.builtin.stat:
-    path: "{{ debug_vmlinux_path }}"
-  register: debug_elf_before
+- name: Add Ubuntu ddebs repository
+  ansible.builtin.copy:
+    dest: /etc/apt/sources.list.d/ddebs.list
+    content: |
+      deb http://ddebs.ubuntu.com {{ ansible_distribution_release }} main restricted universe multiverse
+      deb http://ddebs.ubuntu.com {{ ansible_distribution_release }}-updates main restricted universe multiverse
+      deb http://ddebs.ubuntu.com {{ ansible_distribution_release }}-proposed main restricted universe multiverse
+    mode: "0644"
 
-- name: Create temp directory for debug symbols (Ubuntu)
-  ansible.builtin.file:
-    path: /tmp/dbgsym
-    state: directory
-    mode: "0755"
-  when: not debug_elf_before.stat.exists
+- name: Update APT cache
+  ansible.builtin.apt:
+    update_cache: yes
 
-- name: Download debug symbols with aria2c (Ubuntu)
-  ansible.builtin.command: >
-    aria2c
-    --console-log-level=notice
-    --summary-interval=10
-    --max-connection-per-server=8
-    --split=8
-    --dir=/tmp/dbgsym
-    --out=linux-dbgsym.ddeb
-    {{ debug_pkg_url }}
-  when: not debug_elf_before.stat.exists
-  register: aria2c_download
-  retries: 3
-  delay: 10
-  until: aria2c_download is succeeded
+# Try the standard signed package first
+- name: Install kernel debug symbols
+  ansible.builtin.apt:
+    name: "linux-image-{{ ansible_kernel }}-dbgsym"
+    state: present
+  ignore_errors: yes
+  register: apt_dbgsym
 
-- name: Install debug symbols package (Ubuntu)
-  ansible.builtin.command:
-    cmd: "{{ debug_pkg_install_cmd }}"
-  when: not debug_elf_before.stat.exists
+# Fallback to unsigned if the signed one doesn't exist (common on Ubuntu)
+- name: Install unsigned kernel debug symbols (fallback)
+  ansible.builtin.apt:
+    name: "linux-image-unsigned-{{ ansible_kernel }}-dbgsym"
+    state: present
+  when: apt_dbgsym.failed
 
-- name: Clean up downloaded ddeb (Ubuntu)
-  ansible.builtin.file:
-    path: /tmp/dbgsym
-    state: absent
-  when: not debug_elf_before.stat.exists
+- name: Set vmlinux path
+  ansible.builtin.set_fact:
+    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ ansible_kernel }}"

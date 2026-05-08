@@ -49,7 +49,7 @@ class SSHClient:
     def run(
         self,
         cmd: str,
-        timeout: int = 120,
+        timeout: int = 300,
     ) -> Tuple[int, str, str]:
         """
         Run a command on the remote VM.

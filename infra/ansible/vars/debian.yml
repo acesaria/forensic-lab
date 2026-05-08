@@ -3,12 +3,7 @@
 isf_base_packages:
   - git
   - golang-go
-  - aria2
 
-debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"
-debug_pkg_url: ""
-debug_pkg_path: ""
-debug_pkg_install_cmd: ""
 
 baseline_disable_services: []
 

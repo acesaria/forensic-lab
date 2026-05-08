@@ -1,0 +1,8 @@
+distro_id: ubuntu-24.04
+os_variant: ubuntu24.04        # noble 24.04 GA
+
+image:
+  url: https://cloud-images.ubuntu.com/releases/noble/release-20240523.1/ubuntu-24.04-server-cloudimg-amd64.img
+  filename: ubuntu-24.04-server-cloudimg-amd64.img
+  checksum_url: https://cloud-images.ubuntu.com/releases/noble/release-20240523.1/SHA256SUMS
+  checksum_algo: sha256

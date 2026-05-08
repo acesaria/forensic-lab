@@ -18,6 +18,7 @@ import requests
 
 
 def _filename_from_url(url: str) -> str:
+    # TODO: Add release number to filename to avoid collisions between different releases 
     return url.rstrip("/").split("/")[-1]
 
 
@@ -101,7 +102,6 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
                 f"  actual:   {actual}"
             )
         print(f"[+] Checksum OK: {actual[:16]}...")
-        _set_readonly(dest)
         return dest
 
     # --- not present: download then verify ---
@@ -118,7 +118,6 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
             f"  actual:   {actual}"
         )
     print(f"[+] Checksum OK: {actual[:16]}...")
-    _set_readonly(dest)
     return dest
 
 

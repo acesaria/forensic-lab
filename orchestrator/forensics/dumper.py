@@ -2,7 +2,7 @@
 orchestrator/forensics/dumper.py
 
 RAM and disk acquisition pipeline. Decoupled from any VM management —
-receives a domain name and a Provider instance, does the rest.
+receives a domain name and a VMManager instance, does the rest.
 """
 
 from concurrent.futures import process
@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from infra.provider import Provider
+    from orchestrator.core.vm_manager import VMManager
 
 
 @dataclass
@@ -54,7 +54,7 @@ class Dumper:
         self,
         domain: str,
         scenario_id: str,
-        provider: "Provider",
+        vm_manager: "VMManager",
     ) -> str:
         """
         Acquire RAM and disk for *domain*, write manifest.
@@ -65,7 +65,7 @@ class Dumper:
         disk_path = scenario_dir / "disk" / "baseline_disk.E01"
 
         memory_meta = self._acquire_memory(domain, memory_path)
-        disk_meta = self._acquire_disk(domain, disk_path, provider)
+        disk_meta = self._acquire_disk(domain, disk_path, vm_manager)
 
         manifest = AcquisitionManifest(
             scenario_id=scenario_id,
@@ -127,7 +127,7 @@ class Dumper:
         self,
         domain: str,
         dest: Path,
-        provider: "Provider",
+        vm_manager: "VMManager",
     ) -> ImageMetadata:
         prefix = str(dest.with_suffix(""))
 
@@ -136,11 +136,11 @@ class Dumper:
             os.remove(seg)
 
         started = time.time()
-        disk_source = provider.get_disk_path(domain)
+        disk_source = vm_manager.get_disk_path(domain)
         virtual_size = self._qemu_virtual_size(disk_source)
 
         try:
-            provider.shutdown_vm(domain)
+            vm_manager.shutdown_vm(domain)
             print(f"[*] Acquiring disk from '{disk_source}' -> {dest}...")
             subprocess.run(
                 [
@@ -158,7 +158,7 @@ class Dumper:
             )
         finally:
             print(f"[*] Restarting '{domain}'...")
-            provider.start_vm(domain)
+            vm_manager.start_vm(domain)
 
         segments = sorted(glob.glob(f"{prefix}.E??"))
         if not segments:

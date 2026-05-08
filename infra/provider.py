@@ -4,13 +4,11 @@ infra/provider.py
 Direct interface to libvirt. Handles all VM lifecycle operations:
 network, storage pool, VM creation/destruction, snapshots, and IP resolution.
 
-All callers pass a config dict loaded from config.yaml. This module
-knows nothing about experiments — it just manages VMs as resources.
+This module knows nothing about experiments — it just manages VMs
+as resources.
 """
 
-import os
 import subprocess
-import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -28,30 +26,31 @@ class Provider:
     """
     Manages the libvirt infrastructure for the forensic lab.
 
-    Instantiate once per session with the parsed config.yaml dict.
+    Instantiate once per session with explicit configuration primitives.
     """
+    def __init__(self, libvirt_uri: str, pool_name: str, pool_path: Path, infra_dir: Path) -> None:
+        self._uri = libvirt_uri
+        self._pool_name = pool_name
+        self._pool_path = pool_path.expanduser().resolve()
+        self._infra_dir = infra_dir
+        self._network_xml = self._infra_dir / "forensics-isolated.xml"
+        self._pool_xml = self._infra_dir / "pool.xml"
+        self._net_isolated = self._read_network_name(self._network_xml)
+        self._net_internet = "default"
+        self._conn = None
 
-    def __init__(self, cfg: dict[str, Any], repo_root: Path) -> None:
-        lab = cfg["lab"]
-        self._uri: str = lab["libvirt_uri"]
-        self._pool_name: str = lab["pool_name"]
-        self._pool_path: Path = Path(lab["pool_path"]).expanduser().resolve()
-        self._ssh_key_path: Path = Path(lab["ssh_key"]).expanduser().resolve()
-        auth_path = lab.get("ssh_authorized_keys_path")
-        self._ssh_authorized_keys_path: Path = (
-            Path(auth_path).expanduser().resolve()
-            if auth_path
-            else Path(f"{self._ssh_key_path}.pub")
-        )
-        self._net_isolated: str = lab["networks"]["isolated"]
-        self._net_internet: str = lab["networks"]["internet"]
-        self._infra_dir: Path = repo_root / "infra"
-        self._cloud_init_dir: Path = self._infra_dir / "cloud-init"
-        self._cloud_init_template: Path = self._cloud_init_dir / "user-data"
-        self._cloud_init_meta_data: Path = self._cloud_init_dir / "meta-data"
-        self._network_xml: Path = self._infra_dir / "forensics-isolated.xml"
-        self._pool_xml: Path = self._infra_dir / "pool.xml"
-        self._conn: libvirt.virConnect | None = None
+    @staticmethod
+    def _read_network_name(network_xml: Path) -> str:
+        try:
+            root = ET.fromstring(network_xml.read_text())
+        except (ET.ParseError, OSError):
+            return "forensics-isolated"
+
+        name = root.findtext("name")
+        return name.strip() if isinstance(name, str) and name.strip() else "forensics-isolated"
+
+    def pool_path(self) -> Path:
+        return self._pool_path
 
     # --- connection --------------------------------------------------------
 
@@ -127,6 +126,7 @@ class Provider:
         profile: dict[str, Any],
         role_cfg: dict[str, Any],
         base_image: Path,
+        seed_path: Path | None = None,
     ) -> str:
         """
         Create a VM from a role + distro profile.
@@ -145,11 +145,7 @@ class Provider:
             pass
 
         disk_path = self._pool_path / f"{vm_name}.qcow2"
-        seed_path = self._pool_path / f"{vm_name}-seed.iso"
-
         self._create_disk_overlay(base_image, disk_path, role_cfg["disk_size"])
-        self._create_cloud_init_seed(vm_name, seed_path)
-
         network = role_cfg.get(
             "network",
             self._net_isolated if role == "lab" else self._net_internet,
@@ -157,29 +153,28 @@ class Provider:
         os_variant = profile.get("os_variant") or "generic"
 
         print(f"[*] Creating VM '{vm_name}'...")
-        result = subprocess.run(
-            [
-                "virt-install",
-                "--name",       vm_name,
-                "--memory",     str(role_cfg["ram_mb"]),
-                "--vcpus",      str(role_cfg["vcpus"]),
-                "--disk",       f"path={disk_path},format=qcow2,bus=virtio",
-                "--disk",       f"path={seed_path},format=raw,bus=virtio,readonly=on",
-                "--network",    f"network={network},model=virtio",
-                "--os-variant", os_variant,
-                "--import",
-                "--graphics",   "none",
-                "--console",    "pty,target_type=virtio",
-                "--noautoconsole",
-            ],
-            capture_output=True,
-            text=True,
-        )
+        cmd = [
+            "virt-install",
+            "--name",       vm_name,
+            "--memory",     str(role_cfg["ram_mb"]),
+            "--vcpus",      str(role_cfg["vcpus"]),
+            "--disk",       f"path={disk_path},format=qcow2,bus=virtio",
+            "--network",    f"network={network},model=virtio",
+            "--os-variant", os_variant,
+            "--import",
+            "--graphics",   "none",
+            "--console",    "pty,target_type=virtio",
+            "--noautoconsole",
+        ]
+        if seed_path is not None:
+            cmd.extend([
+                "--disk",
+                f"path={seed_path},format=raw,bus=virtio,readonly=on",
+            ])
+
+        result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"virt-install failed:\n{result.stderr.strip()}")
-
-        self.shutdown_vm(vm_name)
-        self.start_vm(vm_name) # TODO(refactor): is start_vm needed here?
         
         print(f"[+] VM '{vm_name}' created")
         return vm_name
@@ -207,24 +202,6 @@ class Provider:
 
         if result.returncode != 0:
             raise RuntimeError(f"qemu-img failed:\n{result.stderr.strip()}")
-
-    def _create_cloud_init_seed(self, vm_name: str, seed_path: Path) -> None:
-        if seed_path.exists():
-            seed_path.unlink()
-
-        with tempfile.TemporaryDirectory() as tmp:
-            meta_data = Path(tmp) / "meta-data"
-            meta_data.write_text(self._render_meta_data(vm_name))
-            rendered_user_data = Path(tmp) / "user-data"
-            rendered_user_data.write_text(self._render_user_data())
-            result = subprocess.run(
-                ["cloud-localds", str(seed_path), str(rendered_user_data), str(meta_data)],
-                capture_output=True,
-                text=True,
-            )
-
-            if result.returncode != 0:
-                raise RuntimeError(f"cloud-localds failed:\n{result.stderr.strip()}")
 
     # --- VM destruction ----------------------------------------------------
 
@@ -429,29 +406,17 @@ class Provider:
                 return src.attrib["file"]
         raise RuntimeError(f"Could not find disk path for '{vm_name}'")
 
-    def _render_user_data(self) -> str:
-        if not self._ssh_authorized_keys_path.exists():
-            raise FileNotFoundError(
-                f"SSH authorized key not found: {self._ssh_authorized_keys_path}"
-            )
-        pubkey = self._ssh_authorized_keys_path.read_text().strip()
-        return self._render_template(
-            self._cloud_init_template,
-            {"__SSH_PUBLIC_KEY__": pubkey},
-        )
-
-    def _render_meta_data(self, vm_name: str) -> str:
-        return self._render_template(
-            self._cloud_init_meta_data,
-            {
-                "__INSTANCE_ID__": vm_name,
-                "__LOCAL_HOSTNAME__": vm_name,
-            },
-        )
-
     @staticmethod
     def _render_template(path: Path, replacements: dict[str, str]) -> str:
         data = path.read_text()
         for placeholder, value in replacements.items():
             data = data.replace(placeholder, value)
         return data
+
+    def vm_exists(self, vm_name: str) -> bool:
+        conn = self._connect()
+        try:
+            conn.lookupByName(vm_name)
+            return True
+        except libvirt.libvirtError:
+            return False
