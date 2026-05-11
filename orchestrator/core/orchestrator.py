@@ -66,8 +66,14 @@ class ForensicOrchestrator:
             profile = load_profile(self.repo_root, distro_id)
 
         lab_vm_name = f"lab-{distro_id}"
+        print(f"[*] Starting {lab_vm_name} to detect kernel version for ISF build...")
+        self.vm_manager.start_vm(lab_vm_name)
+
         lab_ip = self.vm_manager.wait_ssh_ready(lab_vm_name, reason="kernel detection")
         kernel_release = self._kernel_release(lab_ip)
+
+        print(f"[*] Detected kernel version: {kernel_release}. Shutting down lab VM {lab_vm_name}...")
+        self.vm_manager.shutdown_vm(lab_vm_name)
 
         isf_name = self._isf_filename(distro_id, kernel_release)
         isf_dir = self.repo_root / ISF_SHARED_DIR
@@ -193,6 +199,9 @@ class ForensicOrchestrator:
     def _revert_lab_and_wait(self, distro_id: str) -> tuple[str, str]:
         vm_name = f"lab-{distro_id}"
         self.vm_manager.revert_to_baseline(distro_id)
+
+        print(f"[*] Start VM {vm_name} after snapshot revert...")
+        self.vm_manager.start_vm(vm_name)
         ip = self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")
         return vm_name, ip
 
