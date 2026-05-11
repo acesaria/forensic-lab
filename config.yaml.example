@@ -9,9 +9,6 @@ host:
   pool_path: /var/lib/forensic-lab/disks
   images_path: /var/lib/forensic-lab/images
   shared_dir: ./shared
-  networks:
-    isolated: forensics-isolated
-    internet: default
 
 role_defaults:
   lab:
@@ -24,4 +21,3 @@ role_defaults:
     ram_mb: 6144
     vcpus: 4
     network: default
-    ephemeral: true
