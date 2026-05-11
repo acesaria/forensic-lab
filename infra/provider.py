@@ -9,8 +9,8 @@ Provider contract
 Infra:
     pool_path() -> Path
     close() -> None
-    ensure_network() -> None
-    ensure_pool() -> None
+    ensure_isolated_network() -> None
+    ensure_storage_pool() -> None
 
 VM creation / destruction:
     create_vm(role, distro_id, profile, role_cfg, base_image, seed_path) -> str
@@ -32,12 +32,12 @@ Snapshots (disk-only, taken while VM is shutoff):
     revert_snapshot(vm_name, snapshot_name) -> None
 
 Notes:
-    - Snapshots are disk-only, always taken while the VM is shutoff.
-      Callers shut down the VM before create_snapshot, and start it
-      after revert_snapshot.
-    - start_vm is idempotent: no-op if already running.
-    - destroy_vm is idempotent: no-op if VM does not exist.
-    - close() must be called when the provider is no longer needed.
+- Snapshots are disk-only, always taken while the VM is shutoff.
+  Callers shut down the VM before create_snapshot, and start it
+  after revert_snapshot.
+- start_vm is idempotent: no-op if already running.
+- destroy_vm is idempotent: no-op if VM does not exist.
+- close() must be called when the provider is no longer needed.
 """
 
 import subprocess
@@ -48,20 +48,28 @@ from typing import Any, cast
 
 import libvirt
 
-# Module-level constant in provider.py
+# ---------------------------------------------------------------------------
+# Infrastructure constants
 # Adjust the address range here if it conflicts with your local network.
-_ISOLATED_NETWORK_XML = """\
+# ---------------------------------------------------------------------------
+
+_ISOLATED_NETWORK_NAME = "forensics-isolated"
+
+_ISOLATED_NETWORK_XML = f"""\
 <network>
-  <name>forensics-isolated</name>
+  <name>{_ISOLATED_NETWORK_NAME}</name>
   <bridge name="virbr-forensics" stp="on" delay="0"/>
   <ip address="192.168.100.1" netmask="255.255.255.0">
     <dhcp>
-      <range start="192.168.100.10" end="192.168.100.50"/>
+      <range start="192.168.100.10" end="192.168.100.99"/>
     </dhcp>
   </ip>
 </network>"""
 
-_ISOLATED_NETWORK_NAME = "forensics-isolated"
+
+# ---------------------------------------------------------------------------
+# Provider
+# ---------------------------------------------------------------------------
 
 
 class Provider:
@@ -75,27 +83,18 @@ class Provider:
         libvirt_uri: str,
         pool_name: str,
         pool_path: Path,
-        infra_dir: Path,
     ) -> None:
         self._uri = libvirt_uri
         self._pool_name = pool_name
         self._pool_path = pool_path.expanduser().resolve()
-        self._infra_dir = infra_dir
         self._conn: libvirt.virConnect | None = None
+
+    # --- public accessors ------------------------------------------------
 
     def pool_path(self) -> Path:
         return self._pool_path
-    
-    def _pool_xml(self) -> str:
-        return f"""
-    <pool type='dir'>
-    <name>{self._pool_name}</name>
-    <target>
-        <path>{self._pool_path}</path>
-    </target>
-    </pool>"""
 
-    # --- connection -------------------------------------------------------
+    # --- connection ------------------------------------------------------
 
     def _connect(self) -> libvirt.virConnect:
         if self._conn is None or self._conn.isAlive() == 0:
@@ -109,10 +108,10 @@ class Provider:
             self._conn.close()
             self._conn = None
 
-    # --- one-time infra ---------------------------------------------------
+    # --- one-time infra --------------------------------------------------
 
     def ensure_isolated_network(self) -> None:
-        """Create and start the isolated network if not present."""
+        """Create and autostart the isolated network if not already present."""
         conn = self._connect()
         try:
             net = conn.networkLookupByName(_ISOLATED_NETWORK_NAME)
@@ -129,7 +128,7 @@ class Provider:
         print(f"[+] Network '{_ISOLATED_NETWORK_NAME}' created")
 
     def ensure_storage_pool(self) -> None:
-        """Create and start the storage pool if not present."""
+        """Create and autostart the storage pool if not already present."""
         conn = self._connect()
         self._pool_path.mkdir(parents=True, exist_ok=True)
         try:
@@ -147,7 +146,25 @@ class Provider:
         pool.create()
         print(f"[+] Pool '{self._pool_name}' created")
 
-    # --- VM creation ------------------------------------------------------
+    def _pool_xml(self) -> str:
+        # Pool name and path are instance-specific, so this cannot be a module constant.
+        return f"""\
+<pool type='dir'>
+  <name>{self._pool_name}</name>
+  <target>
+    <path>{self._pool_path}</path>
+  </target>
+</pool>"""
+
+    # --- VM existence and creation ---------------------------------------
+
+    def vm_exists(self, vm_name: str) -> bool:
+        conn = self._connect()
+        try:
+            conn.lookupByName(vm_name)
+            return True
+        except libvirt.libvirtError:
+            return False
 
     def create_vm(
         self,
@@ -176,7 +193,7 @@ class Provider:
         print(f"[*] Creating VM '{vm_name}'...")
         cmd = [
             "virt-install",
-            "--name",f
+            "--name",
             vm_name,
             "--memory",
             str(role_cfg["ram_mb"]),
@@ -230,7 +247,45 @@ class Provider:
         if result.returncode != 0:
             raise RuntimeError(f"qemu-img failed:\n{result.stderr.strip()}")
 
-    # --- VM destruction ---------------------------------------------------
+    # --- VM lifecycle ----------------------------------------------------
+
+    def start_vm(self, vm_name: str) -> None:
+        """Start a shutoff VM. No-op if already running."""
+        conn = self._connect()
+        dom = conn.lookupByName(vm_name)
+        if dom.state()[0] != libvirt.VIR_DOMAIN_RUNNING:
+            dom.create()
+            print(f"[+] VM '{vm_name}' started")
+
+    def shutdown_vm(self, vm_name: str, timeout: int = 90) -> None:
+        """Graceful ACPI shutdown with force-off fallback."""
+        conn = self._connect()
+        dom = conn.lookupByName(vm_name)
+        if dom.state()[0] != libvirt.VIR_DOMAIN_RUNNING:
+            return
+        dom.shutdown()
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                state = conn.lookupByName(vm_name).state()[0]
+            except libvirt.libvirtError:
+                return  # domain disappeared: already off
+            if state == libvirt.VIR_DOMAIN_SHUTOFF:
+                print(f"[+] '{vm_name}' shut down gracefully")
+                return
+            time.sleep(2)
+        print(f"[!] Graceful shutdown timed out, forcing off '{vm_name}'")
+        conn.lookupByName(vm_name).destroy()
+
+    def restart_vm(self, vm_name: str) -> None:
+        """Force-off then cold-start. Guards against already-shutoff state."""
+        conn = self._connect()
+        dom = conn.lookupByName(vm_name)
+        if dom.state()[0] == libvirt.VIR_DOMAIN_RUNNING:
+            dom.destroy()
+        dom.create()
+
+    # --- VM destruction --------------------------------------------------
 
     def destroy_vm(self, vm_name: str) -> None:
         """Force-stop, undefine, and remove all storage. No-op if not found."""
@@ -283,55 +338,7 @@ class Provider:
                 p.unlink()
                 print(f"[+] Removed {p.name}")
 
-    # --- VM lifecycle -----------------------------------------------------
-
-    def vm_exists(self, vm_name: str) -> bool:
-        conn = self._connect()
-        try:
-            conn.lookupByName(vm_name)
-            return True
-        except libvirt.libvirtError:
-            return False
-
-    def start_vm(self, vm_name: str) -> None:
-        """Start a shutoff VM. No-op if already running."""
-        conn = self._connect()
-        dom = conn.lookupByName(vm_name)
-        state, _ = dom.state()
-        if state != libvirt.VIR_DOMAIN_RUNNING:
-            dom.create()
-            print(f"[+] VM '{vm_name}' started")
-
-    def shutdown_vm(self, vm_name: str, timeout: int = 90) -> None:
-        """Graceful ACPI shutdown with force-off fallback."""
-        conn = self._connect()
-        dom = conn.lookupByName(vm_name)
-        if dom.state()[0] != libvirt.VIR_DOMAIN_RUNNING:
-            return
-        dom.shutdown()
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                state = conn.lookupByName(vm_name).state()[0]
-            except libvirt.libvirtError:
-                return  # domain gone
-            if state == libvirt.VIR_DOMAIN_SHUTOFF:
-                print(f"[+] '{vm_name}' shut down gracefully")
-                return
-            time.sleep(2)
-        print(f"[!] Graceful shutdown timed out, forcing off '{vm_name}'")
-        conn.lookupByName(vm_name).destroy()
-
-    def restart_vm(self, vm_name: str) -> None:
-        """Force-off then cold-start. Guards against already-shutoff state."""
-        conn = self._connect()
-        dom = conn.lookupByName(vm_name)
-        state, _ = dom.state()
-        if state == libvirt.VIR_DOMAIN_RUNNING:
-            dom.destroy()
-        dom.create()
-
-    # --- introspection ----------------------------------------------------
+    # --- introspection ---------------------------------------------------
 
     def get_vm_ip(self, vm_name: str, timeout: int = 120) -> str:
         """Poll DHCP leases until an IPv4 address appears for the VM."""
@@ -366,7 +373,7 @@ class Provider:
                 return src.attrib["file"]
         raise RuntimeError(f"Could not find disk path for '{vm_name}'")
 
-    # --- snapshots --------------------------------------------------------
+    # --- snapshots -------------------------------------------------------
 
     def snapshot_exists(self, vm_name: str, snapshot_name: str) -> bool:
         conn = self._connect()
@@ -381,20 +388,19 @@ class Provider:
         """Create a disk-only snapshot. VM must be shutoff before calling this."""
         conn = self._connect()
         dom = conn.lookupByName(vm_name)
-        xml = f"""<domainsnapshot>
+        xml = f"""\
+<domainsnapshot>
   <name>{snapshot_name}</name>
-  <description>Baseline snapshot — clean state before experiments</description>
+  <description>Baseline snapshot - clean state before experiments</description>
 </domainsnapshot>"""
-        # Flag 0: default behavior. Disk-only when domain is shutoff, which is required.
+        # Flag 0: disk-only when domain is shutoff, which is required by our workflow.
         dom.snapshotCreateXML(xml, 0)
         print(f"[+] Snapshot '{snapshot_name}' created on '{vm_name}'")
 
     def revert_snapshot(self, vm_name: str, snapshot_name: str) -> None:
-        """Revert to snapshot. Leaves VM shutoff — caller must start it."""
+        """Revert to snapshot. Leaves VM shutoff - caller must start it."""
         conn = self._connect()
         dom = conn.lookupByName(vm_name)
         snap = dom.snapshotLookupByName(snapshot_name)
         dom.revertToSnapshot(snap)
         print(f"[+] '{vm_name}' reverted to '{snapshot_name}'")
-
-    
