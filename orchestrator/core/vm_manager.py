@@ -45,10 +45,10 @@ class VMManager:
     # --- infra (delegated to provider) -----------------------------------
 
     def ensure_network(self) -> None:
-        self._provider.ensure_network()
+        self._provider.ensure_isolated_network()
 
     def ensure_pool(self) -> None:
-        self._provider.ensure_pool()
+        self._provider.ensure_storage_pool()
 
     def vm_exists(self, vm_name: str) -> bool:
         return self._provider.vm_exists(vm_name)
@@ -239,10 +239,14 @@ class VMManager:
         print(f"[*] Running playbook {playbook.name} on {ip}{label}...")
         cmd = [
             "ansible-playbook",
-            "-i", f"{ip},",
-            "-u", self._ssh_user,
-            "--private-key", str(self._ssh_key),
-            "--ssh-common-args", "-o StrictHostKeyChecking=no",
+            "-i",
+            f"{ip},",
+            "-u",
+            self._ssh_user,
+            "--private-key",
+            str(self._ssh_key),
+            "--ssh-common-args",
+            "-o StrictHostKeyChecking=no",
             str(playbook),
         ]
         if extra_vars:
@@ -263,7 +267,7 @@ class VMManager:
         with tempfile.TemporaryDirectory() as tmp:
             meta_path = Path(tmp) / "meta-data"
             user_path = Path(tmp) / "user-data"
-            meta_path.write_text(self._render_meta_data(vm_name))
+            meta_path.write_text(self._cloud_init_meta_data(vm_name))
             user_path.write_text(self._render_user_data())
             result = subprocess.run(
                 ["cloud-localds", str(seed_path), str(user_path), str(meta_path)],
@@ -281,11 +285,12 @@ class VMManager:
 
     def _render_meta_data(self, vm_name: str) -> str:
         template = (self._repo_root / CLOUD_INIT_META_DATA).read_text()
-        return (
-            template
-            .replace("__INSTANCE_ID__", vm_name)
-            .replace("__LOCAL_HOSTNAME__", vm_name)
+        return template.replace("__INSTANCE_ID__", vm_name).replace(
+            "__LOCAL_HOSTNAME__", vm_name
         )
+
+    def _cloud_init_meta_data(self, vm_name: str) -> str:
+        return f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n"
 
     def _public_key_path(self) -> Path:
         key = self._ssh_key

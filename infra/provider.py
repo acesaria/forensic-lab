@@ -44,9 +44,24 @@ import subprocess
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import libvirt
+
+# Module-level constant in provider.py
+# Adjust the address range here if it conflicts with your local network.
+_ISOLATED_NETWORK_XML = """\
+<network>
+  <name>forensics-isolated</name>
+  <bridge name="virbr-forensics" stp="on" delay="0"/>
+  <ip address="192.168.100.1" netmask="255.255.255.0">
+    <dhcp>
+      <range start="192.168.100.10" end="192.168.100.50"/>
+    </dhcp>
+  </ip>
+</network>"""
+
+_ISOLATED_NETWORK_NAME = "forensics-isolated"
 
 
 class Provider:
@@ -66,23 +81,19 @@ class Provider:
         self._pool_name = pool_name
         self._pool_path = pool_path.expanduser().resolve()
         self._infra_dir = infra_dir
-        self._network_xml = self._infra_dir / "forensics-isolated.xml"
-        self._pool_xml = self._infra_dir / "pool.xml"
-        self._net_isolated = self._read_network_name(self._network_xml)
-        self._net_internet = "default"
         self._conn: libvirt.virConnect | None = None
-
-    @staticmethod
-    def _read_network_name(network_xml: Path) -> str:
-        try:
-            root = ET.fromstring(network_xml.read_text())
-        except (ET.ParseError, OSError):
-            return "forensics-isolated"
-        name = root.findtext("name")
-        return name.strip() if isinstance(name, str) and name.strip() else "forensics-isolated"
 
     def pool_path(self) -> Path:
         return self._pool_path
+    
+    def _pool_xml(self) -> str:
+        return f"""
+    <pool type='dir'>
+    <name>{self._pool_name}</name>
+    <target>
+        <path>{self._pool_path}</path>
+    </target>
+    </pool>"""
 
     # --- connection -------------------------------------------------------
 
@@ -100,24 +111,24 @@ class Provider:
 
     # --- one-time infra ---------------------------------------------------
 
-    def ensure_network(self) -> None:
+    def ensure_isolated_network(self) -> None:
         """Create and start the isolated network if not present."""
         conn = self._connect()
         try:
-            net = conn.networkLookupByName(self._net_isolated)
+            net = conn.networkLookupByName(_ISOLATED_NETWORK_NAME)
             if not net.isActive():
                 net.create()
-            print(f"[i] Network '{self._net_isolated}' already present")
+            print(f"[i] Network '{_ISOLATED_NETWORK_NAME}' already present")
             return
         except libvirt.libvirtError:
             pass
-        print(f"[*] Defining network '{self._net_isolated}'...")
-        net = conn.networkDefineXML(self._network_xml.read_text())
+        print(f"[*] Defining network '{_ISOLATED_NETWORK_NAME}'...")
+        net = conn.networkDefineXML(_ISOLATED_NETWORK_XML)
         net.setAutostart(1)
         net.create()
-        print(f"[+] Network '{self._net_isolated}' created")
+        print(f"[+] Network '{_ISOLATED_NETWORK_NAME}' created")
 
-    def ensure_pool(self) -> None:
+    def ensure_storage_pool(self) -> None:
         """Create and start the storage pool if not present."""
         conn = self._connect()
         self._pool_path.mkdir(parents=True, exist_ok=True)
@@ -130,11 +141,7 @@ class Provider:
         except libvirt.libvirtError:
             pass
         print(f"[*] Defining pool '{self._pool_name}' at {self._pool_path}...")
-        pool_xml = self._render_template(
-            self._pool_xml,
-            {"__POOL_NAME__": self._pool_name, "__POOL_PATH__": str(self._pool_path)},
-        )
-        pool = conn.storagePoolDefineXML(pool_xml)
+        pool = conn.storagePoolDefineXML(self._pool_xml())
         pool.setAutostart(1)
         pool.build(0)
         pool.create()
@@ -163,28 +170,35 @@ class Provider:
 
         disk_path = self._pool_path / f"{vm_name}.qcow2"
         self._create_disk_overlay(base_image, disk_path, role_cfg["disk_size"])
-        network = role_cfg.get(
-            "network",
-            self._net_isolated if role == "lab" else self._net_internet,
-        )
+        network = role_cfg.get("network")
         os_variant = profile.get("os_variant") or "generic"
 
         print(f"[*] Creating VM '{vm_name}'...")
         cmd = [
             "virt-install",
-            "--name", vm_name,
-            "--memory", str(role_cfg["ram_mb"]),
-            "--vcpus", str(role_cfg["vcpus"]),
-            "--disk", f"path={disk_path},format=qcow2,bus=virtio",
-            "--network", f"network={network},model=virtio",
-            "--os-variant", os_variant,
+            "--name",f
+            vm_name,
+            "--memory",
+            str(role_cfg["ram_mb"]),
+            "--vcpus",
+            str(role_cfg["vcpus"]),
+            "--disk",
+            f"path={disk_path},format=qcow2,bus=virtio",
+            "--network",
+            f"network={network},model=virtio",
+            "--os-variant",
+            os_variant,
             "--import",
-            "--graphics", "none",
-            "--console", "pty,target_type=virtio",
+            "--graphics",
+            "none",
+            "--console",
+            "pty,target_type=virtio",
             "--noautoconsole",
         ]
         if seed_path is not None:
-            cmd.extend(["--disk", f"path={seed_path},format=raw,bus=virtio,readonly=on"])
+            cmd.extend(
+                ["--disk", f"path={seed_path},format=raw,bus=virtio,readonly=on"]
+            )
 
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -192,13 +206,26 @@ class Provider:
         print(f"[+] VM '{vm_name}' created")
         return vm_name
 
-    def _create_disk_overlay(self, base_image: Path, disk_path: Path, disk_size: str) -> None:
+    def _create_disk_overlay(
+        self, base_image: Path, disk_path: Path, disk_size: str
+    ) -> None:
         if disk_path.exists():
             disk_path.unlink()
         result = subprocess.run(
-            ["qemu-img", "create", "-f", "qcow2", "-b", str(base_image), "-F", "qcow2",
-             str(disk_path), disk_size],
-            capture_output=True, text=True,
+            [
+                "qemu-img",
+                "create",
+                "-f",
+                "qcow2",
+                "-b",
+                str(base_image),
+                "-F",
+                "qcow2",
+                str(disk_path),
+                disk_size,
+            ],
+            capture_output=True,
+            text=True,
         )
         if result.returncode != 0:
             raise RuntimeError(f"qemu-img failed:\n{result.stderr.strip()}")
@@ -313,9 +340,12 @@ class Provider:
         while time.time() < deadline:
             try:
                 dom = conn.lookupByName(vm_name)  # re-fetch avoids stale handle
-                ifaces = dom.interfaceAddresses(
+                raw = dom.interfaceAddresses(
                     libvirt.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0
-                ) or {}
+                )
+                ifaces: dict[str, dict[str, Any]] = (
+                    cast(dict[str, dict[str, Any]], raw) or {}
+                )
                 for iface in ifaces.values():
                     for addr in iface.get("addrs", []):
                         if addr.get("type") == libvirt.VIR_IP_ADDR_TYPE_IPV4:
@@ -367,11 +397,4 @@ class Provider:
         dom.revertToSnapshot(snap)
         print(f"[+] '{vm_name}' reverted to '{snapshot_name}'")
 
-    # --- utilities --------------------------------------------------------
-
-    @staticmethod
-    def _render_template(path: Path, replacements: dict[str, str]) -> str:
-        data = path.read_text()
-        for placeholder, value in replacements.items():
-            data = data.replace(placeholder, value)
-        return data
+    
