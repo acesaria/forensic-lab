@@ -193,6 +193,8 @@ class VMManager:
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
             playbook = self._repo_root / LAB_BASELINE_PLAYBOOK
             self._run_playbook(ip, playbook, reason="baseline provisioning")
+            print(f"[*] Shutting down {vm_name} before snapshot...")
+            self._provider.shutdown_vm(vm_name)
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         else:
             print(f"[i] Snapshot '{BASELINE_SNAPSHOT}' already on '{vm_name}'")
