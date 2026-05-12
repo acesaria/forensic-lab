@@ -49,6 +49,18 @@ from typing import Any, cast
 import libvirt
 
 # ---------------------------------------------------------------------------
+# Silence libvirt's default stderr error printing
+# ---------------------------------------------------------------------------
+
+
+def _silence_libvirt_errors(_userdata: None, _err: Any) -> None:
+    # libvirt prints raw C-level errors to stderr by default.
+    # We suppress that here; Python exceptions still propagate normally.
+    pass
+
+
+libvirt.registerErrorHandler(_silence_libvirt_errors, None)
+# ---------------------------------------------------------------------------
 # Infrastructure constants
 # Adjust the address range here if it conflicts with your local network.
 # ---------------------------------------------------------------------------
