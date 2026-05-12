@@ -18,6 +18,7 @@ VM creation / destruction:
 
 VM lifecycle:
     vm_exists(vm_name) -> bool
+    is_running(vm_name) -> bool          <-- add this line
     start_vm(vm_name) -> None
     shutdown_vm(vm_name, timeout) -> None
     restart_vm(vm_name) -> None
@@ -175,6 +176,15 @@ class Provider:
         try:
             conn.lookupByName(vm_name)
             return True
+        except libvirt.libvirtError:
+            return False
+
+    def is_running(self, vm_name: str) -> bool:
+        """Return True if the VM is in the RUNNING state."""
+        conn = self._connect()
+        try:
+            dom = conn.lookupByName(vm_name)
+            return dom.state()[0] == libvirt.VIR_DOMAIN_RUNNING
         except libvirt.libvirtError:
             return False
 

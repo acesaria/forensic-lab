@@ -1,11 +1,14 @@
 """
 orchestrator/forensics/dumper.py
 
-RAM and disk acquisition pipeline. Decoupled from any VM management —
-receives a domain name and a VMManager instance, does the rest.
+RAM and disk acquisition pipeline. Pure I/O -- no VM lifecycle management.
+
+Caller contract (enforced by orchestrator._run_acquisition):
+  - domain must be ON  when acquire_memory is called  (virsh dump --live)
+  - domain must be OFF when acquire_disk is called     (ewfacquire safety)
+  - The orchestrator owns all shutdown/start transitions between the two steps.
 """
 
-from concurrent.futures import process
 import glob
 import hashlib
 import json
@@ -14,10 +17,6 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from orchestrator.core.vm_manager import VMManager
 
 
 @dataclass
@@ -28,8 +27,6 @@ class ImageMetadata:
     size_bytes: int | None
     timestamp: float
     acquisition_seconds: float | None = None
-    # TODO(milestone-2): expose virtual_size_bytes and ewf_size_bytes
-    # in acquisition report / analysis pipeline
     virtual_size_bytes: int | None = None
     ewf_size_bytes: int | None = None
 
@@ -48,51 +45,21 @@ class Dumper:
         self.dumps_root = repo_root / "shared" / "dumps"
         self.dumps_root.mkdir(parents=True, exist_ok=True)
 
-    # --- public entry point -----------------------------------------------
+    # --- directory layout ------------------------------------------------
 
-    def acquire(
-        self,
-        domain: str,
-        scenario_id: str,
-        vm_manager: "VMManager",
-    ) -> str:
-        """
-        Acquire RAM and disk for *domain*, write manifest.
-        Returns the manifest path.
-        """
-        scenario_dir = self._scenario_dir(scenario_id)
-        memory_path = scenario_dir / "memory" / "baseline_memory.raw"
-        disk_path = scenario_dir / "disk" / "baseline_disk.E01"
-
-        memory_meta = self._acquire_memory(domain, memory_path)
-        disk_meta = self._acquire_disk(domain, disk_path, vm_manager)
-
-        manifest = AcquisitionManifest(
-            scenario_id=scenario_id,
-            created_at=time.time(),
-            memory_image=memory_meta,
-            disk_image=disk_meta,
-        )
-        return self._write_manifest(scenario_id, manifest)
-
-    # --- directory layout -------------------------------------------------
-
-    def _scenario_dir(self, scenario_id: str) -> Path:
+    def scenario_dir(self, scenario_id: str) -> Path:
         d = self.dumps_root / scenario_id
         (d / "memory").mkdir(parents=True, exist_ok=True)
         (d / "disk").mkdir(parents=True, exist_ok=True)
         return d
 
-    def _write_manifest(self, scenario_id: str, manifest: AcquisitionManifest) -> str:
-        path = self._scenario_dir(scenario_id) / "manifest.json"
-        with open(path, "w") as f:
-            json.dump(asdict(manifest), f, indent=2)
-        print(f"[+] Manifest written: {path}")
-        return str(path)
+    # --- memory (VM must be ON) ------------------------------------------
 
-    # --- memory -----------------------------------------------------------
-
-    def _acquire_memory(self, domain: str, dest: Path) -> ImageMetadata:
+    def acquire_memory(self, domain: str, dest: Path) -> ImageMetadata:
+        """
+        Dump live RAM via virsh. Domain must be ON.
+        dest is owned by the calling user -- dumps dir is pre-chowned at init.
+        """
         if dest.exists():
             dest.unlink()
 
@@ -103,12 +70,11 @@ class Dumper:
             check=True,
         )
         elapsed = time.time() - started
-        print(f"[+] Memory dump done ({elapsed:.1f}s): {dest}")
-
         subprocess.run(
             ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
             check=True,
         )
+        print(f"[+] Memory dump done ({elapsed:.1f}s): {dest}")
 
         return ImageMetadata(
             path=str(dest.relative_to(self.repo_root)),
@@ -119,45 +85,26 @@ class Dumper:
             acquisition_seconds=elapsed,
         )
 
-    # --- disk -------------------------------------------------------------
+    # --- disk (VM must be OFF) -------------------------------------------
 
-    # TODO: Lifecycle management should be improved here. Dumper should not be responsible for shutting down / restarting VMs, but ewfacquire requires the disk to be offline.
-    def _acquire_disk(
-        self,
-        domain: str,
-        dest: Path,
-        vm_manager: "VMManager",
-    ) -> ImageMetadata:
+    def acquire_disk(self, disk_source: str, dest: Path) -> ImageMetadata:
+        """
+        Acquire disk via ewfacquire. Domain must be OFF.
+        dest segments are owned by the calling user -- dumps dir is pre-chowned at init.
+        """
         prefix = str(dest.with_suffix(""))
 
-        # clean up any previous EWF segments
         for seg in glob.glob(f"{prefix}.E??"):
             os.remove(seg)
 
         started = time.time()
-        disk_source = vm_manager.get_disk_path(domain)
         virtual_size = self._qemu_virtual_size(disk_source)
 
-        try:
-            vm_manager.shutdown_vm(domain)
-            print(f"[*] Acquiring disk from '{disk_source}' -> {dest}...")
-            subprocess.run(
-                [
-                    "ewfacquire",
-                    "-u",
-                    "-c",
-                    "fast",
-                    "-j",
-                    "4",
-                    "-t",
-                    prefix,
-                    disk_source,
-                ],
-                check=True,
-            )
-        finally:
-            print(f"[*] Restarting '{domain}'...") # TODO: Here it gets stuck when we try to shutdown.. .review!!!
-            vm_manager.start_vm(domain)
+        print(f"[*] Acquiring disk from '{disk_source}' -> {dest}...")
+        subprocess.run(
+            ["ewfacquire", "-u", "-c", "fast", "-j", "4", "-t", prefix, disk_source],
+            check=True,
+        )
 
         segments = sorted(glob.glob(f"{prefix}.E??"))
         if not segments:
@@ -165,7 +112,7 @@ class Dumper:
 
         for seg in segments:
             subprocess.run(
-                ["sudo", "chown", f"{os.getuid()}:{os.getuid()}", seg],
+                ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", seg],
                 check=True,
             )
 
@@ -184,7 +131,28 @@ class Dumper:
             ewf_size_bytes=ewf_size,
         )
 
-    # --- helpers ----------------------------------------------------------
+    # --- manifest --------------------------------------------------------
+
+    def write_manifest(
+        self,
+        scenario_id: str,
+        memory_meta: ImageMetadata,
+        disk_meta: ImageMetadata,
+    ) -> str:
+        """Write AcquisitionManifest to disk. Returns the manifest path."""
+        manifest = AcquisitionManifest(
+            scenario_id=scenario_id,
+            created_at=time.time(),
+            memory_image=memory_meta,
+            disk_image=disk_meta,
+        )
+        path = self.scenario_dir(scenario_id) / "manifest.json"
+        with open(path, "w") as f:
+            json.dump(asdict(manifest), f, indent=2)
+        print(f"[+] Manifest written: {path}")
+        return str(path)
+
+    # --- helpers ---------------------------------------------------------
 
     @staticmethod
     def _sha256(path: Path) -> str:
