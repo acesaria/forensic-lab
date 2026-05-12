@@ -2,8 +2,8 @@
 # Machine-specific environment settings. Edit these per host.
 
 host:
-  ssh_user: labuser
   ssh_key: ~/.ssh/forensics-lab
+  ssh_pub_key: ~/.ssh/forensics-lab.pub
   libvirt_uri: qemu:///system
   pool_name: forensic-lab-pool
   pool_path: /var/lib/forensic-lab/disks

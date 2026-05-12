@@ -2,19 +2,23 @@
 
 from pathlib import Path
 from typing import Any
+
 import yaml
 
 # --- Project constants (never change unless you restructure the project) ---
+
 BASELINE_SNAPSHOT = "baseline"
+LAB_USER = "labuser"
+
 LAB_BASELINE_PLAYBOOK = Path("infra/ansible/lab_baseline.yml")
 ISF_BUILD_PLAYBOOK = Path("infra/ansible/isf_build.yml")
 ISF_SHARED_DIR = Path("shared/isf")
 PROFILES_DIR = Path("infra/profiles")
 CLOUD_INIT_DIR = Path("infra/cloud-init")
 CLOUD_INIT_USER_DATA = CLOUD_INIT_DIR / "user-data"
-CLOUD_INIT_META_DATA = CLOUD_INIT_DIR / "meta-data"
 
 # --- Loaders ---
+
 
 def load_config(repo_root: Path) -> dict[str, Any]:
     """Load and validate config.yaml. Returns raw validated dict."""
@@ -24,6 +28,7 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     if "host" not in cfg or not isinstance(cfg["host"], dict):
         raise ValueError("config.yaml must contain a 'host' mapping")
     return cfg
+
 
 def load_profile(repo_root: Path, distro_id: str) -> dict[str, Any]:
     """Load distro profile YAML by id."""

@@ -7,7 +7,7 @@ Delegates all libvirt mechanics to Provider. Never calls libvirt directly.
 Lifecycle contract:
   - Callers are responsible for starting a VM before calling wait_ssh_ready.
   - wait_ssh_ready only probes connectivity; it never starts the VM.
-  - open_ssh assumes the VM is already running.
+  - open_ssh assumes the VM is already running and returns an owned SSHClient.
 """
 
 import subprocess
@@ -20,9 +20,9 @@ from infra.image_store import ensure_image
 from infra.provider import Provider
 from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
-    CLOUD_INIT_META_DATA,
     CLOUD_INIT_USER_DATA,
     LAB_BASELINE_PLAYBOOK,
+    LAB_USER,
 )
 from orchestrator.core.ssh_client import SSHClient
 
@@ -32,31 +32,31 @@ class VMManager:
         self,
         provider: Provider,
         images_path: Path,
-        ssh_user: str,
         ssh_key: str,
+        ssh_pub_key: str,
         repo_root: Path,
     ) -> None:
         self._provider = provider
         self._images_dir = images_path.expanduser().resolve()
-        self._ssh_user = ssh_user
         self._ssh_key = Path(ssh_key).expanduser()
+        self._ssh_pubkey_text = Path(ssh_pub_key).expanduser().read_text().strip()
         self._repo_root = repo_root
 
-    # --- infra (delegated to provider) -----------------------------------
+    # --- infra setup (one-time, delegated to provider) -------------------
 
-    def ensure_network(self) -> None:
+    def ensure_isolated_network(self) -> None:
         self._provider.ensure_isolated_network()
 
-    def ensure_pool(self) -> None:
+    def ensure_storage_pool(self) -> None:
         self._provider.ensure_storage_pool()
 
-    def vm_exists(self, vm_name: str) -> bool:
-        return self._provider.vm_exists(vm_name)
+    # --- image and VM creation -------------------------------------------
 
     def ensure_base_image(self, profile: dict[str, Any]) -> Path:
         return ensure_image(profile, self._images_dir)
 
-    # --- VM lifecycle (delegated to provider) ----------------------------
+    def vm_exists(self, vm_name: str) -> bool:
+        return self._provider.vm_exists(vm_name)
 
     def create_vm(
         self,
@@ -85,6 +85,8 @@ class VMManager:
             seed_path=seed_path,
         )
 
+    # --- VM lifecycle (delegated to provider) ----------------------------
+
     def start_vm(self, vm_name: str) -> None:
         self._provider.start_vm(vm_name)
 
@@ -94,11 +96,11 @@ class VMManager:
     def destroy_vm(self, vm_name: str) -> None:
         self._provider.destroy_vm(vm_name)
 
-    def get_disk_path(self, vm_name: str) -> str:
-        """Used by Dumper for disk acquisition."""
-        return self._provider.get_disk_path(vm_name)
+    # --- VM access and introspection -------------------------------------
 
-    # --- SSH readiness and connectivity ----------------------------------
+    def get_disk_path(self, vm_name: str) -> str:
+        """Return the host-side disk path for vm_name. Used by Dumper."""
+        return self._provider.get_disk_path(vm_name)
 
     def wait_ssh_ready(
         self,
@@ -108,7 +110,7 @@ class VMManager:
     ) -> str:
         """
         Poll until SSH accepts connections on vm_name.
-        Does NOT start the VM — the caller must do that first.
+        Does NOT start the VM -- the caller must do that first.
         Returns the IP once ready.
         """
         ip = self._provider.get_vm_ip(vm_name)
@@ -119,7 +121,7 @@ class VMManager:
         last_error = ""
         while time.time() < deadline:
             try:
-                with SSHClient(ip, self._ssh_user, str(self._ssh_key)) as ssh:
+                with SSHClient(ip, LAB_USER, str(self._ssh_key)) as ssh:
                     ssh.run_checked("true")
                 print(f"[+] SSH ready on {vm_name} ({ip}){label}")
                 return ip
@@ -138,7 +140,7 @@ class VMManager:
         VM must already be running.
         """
         ip = self._provider.get_vm_ip(vm_name)
-        client = SSHClient(ip, self._ssh_user, str(self._ssh_key))
+        client = SSHClient(ip, LAB_USER, str(self._ssh_key))
         client.connect()
         return client
 
@@ -152,15 +154,15 @@ class VMManager:
         reason: str = "",
     ) -> str:
         """
-        Wait for SSH, then run an Ansible playbook.
+        Wait for SSH, then run an Ansible playbook against vm_name.
         VM must already be running before calling this.
         Returns the IP used.
         """
         ip = self.wait_ssh_ready(vm_name, reason=reason)
-        self._run_playbook(ip, playbook, extra_vars=extra_vars)
+        self._run_playbook(ip, playbook, extra_vars=extra_vars, reason=reason)
         return ip
 
-    # --- lab lifecycle ---------------------------------------------------
+    # --- lab lifecycle (experiment-time operations) ----------------------
 
     def prepare_lab(
         self,
@@ -179,7 +181,7 @@ class VMManager:
         Returns the VM name.
         """
         vm_name = f"lab-{distro_id}"
-        base_image = ensure_image(profile, self._images_dir)
+        base_image = self.ensure_base_image(profile)
         self.create_vm(
             role="lab",
             distro_id=distro_id,
@@ -204,8 +206,7 @@ class VMManager:
     def revert_to_baseline(self, distro_id: str) -> str:
         """
         Revert the lab VM to the baseline snapshot.
-        Called before every experiment. Does NOT start the VM —
-        the snapshot revert leaves it in the saved state (typically off).
+        Called before every experiment. Does NOT start the VM.
         Caller must call start_vm + wait_ssh_ready after this.
         Returns the VM name.
         """
@@ -217,11 +218,11 @@ class VMManager:
         self._provider.revert_snapshot(vm_name, BASELINE_SNAPSHOT)
         return vm_name
 
+    # --- teardown --------------------------------------------------------
+
     def destroy_lab(self, distro_id: str) -> None:
         """Remove the lab VM and all its storage."""
         self._provider.destroy_vm(f"lab-{distro_id}")
-
-    # --- plumbing --------------------------------------------------------
 
     def close(self) -> None:
         self._provider.close()
@@ -242,7 +243,7 @@ class VMManager:
             "-i",
             f"{ip},",
             "-u",
-            self._ssh_user,
+            LAB_USER,
             "--private-key",
             str(self._ssh_key),
             "--ssh-common-args",
@@ -267,7 +268,7 @@ class VMManager:
         with tempfile.TemporaryDirectory() as tmp:
             meta_path = Path(tmp) / "meta-data"
             user_path = Path(tmp) / "user-data"
-            meta_path.write_text(self._cloud_init_meta_data(vm_name))
+            meta_path.write_text(f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n")
             user_path.write_text(self._render_user_data())
             result = subprocess.run(
                 ["cloud-localds", str(seed_path), str(user_path), str(meta_path)],
@@ -279,27 +280,5 @@ class VMManager:
         return seed_path
 
     def _render_user_data(self) -> str:
-        pubkey = self._public_key_path().read_text().strip()
         template = (self._repo_root / CLOUD_INIT_USER_DATA).read_text()
-        return template.replace("__SSH_PUBLIC_KEY__", pubkey)
-
-    def _render_meta_data(self, vm_name: str) -> str:
-        template = (self._repo_root / CLOUD_INIT_META_DATA).read_text()
-        return template.replace("__INSTANCE_ID__", vm_name).replace(
-            "__LOCAL_HOSTNAME__", vm_name
-        )
-
-    def _cloud_init_meta_data(self, vm_name: str) -> str:
-        return f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n"
-
-    def _public_key_path(self) -> Path:
-        key = self._ssh_key
-        if key.suffix == ".pub":
-            pub = key
-        elif key.suffix:
-            pub = key.with_suffix(f"{key.suffix}.pub")
-        else:
-            pub = key.with_name(f"{key.name}.pub")
-        if not pub.exists():
-            raise FileNotFoundError(f"SSH public key not found: {pub}")
-        return pub
+        return template.replace("__SSH_PUBLIC_KEY__", self._ssh_pubkey_text)

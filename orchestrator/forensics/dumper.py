@@ -105,12 +105,10 @@ class Dumper:
         elapsed = time.time() - started
         print(f"[+] Memory dump done ({elapsed:.1f}s): {dest}")
 
-        
         subprocess.run(
-        ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
-        check=True,
+            ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
+            check=True,
         )
-
 
         return ImageMetadata(
             path=str(dest.relative_to(self.repo_root)),
@@ -123,6 +121,7 @@ class Dumper:
 
     # --- disk -------------------------------------------------------------
 
+    # TODO: Lifecycle management should be improved here. Dumper should not be responsible for shutting down / restarting VMs, but ewfacquire requires the disk to be offline.
     def _acquire_disk(
         self,
         domain: str,
@@ -163,11 +162,12 @@ class Dumper:
         segments = sorted(glob.glob(f"{prefix}.E??"))
         if not segments:
             raise RuntimeError(f"EWF output not found for prefix {prefix}.E??")
-        
+
         for seg in segments:
             subprocess.run(
-            ["sudo", "chown", f"{os.getuid()}:{os.getuid()}", seg],
-            check=True,)
+                ["sudo", "chown", f"{os.getuid()}:{os.getuid()}", seg],
+                check=True,
+            )
 
         elapsed = time.time() - started
         ewf_size = sum(Path(p).stat().st_size for p in segments)
