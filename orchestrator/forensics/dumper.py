@@ -156,7 +156,7 @@ class Dumper:
                 check=True,
             )
         finally:
-            print(f"[*] Restarting '{domain}'...")
+            print(f"[*] Restarting '{domain}'...") # TODO: Here it gets stuck when we try to shutdown.. .review!!!
             vm_manager.start_vm(domain)
 
         segments = sorted(glob.glob(f"{prefix}.E??"))

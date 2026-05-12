@@ -59,10 +59,11 @@ def _create_system_dirs(uid: int, kvm_gid: int) -> None:
     print("[+] System directories ready")
 
 
-def _create_dumps_dir(repo_root: Path) -> None:
+def _setup_dumps_dir(repo_root: Path, uid: int, kvm_gid: int) -> None:
     d = repo_root / "shared" / "dumps"
     d.mkdir(parents=True, exist_ok=True)
-    print(f"[+] Dumps directory ready: {d}")
+    subprocess.run(["sudo", "chown", f"{uid}:{kvm_gid}", str(d)], check=True)
+    subprocess.run(["sudo", "chmod", "2775", str(d)], check=True)
 
 
 def _install_sudoers(username: str, repo_root: Path) -> None:
@@ -72,6 +73,7 @@ def _install_sudoers(username: str, repo_root: Path) -> None:
         "# Remove with: sudo rm /etc/sudoers.d/forensic-lab",
         "",
         f"{username} ALL=(ALL) NOPASSWD: {virsh_bin}",
+        f"{username} ALL=(ALL) NOPASSWD: /bin/chmod * /home/youruser/forensic-lab/shared/dumps/*",
         "",
     ]
     _write_sudoers("/etc/sudoers.d/forensic-lab", "\n".join(rules))
@@ -111,7 +113,7 @@ def run_init(repo_root: Path) -> None:
     kvm_gid = grp.getgrnam("kvm").gr_gid
 
     _create_system_dirs(uid, kvm_gid)
-    _create_dumps_dir(repo_root)
+    _setup_dumps_dir(repo_root, uid, kvm_gid)
     _install_sudoers(user, repo_root)
 
     print("\n[i] Next step: python cli.py setup")
