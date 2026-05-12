@@ -30,12 +30,13 @@ def _run_vol_subprocess(
     Module-level function required for pickling with ProcessPoolExecutor.
     Returns (plugin_name, rows).
     """
+    isf_dir = str(Path(isf_path).parent)
     cmd = [
         vol_bin,
         "-f",
         memory_path,
-        "--single-location",
-        isf_path,
+        "-s",
+        isf_dir,
         "-r",
         "json",
         plugin,
@@ -48,7 +49,15 @@ def _run_vol_subprocess(
             f"{result.stderr.strip() or '(no output)'}"
         )
     try:
-        return plugin, json.loads(result.stdout)
+        data = json.loads(result.stdout)
+        if isinstance(data, dict) and isinstance(data.get("rows"), list):
+            raw_rows = data["rows"]
+        elif isinstance(data, list):
+            raw_rows = data
+        else:
+            raw_rows = []
+        rows = [row for row in raw_rows if isinstance(row, dict)]
+        return plugin, rows
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"vol3 '{plugin}' output is not valid JSON: {exc}") from exc
 
@@ -148,10 +157,39 @@ class VolatilityRunner:
         return results
 
     def probe(self, memory_path: Path, distro_id: str) -> None:
-        """Sanity check: banners plugin must return at least one row."""
-        rows = self.run_plugin(memory_path, distro_id, "banners")
-        if not rows:
+        """Sanity check: linux.pslist must return at least one process row."""
+        isf_path = self.resolve_isf(distro_id)
+        isf_dir = isf_path.parent
+        cmd = f"{self._vol_bin} -f {memory_path} -s {isf_dir} " "linux.pslist"
+
+        try:
+            rows = self.run_plugin(memory_path, distro_id, "linux.pslist")
+        except RuntimeError as exc:
             raise RuntimeError(
-                f"Volatility banner probe returned no output for " f"{memory_path.name}"
+                f"Volatility ISF probe failed for {memory_path.name}. "
+                f"ISF: {isf_path}. Repro: {cmd}. "
+                "ISF may not match this kernel -- check dwarf2json output"
+            ) from exc
+
+        if isinstance(rows, dict) and "__children" in rows:
+            rows_list = rows.get("__children", [])
+        elif isinstance(rows, list):
+            rows_list = rows
+        else:
+            rows_list = []
+
+        has_pid = any(
+            isinstance(row, dict) and row.get("PID") not in (None, "")
+            for row in rows_list
+        )
+        if not rows_list or not has_pid:
+            raise RuntimeError(
+                f"Volatility ISF probe returned no processes for {memory_path.name}. "
+                f"ISF: {isf_path}. Repro: {cmd}. "
+                "ISF may not match this kernel -- check dwarf2json output"
             )
-        print(f"[+] Memory probe passed ({len(rows)} banner(s))")
+
+        print(
+            "[+] ISF probe passed: linux.pslist.PsList returned "
+            f"{len(rows_list)} process(es)"
+        )

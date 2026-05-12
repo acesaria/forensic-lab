@@ -66,7 +66,7 @@ class Dumper:
         started = time.time()
         print(f"[*] Acquiring memory from '{domain}'...")
         subprocess.run(
-            ["virsh", "dump", domain, str(dest), "--memory-only", "--live"],
+            ["virsh", "dump", domain, str(dest), "--memory-only"],
             check=True,
         )
         elapsed = time.time() - started
@@ -93,18 +93,44 @@ class Dumper:
         dest segments are owned by the calling user -- dumps dir is pre-chowned at init.
         """
         prefix = str(dest.with_suffix(""))
+        raw_path = dest.with_suffix(".raw")
 
         for seg in glob.glob(f"{prefix}.E??"):
             os.remove(seg)
+        if raw_path.exists():
+            raw_path.unlink()
 
         started = time.time()
         virtual_size = self._qemu_virtual_size(disk_source)
 
-        print(f"[*] Acquiring disk from '{disk_source}' -> {dest}...")
+        print(f"[*] Converting disk source to raw: {disk_source} -> {raw_path}...")
         subprocess.run(
-            ["ewfacquire", "-u", "-c", "fast", "-j", "4", "-t", prefix, disk_source],
+            ["qemu-img", "convert", "-O", "raw", disk_source, str(raw_path)],
             check=True,
         )
+
+        print(f"[*] Acquiring disk from '{raw_path}' -> {dest}...")
+        ewf_ok = False
+        try:
+            threads = str(os.cpu_count() or 4)
+            subprocess.run(
+                [
+                    "ewfacquire",
+                    "-u",
+                    "-c",
+                    "fast",
+                    "-j",
+                    threads,
+                    "-t",
+                    prefix,
+                    str(raw_path),
+                ],
+                check=True,
+            )
+            ewf_ok = True
+        finally:
+            if ewf_ok and raw_path.exists():
+                raw_path.unlink()
 
         segments = sorted(glob.glob(f"{prefix}.E??"))
         if not segments:
@@ -122,7 +148,7 @@ class Dumper:
 
         return ImageMetadata(
             path=str(Path(segments[0]).relative_to(self.repo_root)),
-            tool="ewfacquire -u -c fast -j 4",
+            tool="qemu-img convert -O raw && ewfacquire -u -c fast -j 4",
             sha256=self._sha256(Path(segments[0])),
             size_bytes=Path(segments[0]).stat().st_size,
             timestamp=time.time(),

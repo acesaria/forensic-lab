@@ -12,6 +12,7 @@ build_isf(distro_id)       one-time: Volatility symbol file
 run_experiment(...)        experiment loop
 destroy_lab(distro_id)     teardown
 lab_exists(distro_id)      predicate
+def verify_pipeline(distro_id: str): Acquire a baseline image and probe with Volatility + SleuthKit.
 
 Naming contract
 ---------------
@@ -31,13 +32,13 @@ run_experiment     ends ON (caller decides when to shut down)
 import importlib
 import json
 import time
-import subprocess
 from pathlib import Path
 from typing import Any
 
 from orchestrator.core.config import ISF_BUILD_PLAYBOOK, ISF_SHARED_DIR, load_profile
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics.dumper import Dumper
+from orchestrator.forensics.sleuth_runner import SleuthKitRunner
 from orchestrator.forensics.vol_runner import VolatilityRunner
 
 ATTACK_MODULES: dict[str, str] = {
@@ -53,6 +54,7 @@ class ForensicOrchestrator:
         vm_manager: VMManager,
         dumper: Dumper,
         vol_runner: VolatilityRunner,
+        sleuth_runner: SleuthKitRunner,
         repo_root: Path,
         results_path: Path,
         role_defaults: dict[str, Any],
@@ -60,6 +62,7 @@ class ForensicOrchestrator:
         self.vm_manager = vm_manager
         self.dumper = dumper
         self._vol_runner = vol_runner
+        self._sleuth_runner = sleuth_runner
         self.repo_root = repo_root
         self.results_path = results_path
         self.results_path.mkdir(parents=True, exist_ok=True)
@@ -141,7 +144,7 @@ class ForensicOrchestrator:
         2. Run attack scenario, save ground truth
         3. Acquire RAM + disk (unless acquire=False)
 
-        VM ends ON after acquisition.
+        VM ends OFF after acquisition.
         Returns manifest path if acquired, else None.
         """
         print(f"\n[*] Starting experiment: {scenario} on {distro_id}")
@@ -222,7 +225,7 @@ class ForensicOrchestrator:
         finally:
             self.vm_manager.destroy_vm(build_vm_name)
 
-    def _verify_pipeline(self, distro_id: str) -> None:
+    def verify_pipeline(self, distro_id: str) -> None:
         """
         Acquire a baseline image and probe with Volatility + SleuthKit.
         Called automatically at the end of the CLI 'setup' sequence.
@@ -233,7 +236,6 @@ class ForensicOrchestrator:
         scenario_id = f"{distro_id}__verify__{int(time.time())}"
 
         manifest_path = self._run_acquisition(vm_name, scenario_id)
-        self.vm_manager.shutdown_vm(vm_name)
 
         manifest = json.loads(Path(manifest_path).read_text())
         memory_path = self.repo_root / manifest["memory_image"]["path"]
@@ -241,7 +243,7 @@ class ForensicOrchestrator:
 
         print(f"\n[*] Probing acquired images for {distro_id}...")
         self._vol_runner.probe(memory_path, distro_id)
-        self._probe_disk(disk_path)
+        self._sleuth_runner.probe(disk_path)
         print(f"[+] Pipeline probe passed for '{distro_id}'")
 
     # --- private: experiment helpers -------------------------------------
@@ -252,6 +254,7 @@ class ForensicOrchestrator:
         VM ends ON + SSH ready. Returns vm_name.
         """
         vm_name = f"lab-{distro_id}"
+        print(f"[*] Reverting '{vm_name}' to baseline snapshot...")
         self.vm_manager.revert_to_baseline(distro_id)
         print(f"[*] Starting {vm_name} after snapshot revert...")
         self.vm_manager.start_vm(vm_name)
@@ -260,8 +263,8 @@ class ForensicOrchestrator:
 
     def _run_acquisition(self, vm_name: str, scenario_id: str) -> str:
         """
-        Acquire memory (VM ON) then disk (VM OFF), restart VM when done.
-        VM ends ON. Returns manifest path.
+        Acquire memory (VM ON) then disk (VM OFF).
+        VM ends OFF. Returns manifest path.
         """
         disk_source = self.vm_manager.get_disk_path(vm_name)
         scenario_dir = self.dumper.scenario_dir(scenario_id)
@@ -269,11 +272,8 @@ class ForensicOrchestrator:
         disk_path = scenario_dir / "disk" / "baseline_disk.E01"
 
         memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
-        try:
-            self.vm_manager.shutdown_vm(vm_name)
-            disk_meta = self.dumper.acquire_disk(disk_source, disk_path)
-        finally:
-            self.vm_manager.start_vm(vm_name)
+        self.vm_manager.shutdown_vm(vm_name)
+        disk_meta = self.dumper.acquire_disk(disk_source, disk_path)
 
         return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
 
@@ -286,19 +286,6 @@ class ForensicOrchestrator:
         module = importlib.import_module(module_path)
         with self.vm_manager.open_ssh(vm_name) as ssh:
             return module.run(ssh, scenario_id)
-
-    def _probe_disk(self, disk_path: Path) -> None:
-        result = subprocess.run(
-            ["mmls", str(disk_path)],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"mmls probe failed for {disk_path.name}:\n" f"{result.stderr.strip()}"
-            )
-        print(f"[+] Disk probe passed ({disk_path.name})")
-
 
 # --- module helpers ------------------------------------------------------
 
