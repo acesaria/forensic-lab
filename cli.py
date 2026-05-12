@@ -13,6 +13,7 @@ from orchestrator.core.config import ISF_SHARED_DIR, load_config, load_profile
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics.dumper import Dumper
+from orchestrator.forensics.sleuth_runner import SleuthKitRunner
 from orchestrator.forensics.vol_runner import VolatilityRunner
 
 
@@ -91,6 +92,7 @@ def _install_sudoers(username: str, dumps_dir: Path) -> None:
         "# Remove with: sudo rm /etc/sudoers.d/forensic-lab",
         "",
         f"{username} ALL=(ALL) NOPASSWD: {virsh_bin}",
+        f"{username} ALL=(ALL) NOPASSWD: /bin/chown * {dumps_dir}/*",
         f"{username} ALL=(ALL) NOPASSWD: /bin/chmod * {dumps_dir}/*",
         "",
     ]
@@ -133,6 +135,10 @@ def run_init(repo_root: Path, host_cfg: dict) -> None:
     print("\n[i] Next step: forensic-lab setup --distro ubuntu-22.04")
 
 
+def _section(title: str) -> None:
+    print(f"\n=== {title} ===")
+
+
 # --- main ----------------------------------------------------------------
 
 
@@ -164,6 +170,7 @@ def main() -> None:
     # ISF lookup happens at call time inside VolatilityRunner via distro_id.
     isf_dir = repo_root / ISF_SHARED_DIR
     vol_runner = VolatilityRunner.from_config(host_cfg, isf_dir)
+    sleuth_runner = SleuthKitRunner.from_config(host_cfg)
 
     distro_id: str = getattr(args, "distro", "ubuntu-22.04")
 
@@ -172,6 +179,7 @@ def main() -> None:
             vm_manager=vm_manager,
             dumper=dumper,
             vol_runner=vol_runner,
+            sleuth_runner=sleuth_runner,
             repo_root=repo_root,
             results_path=results_path,
             role_defaults=role_defaults,
@@ -182,11 +190,14 @@ def main() -> None:
                 orchestrator.setup_infra()
 
             elif args.command == "setup":
+                _section("infra")
                 orchestrator.setup_infra()
+                _section("lab VM + baseline")
                 orchestrator.prepare_lab(distro_id)
-                isf_path = orchestrator.build_isf(distro_id)
-                print(f"[i] ISF at: {isf_path}")
-                orchestrator._verify_pipeline(distro_id)
+                _section("ISF")
+                orchestrator.build_isf(distro_id)
+                _section("pipeline verify")
+                orchestrator.verify_pipeline(distro_id)
                 print(f"\n[+] Setup complete for '{distro_id}'")
 
             elif args.command == "run":

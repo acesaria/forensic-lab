@@ -296,7 +296,7 @@ class Provider:
                 print(f"[+] '{vm_name}' shut down gracefully")
                 return
             time.sleep(2)
-        print(f"[!] Graceful shutdown timed out, forcing off '{vm_name}'")
+        print(f"[i] Graceful shutdown timed out, forcing off '{vm_name}'")
         conn.lookupByName(vm_name).destroy()
 
     def restart_vm(self, vm_name: str) -> None:
