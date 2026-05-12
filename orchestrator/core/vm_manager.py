@@ -206,8 +206,9 @@ class VMManager:
     def revert_to_baseline(self, distro_id: str) -> str:
         """
         Revert the lab VM to the baseline snapshot.
-        Called before every experiment. Does NOT start the VM.
-        Caller must call start_vm + wait_ssh_ready after this.
+        Shuts the VM down first if it is running -- libvirt requires the
+        domain to be off for disk-only snapshot reverts.
+        Does NOT start the VM. Caller must call start_vm + wait_ssh_ready.
         Returns the VM name.
         """
         vm_name = f"lab-{distro_id}"
@@ -215,6 +216,9 @@ class VMManager:
             raise RuntimeError(
                 f"No baseline snapshot on '{vm_name}'. Run 'prepare' first."
             )
+        if self._provider.is_running(vm_name):
+            print(f"[*] Shutting down '{vm_name}' before snapshot revert...")
+            self._provider.shutdown_vm(vm_name)
         self._provider.revert_snapshot(vm_name, BASELINE_SNAPSHOT)
         return vm_name
 

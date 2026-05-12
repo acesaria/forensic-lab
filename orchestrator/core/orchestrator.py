@@ -3,16 +3,48 @@ orchestrator/core/orchestrator.py
 
 Coordinates the full experiment lifecycle. Sits above vm_manager and
 below attack modules -- it knows the sequence, not the details.
+
+Public API
+----------
+setup_infra()              one-time: libvirt network + pool
+prepare_lab(distro_id)     one-time: image + VM + baseline snapshot + pipeline verify
+build_isf(distro_id)       one-time: Volatility symbol file
+run_experiment(...)        experiment loop
+destroy_lab(distro_id)     teardown
+lab_exists(distro_id)      predicate
+
+Naming contract
+---------------
+distro_id    short config key  e.g. "ubuntu-22.04"
+vm_name      libvirt domain    e.g. "lab-ubuntu-22.04"
+Public methods accept distro_id. Private helpers use vm_name after resolution.
+
+VM power-state contract
+-----------------------
+prepare_lab        ends OFF (snapshot taken, pipeline probe done)
+build_isf          ends OFF (lab parked, build VM destroyed)
+_reset_lab         ends ON + SSH ready
+_run_acquisition   ends ON (VM restarted after disk dump)
+run_experiment     ends ON (caller decides when to shut down)
 """
 
+import importlib
 import json
 import time
+import subprocess
 from pathlib import Path
 from typing import Any
 
 from orchestrator.core.config import ISF_BUILD_PLAYBOOK, ISF_SHARED_DIR, load_profile
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics.dumper import Dumper
+from orchestrator.forensics.vol_runner import VolatilityRunner
+
+ATTACK_MODULES: dict[str, str] = {
+    "ptrace": "orchestrator.attacks.attack_01_ptrace",
+    "metasploit": "orchestrator.attacks.attack_05_metasploit",
+    "kernel": "orchestrator.attacks.attack_06_kernel",
+}
 
 
 class ForensicOrchestrator:
@@ -20,100 +52,71 @@ class ForensicOrchestrator:
         self,
         vm_manager: VMManager,
         dumper: Dumper,
+        vol_runner: VolatilityRunner,
         repo_root: Path,
         results_path: Path,
         role_defaults: dict[str, Any],
     ) -> None:
         self.vm_manager = vm_manager
         self.dumper = dumper
+        self._vol_runner = vol_runner
         self.repo_root = repo_root
         self.results_path = results_path
         self.results_path.mkdir(parents=True, exist_ok=True)
         self._role_defaults = role_defaults
 
-    # --- one-time infra setup ---------------------------------------------
+    # --- one-time setup --------------------------------------------------
 
     def setup_infra(self) -> None:
         """Create libvirt network and storage pool. Run once on a new machine."""
         self.vm_manager.ensure_isolated_network()
         self.vm_manager.ensure_storage_pool()
 
-    # --- per-distro lifecycle ---------------------------------------------
-
     def prepare_lab(self, distro_id: str) -> None:
         """
-        Download image, create lab VM, take baseline snapshot.
+        Download image, create lab VM, provision, take baseline snapshot.
         Safe to run multiple times -- skips steps already done.
+        VM ends OFF.
         """
         profile = load_profile(self.repo_root, distro_id)
         role_cfg = self._role_defaults.get("lab")
         if not isinstance(role_cfg, dict):
-            raise RuntimeError("Missing 'role_defaults.lab' config for lab VM")
+            raise RuntimeError("Missing 'role_defaults.lab' in config")
         self.vm_manager.prepare_lab(distro_id, profile, role_cfg)
         print(f"[+] '{distro_id}' ready for experiments")
 
-    def lab_exists(self, distro_id: str) -> bool:
-        return self.vm_manager.vm_exists(f"lab-{distro_id}")
-
-    def build_isf(self, distro_id: str, profile: dict[str, Any] | None = None) -> Path:
-        """Ensure ISF exists for the running lab kernel and return its path."""
-        if profile is None:
-            profile = load_profile(self.repo_root, distro_id)
-
+    def build_isf(self, distro_id: str) -> Path:
+        """
+        Ensure a Volatility ISF symbol file exists for the lab VM's kernel.
+        Starts the lab VM briefly to detect the kernel, then shuts it down.
+        Creates an ephemeral build VM if the ISF is not cached.
+        VM ends OFF. Returns the ISF path.
+        """
+        profile = load_profile(self.repo_root, distro_id)
         lab_vm_name = f"lab-{distro_id}"
-        print(f"[*] Starting {lab_vm_name} to detect kernel version for ISF build...")
-        self.vm_manager.start_vm(lab_vm_name)
 
-        self.vm_manager.wait_ssh_ready(lab_vm_name, reason="kernel detection")
-        kernel_release = self._kernel_release(lab_vm_name)
+        kernel_release = self._detect_kernel_release(lab_vm_name)
 
-        print(
-            f"[*] Detected kernel version: {kernel_release}. Shutting down {lab_vm_name}..."
-        )
-        self.vm_manager.shutdown_vm(lab_vm_name)
-
-        isf_name = self._isf_filename(distro_id, kernel_release)
+        isf_name = _isf_filename(distro_id, kernel_release)
         isf_dir = self.repo_root / ISF_SHARED_DIR
         isf_dir.mkdir(parents=True, exist_ok=True)
         isf_path = isf_dir / isf_name
+
         if isf_path.exists():
             print(f"[i] ISF already present: {isf_path}")
             return isf_path
 
         role_cfg = self._role_defaults.get("build-isf")
         if not isinstance(role_cfg, dict):
-            raise RuntimeError(
-                "Missing 'role_defaults.build-isf' config for ISF build VM"
-            )
+            raise RuntimeError("Missing 'role_defaults.build-isf' in config")
 
-        build_vm_name = f"build-isf-{distro_id}"
-        base_image = self.vm_manager.ensure_base_image(profile)
-        self.vm_manager.create_vm(
-            role="build-isf",
+        self._build_isf_with_ephemeral_vm(
             distro_id=distro_id,
             profile=profile,
             role_cfg=role_cfg,
-            base_image=base_image,
+            kernel_release=kernel_release,
+            isf_name=isf_name,
         )
-
-        try:
-            playbook = self.repo_root / ISF_BUILD_PLAYBOOK
-            print(
-                f"[*] Building ISF via ephemeral build VM (kernel: {kernel_release})..."
-            )
-            self.vm_manager.run_playbook_on_vm(
-                build_vm_name,
-                playbook,
-                extra_vars={
-                    "kernel_version": kernel_release,
-                    "isf_filename": isf_name,
-                    "shared_isf_dir": str(self.repo_root / ISF_SHARED_DIR),
-                },
-                reason="isf build provisioning",
-            )
-        finally:
-            self.vm_manager.destroy_vm(build_vm_name)
-            self.vm_manager.start_vm(lab_vm_name)
 
         if not isf_path.exists():
             raise RuntimeError(f"ISF build completed but output not found: {isf_path}")
@@ -121,9 +124,12 @@ class ForensicOrchestrator:
         print(f"[+] ISF exported: {isf_path}")
         return isf_path
 
-    # --- experiment execution ---------------------------------------------
+    def lab_exists(self, distro_id: str) -> bool:
+        return self.vm_manager.vm_exists(f"lab-{distro_id}")
 
-    def run(
+    # --- experiment loop -------------------------------------------------
+
+    def run_experiment(
         self,
         distro_id: str,
         scenario: str,
@@ -131,15 +137,15 @@ class ForensicOrchestrator:
     ) -> str | None:
         """
         Full experiment cycle:
-          1. Revert VM to baseline snapshot
-          2. Start VM and wait for SSH
-          3. Run attack scenario
-          4. Acquire RAM + disk (unless acquire=False)
+        1. Revert VM to baseline and start it
+        2. Run attack scenario, save ground truth
+        3. Acquire RAM + disk (unless acquire=False)
 
+        VM ends ON after acquisition.
         Returns manifest path if acquired, else None.
         """
-        print(f"\n[*] Setting up experiment: {scenario} on {distro_id}")
-        vm_name = self._revert_lab_and_wait(distro_id)
+        print(f"\n[*] Starting experiment: {scenario} on {distro_id}")
+        vm_name = self._reset_lab(distro_id)
         scenario_id = f"{distro_id}__{scenario}__{int(time.time())}"
 
         ground_truth = self._run_attack(scenario, vm_name, scenario_id)
@@ -149,38 +155,10 @@ class ForensicOrchestrator:
             print(f"[+] Ground truth saved: {gt_path}")
 
         if acquire:
-            return self.dumper.acquire(
-                domain=vm_name,
-                scenario_id=scenario_id,
-                vm_manager=self.vm_manager,
-            )
+            return self._run_acquisition(vm_name, scenario_id)
         return None
 
-    def acquire_baseline(self, distro_id: str) -> str:
-        """
-        Revert to baseline and acquire RAM + disk without running any attack.
-        Useful for building a pristine reference image.
-        """
-        vm_name = self._revert_lab_and_wait(distro_id)
-        scenario_id = f"{distro_id}__baseline__{int(time.time())}"
-        return self.dumper.acquire(
-            domain=vm_name,
-            scenario_id=scenario_id,
-            vm_manager=self.vm_manager,
-        )
-
-    def run_pipeline(self, distro_id: str) -> str:
-        """
-        Full pipeline for a distro: build ISF, acquire baseline, shut down.
-        Entry point for the 'run' CLI command.
-        """
-        self.build_isf(distro_id)
-        manifest_path = self.acquire_baseline(distro_id)
-        print(f"[+] Baseline acquisition manifest: {manifest_path}")
-        self.vm_manager.shutdown_vm(f"lab-{distro_id}")
-        return manifest_path
-
-    # --- teardown ---------------------------------------------------------
+    # --- teardown --------------------------------------------------------
 
     def destroy_lab(self, distro_id: str) -> None:
         """Remove the lab VM and all its associated storage."""
@@ -195,10 +173,84 @@ class ForensicOrchestrator:
     def __exit__(self, *_) -> None:
         self.close()
 
-    # --- private helpers --------------------------------------------------
+    # --- private: setup helpers ------------------------------------------
 
-    def _revert_lab_and_wait(self, distro_id: str) -> str:
-        """Revert to baseline, start VM, wait for SSH. Returns vm_name."""
+    def _detect_kernel_release(self, lab_vm_name: str) -> str:
+        """Start lab VM, read kernel via SSH, shut down. VM ends OFF."""
+        print(f"[*] Starting {lab_vm_name} to detect kernel version...")
+        self.vm_manager.start_vm(lab_vm_name)
+        self.vm_manager.wait_ssh_ready(lab_vm_name, reason="kernel detection")
+        with self.vm_manager.open_ssh(lab_vm_name) as ssh:
+            kernel_release = ssh.run_checked("uname -r")
+        print(f"[*] Kernel: {kernel_release}. Shutting down {lab_vm_name}...")
+        self.vm_manager.shutdown_vm(lab_vm_name)
+        return kernel_release
+
+    def _build_isf_with_ephemeral_vm(
+        self,
+        distro_id: str,
+        profile: dict[str, Any],
+        role_cfg: dict[str, Any],
+        kernel_release: str,
+        isf_name: str,
+    ) -> None:
+        """
+        Create a temporary build VM, run the ISF build playbook, destroy it.
+        Lab VM is not touched here.
+        """
+        build_vm_name = f"build-isf-{distro_id}"
+        base_image = self.vm_manager.ensure_base_image(profile)
+        self.vm_manager.create_vm(
+            role="build-isf",
+            distro_id=distro_id,
+            profile=profile,
+            role_cfg=role_cfg,
+            base_image=base_image,
+        )
+        try:
+            self.vm_manager.start_vm(build_vm_name)
+            self.vm_manager.run_playbook_on_vm(
+                build_vm_name,
+                self.repo_root / ISF_BUILD_PLAYBOOK,
+                extra_vars={
+                    "kernel_version": kernel_release,
+                    "isf_filename": isf_name,
+                    "shared_isf_dir": str(self.repo_root / ISF_SHARED_DIR),
+                },
+                reason="isf build",
+            )
+        finally:
+            self.vm_manager.destroy_vm(build_vm_name)
+
+    def _verify_pipeline(self, distro_id: str) -> None:
+        """
+        Acquire a baseline image and probe with Volatility + SleuthKit.
+        Called automatically at the end of the CLI 'setup' sequence.
+        Requires the ISF to already exist (call after build_isf).
+        VM ends OFF.
+        """
+        vm_name = self._reset_lab(distro_id)
+        scenario_id = f"{distro_id}__verify__{int(time.time())}"
+
+        manifest_path = self._run_acquisition(vm_name, scenario_id)
+        self.vm_manager.shutdown_vm(vm_name)
+
+        manifest = json.loads(Path(manifest_path).read_text())
+        memory_path = self.repo_root / manifest["memory_image"]["path"]
+        disk_path = self.repo_root / manifest["disk_image"]["path"]
+
+        print(f"\n[*] Probing acquired images for {distro_id}...")
+        self._vol_runner.probe(memory_path, distro_id)
+        self._probe_disk(disk_path)
+        print(f"[+] Pipeline probe passed for '{distro_id}'")
+
+    # --- private: experiment helpers -------------------------------------
+
+    def _reset_lab(self, distro_id: str) -> str:
+        """
+        Revert to baseline snapshot, start VM, wait for SSH.
+        VM ends ON + SSH ready. Returns vm_name.
+        """
         vm_name = f"lab-{distro_id}"
         self.vm_manager.revert_to_baseline(distro_id)
         print(f"[*] Starting {vm_name} after snapshot revert...")
@@ -206,32 +258,52 @@ class ForensicOrchestrator:
         self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")
         return vm_name
 
+    def _run_acquisition(self, vm_name: str, scenario_id: str) -> str:
+        """
+        Acquire memory (VM ON) then disk (VM OFF), restart VM when done.
+        VM ends ON. Returns manifest path.
+        """
+        disk_source = self.vm_manager.get_disk_path(vm_name)
+        scenario_dir = self.dumper.scenario_dir(scenario_id)
+        memory_path = scenario_dir / "memory" / "baseline_memory.raw"
+        disk_path = scenario_dir / "disk" / "baseline_disk.E01"
+
+        memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
+        try:
+            self.vm_manager.shutdown_vm(vm_name)
+            disk_meta = self.dumper.acquire_disk(disk_source, disk_path)
+        finally:
+            self.vm_manager.start_vm(vm_name)
+
+        return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
+
     def _run_attack(self, scenario: str, vm_name: str, scenario_id: str) -> dict | None:
-        """
-        Dynamically load and run the attack module for the given scenario.
-        Each attack module must expose: run(ssh, scenario_id) -> dict | None
-        """
-        import importlib
-
-        module_map = {
-            "ptrace": "orchestrator.attacks.attack_01_ptrace",
-            "metasploit": "orchestrator.attacks.attack_05_metasploit",
-            "kernel": "orchestrator.attacks.attack_06_kernel",
-        }
-
-        if scenario not in module_map:
-            print(f"[!] Unknown scenario '{scenario}', skipping attack step")
-            return None
-
+        module_path = ATTACK_MODULES.get(scenario)
+        if not module_path:
+            raise ValueError(
+                f"Unknown scenario '{scenario}'. " f"Available: {list(ATTACK_MODULES)}"
+            )
+        module = importlib.import_module(module_path)
         with self.vm_manager.open_ssh(vm_name) as ssh:
-            mod = importlib.import_module(module_map[scenario])
-            return mod.run(ssh, scenario_id)
+            return module.run(ssh, scenario_id)
 
-    def _kernel_release(self, vm_name: str) -> str:
-        with self.vm_manager.open_ssh(vm_name) as ssh:
-            return ssh.run_checked("uname -r")
+    def _probe_disk(self, disk_path: Path) -> None:
+        result = subprocess.run(
+            ["mmls", str(disk_path)],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"mmls probe failed for {disk_path.name}:\n" f"{result.stderr.strip()}"
+            )
+        print(f"[+] Disk probe passed ({disk_path.name})")
 
-    @staticmethod
-    def _isf_filename(distro_id: str, kernel_release: str) -> str:
-        distro_family = distro_id.split("-", 1)[0]
-        return f"{distro_family}_{kernel_release}.json"
+
+# --- module helpers ------------------------------------------------------
+
+
+def _isf_filename(distro_id: str, kernel_release: str) -> str:
+    family = distro_id.split("-", 1)[0]
+    safe_kernel = kernel_release.replace("/", "_")
+    return f"{family}_{safe_kernel}.json"
