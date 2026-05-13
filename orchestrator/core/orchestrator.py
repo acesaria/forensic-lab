@@ -31,6 +31,7 @@ run_experiment     ends ON (caller decides when to shut down)
 
 import importlib
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
@@ -40,6 +41,8 @@ from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics.dumper import Dumper
 from orchestrator.forensics.sleuth_runner import SleuthKitRunner
 from orchestrator.forensics.vol_runner import VolatilityRunner
+
+_log = logging.getLogger(__name__)
 
 ATTACK_MODULES: dict[str, str] = {
     "ptrace": "orchestrator.attacks.attack_01_ptrace",
@@ -58,7 +61,6 @@ class ForensicOrchestrator:
         repo_root: Path,
         results_path: Path,
         role_defaults: dict[str, Any],
-        debug: bool = False,
     ) -> None:
         self.vm_manager = vm_manager
         self.dumper = dumper
@@ -68,7 +70,6 @@ class ForensicOrchestrator:
         self.results_path = results_path
         self.results_path.mkdir(parents=True, exist_ok=True)
         self._role_defaults = role_defaults
-        self._debug = debug
 
     # --- one-time setup --------------------------------------------------
 
@@ -88,7 +89,7 @@ class ForensicOrchestrator:
         if not isinstance(role_cfg, dict):
             raise RuntimeError("Missing 'role_defaults.lab' in config")
         self.vm_manager.prepare_lab(distro_id, profile, role_cfg)
-        print(f"[+] '{distro_id}' ready for experiments")
+        _log.info("[+] '%s' ready for experiments", distro_id)
 
     def build_isf(self, distro_id: str) -> Path:
         """
@@ -108,7 +109,7 @@ class ForensicOrchestrator:
         isf_path = isf_dir / isf_name
 
         if isf_path.exists():
-            print(f"[i] ISF already present: {isf_path}")
+            _log.info("[i] ISF already present: %s", isf_path)
             return isf_path
 
         role_cfg = self._role_defaults.get("build-isf")
@@ -126,7 +127,7 @@ class ForensicOrchestrator:
         if not isf_path.exists():
             raise RuntimeError(f"ISF build completed but output not found: {isf_path}")
 
-        print(f"[+] ISF exported: {isf_path}")
+        _log.info("[+] ISF exported: %s", isf_path)
         return isf_path
 
     def lab_exists(self, distro_id: str) -> bool:
@@ -149,7 +150,7 @@ class ForensicOrchestrator:
         VM ends OFF after acquisition.
         Returns manifest path if acquired, else None.
         """
-        print(f"\n[*] Starting experiment: {scenario} on {distro_id}")
+        _log.info("\n[*] Starting experiment: %s on %s", scenario, distro_id)
         vm_name = self._reset_lab(distro_id)
         scenario_id = f"{distro_id}__{scenario}__{int(time.time())}"
 
@@ -157,7 +158,7 @@ class ForensicOrchestrator:
         if ground_truth:
             gt_path = self.results_path / f"gt_{scenario_id}.json"
             gt_path.write_text(json.dumps(ground_truth, indent=2))
-            print(f"[+] Ground truth saved: {gt_path}")
+            _log.info("[+] Ground truth saved: %s", gt_path)
 
         if acquire:
             return self._run_acquisition(vm_name, scenario_id)
@@ -181,13 +182,12 @@ class ForensicOrchestrator:
     # --- private: setup helpers ------------------------------------------
 
     def _detect_kernel_release(self, lab_vm_name: str) -> str:
-        """Start lab VM, read kernel via SSH, shut down. VM ends OFF."""
-        print(f"[*] Starting {lab_vm_name} to detect kernel version...")
+        _log.info("[*] Detecting kernel version on %s...", lab_vm_name)
         self.vm_manager.start_vm(lab_vm_name)
         self.vm_manager.wait_ssh_ready(lab_vm_name, reason="kernel detection")
         with self.vm_manager.open_ssh(lab_vm_name) as ssh:
             kernel_release = ssh.run_checked("uname -r")
-        print(f"[*] Kernel: {kernel_release}. Shutting down {lab_vm_name}...")
+        _log.info("[+] Kernel: %s", kernel_release)
         self.vm_manager.shutdown_vm(lab_vm_name)
         return kernel_release
 
@@ -214,16 +214,25 @@ class ForensicOrchestrator:
         )
         try:
             self.vm_manager.start_vm(build_vm_name)
-            self.vm_manager.run_playbook_on_vm(
-                build_vm_name,
-                self.repo_root / ISF_BUILD_PLAYBOOK,
-                extra_vars={
-                    "kernel_version": kernel_release,
-                    "isf_filename": isf_name,
-                    "shared_isf_dir": str(self.repo_root / ISF_SHARED_DIR),
-                },
-                reason="isf build",
-            )
+            try:
+                self.vm_manager.run_playbook_on_vm(
+                    build_vm_name,
+                    self.repo_root / ISF_BUILD_PLAYBOOK,
+                    extra_vars={
+                        "kernel_version": kernel_release,
+                        "isf_filename": isf_name,
+                        "shared_isf_dir": str(self.repo_root / ISF_SHARED_DIR),
+                    },
+                    reason="isf build",
+                )
+            except RuntimeError as exc:
+                raise RuntimeError(
+                    f"ISF build: Ansible playbook failed for '{distro_id}'.\n"
+                    "Common causes: no internet on build VM, kernel debuginfo "
+                    f"package not available for kernel '{kernel_release}'.\n"
+                    "Run with --debug to see full Ansible output.\n"
+                    f"Original error: {exc}"
+                ) from exc
         finally:
             self.vm_manager.destroy_vm(build_vm_name)
 
@@ -243,10 +252,10 @@ class ForensicOrchestrator:
         memory_path = self.repo_root / manifest["memory_image"]["path"]
         disk_path = self.repo_root / manifest["disk_image"]["path"]
 
-        print(f"\n[*] Probing acquired images for {distro_id}...")
+        _log.info("\n[*] Probing acquired images for %s...", distro_id)
         self._vol_runner.probe(memory_path, distro_id)
         self._sleuth_runner.probe(disk_path)
-        print(f"[+] Pipeline probe passed for '{distro_id}'")
+        _log.info("[+] Pipeline probe passed for '%s'", distro_id)
 
     # --- private: experiment helpers -------------------------------------
 
@@ -256,9 +265,9 @@ class ForensicOrchestrator:
         VM ends ON + SSH ready. Returns vm_name.
         """
         vm_name = f"lab-{distro_id}"
-        print(f"[*] Reverting '{vm_name}' to baseline snapshot...")
+        _log.info("[*] Reverting '%s' to baseline snapshot...", vm_name)
         self.vm_manager.revert_to_baseline(distro_id)
-        print(f"[*] Starting {vm_name} after snapshot revert...")
+        _log.info("[*] Starting %s after snapshot revert...", vm_name)
         self.vm_manager.start_vm(vm_name)
         self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")
         return vm_name
@@ -275,7 +284,7 @@ class ForensicOrchestrator:
 
         memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
         self.vm_manager.shutdown_vm(vm_name)
-        disk_meta = self.dumper.acquire_disk(disk_source, disk_path)
+        disk_meta = self.dumper.acquire_disk(vm_name, disk_source, disk_path)
 
         return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
 
