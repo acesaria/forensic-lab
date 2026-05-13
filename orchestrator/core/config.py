@@ -8,6 +8,7 @@ import yaml
 # --- Project constants (never change unless you restructure the project) ---
 
 BASELINE_SNAPSHOT = "baseline"
+# Must match the user created in infra/cloud-init/user-data
 LAB_USER = "labuser"
 
 LAB_BASELINE_PLAYBOOK = Path("infra/ansible/lab_baseline.yml")
@@ -27,6 +28,8 @@ def load_config(repo_root: Path) -> dict[str, Any]:
         cfg = yaml.safe_load(f)
     if "host" not in cfg or not isinstance(cfg["host"], dict):
         raise ValueError("config.yaml must contain a 'host' mapping")
+    if "isolated_network_name" not in cfg.get("host", {}):
+        raise ValueError("config.yaml must contain host.isolated_network_name")
     return cfg
 
 

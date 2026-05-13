@@ -1,11 +1,9 @@
 """
 infra/image_store.py
 
-Responsible for one thing: given a distro profile, ensure the base cloud
+Given a distro profile, ensure the base cloud
 image is present on disk and its checksum is valid. Nothing else.
-
-After a successful verification the image is set read-only so nothing
-accidentally writes to the base image (VMs use qcow2 overlays instead).
+VMs use qcow2 overlays so the base image is never written to directly
 """
 
 import hashlib
@@ -18,7 +16,7 @@ import requests
 
 
 def _filename_from_url(url: str) -> str:
-    # TODO: Add release number to filename to avoid collisions between different releases 
+    # TODO: Add release number to filename to avoid collisions between different releases
     return url.rstrip("/").split("/")[-1]
 
 
@@ -50,27 +48,7 @@ def _expected_checksum(checksum_url: str, filename: str, algo: str) -> str:
         if manifest_name == filename:
             return parts[0].lower()
 
-    raise RuntimeError(
-        f"Checksum for '{filename}' not found in {checksum_url}"
-    )
-
-
-def _set_readonly(path: Path) -> None:
-    current = stat.S_IMODE(os.stat(path).st_mode)
-    if (current & (stat.S_IWRITE | stat.S_IWGRP | stat.S_IWOTH)) == 0:
-        return
-    readonly = current & ~(stat.S_IWRITE | stat.S_IWGRP | stat.S_IWOTH)
-    try:
-        os.chmod(path, readonly)
-    except PermissionError as e:
-        # If we cannot chmod but the file is already read-only, continue.
-        now = stat.S_IMODE(os.stat(path).st_mode)
-        if (now & (stat.S_IWRITE | stat.S_IWGRP | stat.S_IWOTH)) == 0:
-            return
-        raise RuntimeError(
-            f"Unable to mark base image read-only: {path}. "
-            "Fix file ownership/permissions and retry."
-        ) from e
+    raise RuntimeError(f"Checksum for '{filename}' not found in {checksum_url}")
 
 
 def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
@@ -132,5 +110,9 @@ def _download(url: str, dest: Path) -> None:
                 downloaded += len(chunk)
                 if total:
                     pct = downloaded * 100 // total
-                    print(f"\r    {pct:3d}%  {downloaded // 1024 // 1024} MB", end="", flush=True)
+                    print(
+                        f"\r    {pct:3d}%  {downloaded // 1024 // 1024} MB",
+                        end="",
+                        flush=True,
+                    )
     print()  # newline after progress
