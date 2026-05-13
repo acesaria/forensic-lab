@@ -109,7 +109,7 @@ class ForensicOrchestrator:
         isf_path = isf_dir / isf_name
 
         if isf_path.exists():
-            _log.info("[i] ISF already present: %s", isf_path)
+            _log.info("[i] ISF already present: %s", isf_path.absolute())
             return isf_path
 
         role_cfg = self._role_defaults.get("build-isf")

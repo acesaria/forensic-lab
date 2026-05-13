@@ -9,6 +9,7 @@ host:
   pool_name: forensic-lab-pool
   pool_path: /var/lib/forensic-lab/disks
   images_path: /var/lib/forensic-lab/images
+  shared_dir: ./shared
 
 role_defaults:
   lab:
