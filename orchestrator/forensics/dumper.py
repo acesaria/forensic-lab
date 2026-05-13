@@ -40,10 +40,11 @@ class AcquisitionManifest:
 
 
 class Dumper:
-    def __init__(self, repo_root: Path) -> None:
+    def __init__(self, repo_root: Path, debug: bool = False) -> None:
         self.repo_root = repo_root
         self.dumps_root = repo_root / "shared" / "dumps"
         self.dumps_root.mkdir(parents=True, exist_ok=True)
+        self._debug = debug
 
     # --- directory layout ------------------------------------------------
 
@@ -65,10 +66,17 @@ class Dumper:
 
         started = time.time()
         print(f"[*] Acquiring memory from '{domain}'...")
-        subprocess.run(
+        result = subprocess.run(
             ["virsh", "dump", domain, str(dest), "--memory-only"],
-            check=True,
+            check=False,
+            capture_output=not self._debug,
+            text=True,
         )
+        if result.returncode != 0:
+            stderr = result.stderr or ""
+            raise RuntimeError(
+                f"virsh dump failed (rc={result.returncode})\nstderr:\n{stderr}"
+            )
         elapsed = time.time() - started
         subprocess.run(
             ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
@@ -113,7 +121,7 @@ class Dumper:
         ewf_ok = False
         try:
             threads = str(os.cpu_count() or 4)
-            subprocess.run(
+            result = subprocess.run(
                 [
                     "ewfacquire",
                     "-u",
@@ -125,8 +133,17 @@ class Dumper:
                     prefix,
                     str(raw_path),
                 ],
-                check=True,
+                check=False,
+                capture_output=not self._debug,
+                text=True,
             )
+            if result.returncode != 0:
+                stdout = result.stdout or ""
+                stderr = result.stderr or ""
+                raise RuntimeError(
+                    "ewfacquire failed "
+                    f"(rc={result.returncode})\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                )
             ewf_ok = True
         finally:
             if ewf_ok and raw_path.exists():

@@ -58,6 +58,7 @@ class ForensicOrchestrator:
         repo_root: Path,
         results_path: Path,
         role_defaults: dict[str, Any],
+        debug: bool = False,
     ) -> None:
         self.vm_manager = vm_manager
         self.dumper = dumper
@@ -67,6 +68,7 @@ class ForensicOrchestrator:
         self.results_path = results_path
         self.results_path.mkdir(parents=True, exist_ok=True)
         self._role_defaults = role_defaults
+        self._debug = debug
 
     # --- one-time setup --------------------------------------------------
 
@@ -286,6 +288,7 @@ class ForensicOrchestrator:
         module = importlib.import_module(module_path)
         with self.vm_manager.open_ssh(vm_name) as ssh:
             return module.run(ssh, scenario_id)
+
 
 # --- module helpers ------------------------------------------------------
 

@@ -35,12 +35,14 @@ class VMManager:
         ssh_key: str,
         ssh_pub_key: str,
         repo_root: Path,
+        debug: bool = False,
     ) -> None:
         self._provider = provider
         self._images_dir = images_path.expanduser().resolve()
         self._ssh_key = Path(ssh_key).expanduser()
         self._ssh_pubkey_text = Path(ssh_pub_key).expanduser().read_text().strip()
         self._repo_root = repo_root
+        self._debug = debug
 
     # --- infra setup (one-time, delegated to provider) -------------------
 
@@ -257,11 +259,20 @@ class VMManager:
         if extra_vars:
             for k, v in extra_vars.items():
                 cmd.extend(["-e", f"{k}={v}"])
-        result = subprocess.run(cmd, check=False, capture_output=False)
+        result = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=not self._debug,
+            text=True,
+        )
         if result.returncode != 0:
+            stdout = result.stdout or ""
+            stderr = result.stderr or ""
             raise RuntimeError(
-                f"Ansible playbook failed (rc={result.returncode}): {playbook}"
+                f"Playbook failed: {playbook.name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
             )
+        if not self._debug:
+            print(f"[+] Playbook {playbook.name} done")
 
     def _create_cloud_init_seed(self, vm_name: str) -> Path:
         pool_path = self._provider.pool_path()

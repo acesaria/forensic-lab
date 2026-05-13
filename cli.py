@@ -18,6 +18,12 @@ def build_parser() -> argparse.ArgumentParser:
         prog="forensic-lab",
         description="Reproducible Linux attack reconstruction lab.",
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Show raw subprocess output (ansible, ewfacquire, virsh)",
+    )
     sub = parser.add_subparsers(dest="command", required=True)
 
     # init: one-time host setup (sudo required)
@@ -66,6 +72,9 @@ def _section(title: str) -> None:
 def main() -> None:
     repo_root = Path(__file__).resolve().parent
     args = build_parser().parse_args()
+    debug: bool = args.debug
+    if debug:
+        print("[i] Debug mode on: subprocess output will be shown")
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
     role_defaults = cfg.get("role_defaults") or {}
@@ -82,9 +91,10 @@ def main() -> None:
         ssh_key=host_cfg["ssh_key"],
         ssh_pub_key=host_cfg["ssh_pub_key"],
         repo_root=repo_root,
+        debug=debug,
     )
 
-    dumper = Dumper(repo_root)
+    dumper = Dumper(repo_root, debug=debug)
     results_path = Path(host_cfg["shared_dir"]).expanduser() / "results"
 
     # VolatilityRunner is always constructible -- only validates the binary.
@@ -95,8 +105,6 @@ def main() -> None:
 
     distro_id: str = getattr(args, "distro", "ubuntu-22.04")
 
-    
-
     try:
         with ForensicOrchestrator(
             vm_manager=vm_manager,
@@ -106,6 +114,7 @@ def main() -> None:
             repo_root=repo_root,
             results_path=results_path,
             role_defaults=role_defaults,
+            debug=debug,
         ) as orchestrator:
 
             if args.command == "init":
