@@ -122,31 +122,31 @@ class Provider:
         """Create and autostart the isolated network if not already present."""
         conn = self._connect()
         try:
-                        net = conn.networkLookupByName(self._network_name)
+            net = conn.networkLookupByName(self._network_name)
             if not net.isActive():
                 net.create()
             _log.info(
                 "[i] Network '%s' already present",
-                                self._network_name,
+                self._network_name,
             )
             return
         except libvirt.libvirtError:
             pass
-                _log.debug("[*] Defining network '%s'...", self._network_name)
-                network_xml = f"""\
+        _log.debug("[*] Defining network '%s'...", self._network_name)
+        network_xml = f"""\
 <network>
-    <name>{self._network_name}</name>
-    <bridge name="virbr-forensics" stp="on" delay="0"/>
-    <ip address="192.168.100.1" netmask="255.255.255.0">
-        <dhcp>
-            <range start="192.168.100.10" end="192.168.100.99"/>
-        </dhcp>
-    </ip>
+  <name>{self._network_name}</name>
+  <bridge name="virbr-forensics" stp="on" delay="0"/>
+  <ip address="192.168.100.1" netmask="255.255.255.0">
+    <dhcp>
+      <range start="192.168.100.10" end="192.168.100.99"/>
+    </dhcp>
+  </ip>
 </network>"""
-                net = conn.networkDefineXML(network_xml)
+        net = conn.networkDefineXML(network_xml)
         net.setAutostart(1)
         net.create()
-                _log.info("[+] Network '%s' created", self._network_name)
+        _log.info("[+] Network '%s' created", self._network_name)
 
     def ensure_storage_pool(self) -> None:
         """Create and autostart the storage pool if not already present."""
@@ -174,12 +174,12 @@ class Provider:
     def _pool_xml(self) -> str:
         # Pool name and path are instance-specific, so this cannot be a module constant.
         return f"""\
-        <pool type='dir'>
-        <name>{self._pool_name}</name>
-        <target>
-            <path>{self._pool_path}</path>
-        </target>
-        </pool>"""
+<pool type='dir'>
+    <name>{self._pool_name}</name>
+    <target>
+        <path>{self._pool_path}</path>
+    </target>
+</pool>"""
 
     # --- VM existence and creation ---------------------------------------
 
