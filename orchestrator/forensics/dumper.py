@@ -12,11 +12,29 @@ Caller contract (enforced by orchestrator._run_acquisition):
 import glob
 import hashlib
 import json
+import logging
 import os
 import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
+
+
+def _format_bytes(size: int | None) -> str:
+    if size is None:
+        return "unknown"
+    units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB"]
+    value = float(size)
+    unit = units[0]
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            break
+        value /= 1024
+    if unit == "B":
+        return f"{int(value)} {unit}"
+    return f"{value:.1f} {unit}"
 
 
 @dataclass
@@ -40,11 +58,10 @@ class AcquisitionManifest:
 
 
 class Dumper:
-    def __init__(self, repo_root: Path, debug: bool = False) -> None:
+    def __init__(self, repo_root: Path) -> None:
         self.repo_root = repo_root
         self.dumps_root = repo_root / "shared" / "dumps"
         self.dumps_root.mkdir(parents=True, exist_ok=True)
-        self._debug = debug
 
     # --- directory layout ------------------------------------------------
 
@@ -65,24 +82,33 @@ class Dumper:
             dest.unlink()
 
         started = time.time()
-        print(f"[*] Acquiring memory from '{domain}'...")
+        _log.info("[*] Acquiring memory from '%s'...", domain)
         result = subprocess.run(
             ["virsh", "dump", domain, str(dest), "--memory-only"],
             check=False,
-            capture_output=not self._debug,
+            capture_output=True,
             text=True,
         )
         if result.returncode != 0:
+            stdout = result.stdout or ""
             stderr = result.stderr or ""
             raise RuntimeError(
-                f"virsh dump failed (rc={result.returncode})\nstderr:\n{stderr}"
+                f"virsh dump failed (rc={result.returncode})\n{stdout}\n{stderr}"
             )
+        if _log.isEnabledFor(logging.DEBUG):
+            _log.debug("%s", result.stdout or "")
         elapsed = time.time() - started
+        size_bytes = dest.stat().st_size if dest.exists() else None
         subprocess.run(
             ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
             check=True,
         )
-        print(f"[+] Memory dump done ({elapsed:.1f}s): {dest}")
+        _log.info(
+            "[+] Memory dump done (%.1fs): %s, %s",
+            elapsed,
+            str(dest.relative_to(self.repo_root)),
+            _format_bytes(size_bytes),
+        )
 
         return ImageMetadata(
             path=str(dest.relative_to(self.repo_root)),
@@ -95,7 +121,7 @@ class Dumper:
 
     # --- disk (VM must be OFF) -------------------------------------------
 
-    def acquire_disk(self, disk_source: str, dest: Path) -> ImageMetadata:
+    def acquire_disk(self, vm_name: str, disk_source: str, dest: Path) -> ImageMetadata:
         """
         Acquire disk via ewfacquire. Domain must be OFF.
         dest segments are owned by the calling user -- dumps dir is pre-chowned at init.
@@ -110,15 +136,28 @@ class Dumper:
 
         started = time.time()
         virtual_size = self._qemu_virtual_size(disk_source)
+        domain_hint = Path(disk_source).stem
+        _log.info("[*] Acquiring disk from '%s'...", domain_hint)
 
-        print(f"[*] Converting disk source to raw: {disk_source} -> {raw_path}...")
-        subprocess.run(
-            ["qemu-img", "convert", "-O", "raw", disk_source, str(raw_path)],
-            check=True,
+        _log.debug(
+            "[*] Converting disk source to raw: %s -> %s...",
+            disk_source,
+            raw_path,
         )
+        try:
+            subprocess.run(
+                ["qemu-img", "convert", "-O", "raw", disk_source, str(raw_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except subprocess.CalledProcessError as exc:
+            raise RuntimeError(
+                f"disk: qemu-img convert failed for '{disk_source}'.\n"
+                f"{(exc.stderr or '').strip()}"
+            ) from exc
 
-        print(f"[*] Acquiring disk from '{raw_path}' -> {dest}...")
-        ewf_ok = False
+        _log.debug("[*] Acquiring disk from '%s' -> %s...", raw_path, dest)
         try:
             threads = str(os.cpu_count() or 4)
             result = subprocess.run(
@@ -134,7 +173,7 @@ class Dumper:
                     str(raw_path),
                 ],
                 check=False,
-                capture_output=not self._debug,
+                capture_output=True,
                 text=True,
             )
             if result.returncode != 0:
@@ -144,9 +183,10 @@ class Dumper:
                     "ewfacquire failed "
                     f"(rc={result.returncode})\nstdout:\n{stdout}\nstderr:\n{stderr}"
                 )
-            ewf_ok = True
+            if _log.isEnabledFor(logging.DEBUG):
+                _log.debug("%s", result.stdout or "")
         finally:
-            if ewf_ok and raw_path.exists():
+            if raw_path.exists():
                 raw_path.unlink()
 
         segments = sorted(glob.glob(f"{prefix}.E??"))
@@ -161,8 +201,19 @@ class Dumper:
 
         elapsed = time.time() - started
         ewf_size = sum(Path(p).stat().st_size for p in segments)
-        print(f"[+] Disk acquisition done ({elapsed:.1f}s): {segments[0]}")
-
+        segment_details = ", ".join(
+            f"{Path(seg).name} ({_format_bytes(Path(seg).stat().st_size)})"
+            for seg in segments
+        )
+        _log.info(
+            "[+] Disk acquisition done (%.1fs): %s (%d segment(s)) [virtual=%s, ewf=%s]\nsegments: %s",
+            elapsed,
+            str(Path(segments[0]).relative_to(self.repo_root)),
+            len(segments),
+            _format_bytes(virtual_size),
+            _format_bytes(ewf_size),
+            segment_details,
+        )
         return ImageMetadata(
             path=str(Path(segments[0]).relative_to(self.repo_root)),
             tool="qemu-img convert -O raw && ewfacquire -u -c fast -j 4",
@@ -192,7 +243,7 @@ class Dumper:
         path = self.scenario_dir(scenario_id) / "manifest.json"
         with open(path, "w") as f:
             json.dump(asdict(manifest), f, indent=2)
-        print(f"[+] Manifest written: {path}")
+        _log.info("[+] Manifest written: %s", str(path.relative_to(self.repo_root)))
         return str(path)
 
     # --- helpers ---------------------------------------------------------

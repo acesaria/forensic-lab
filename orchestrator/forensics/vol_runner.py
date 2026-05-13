@@ -13,10 +13,13 @@
 #   vol.run_plugins(memory_path, "ubuntu-22.04", ["linux.pslist"])
 
 import json
+import logging
 import shutil
 import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
+
+_log = logging.getLogger(__name__)
 
 
 def _run_vol_subprocess(
@@ -42,7 +45,12 @@ def _run_vol_subprocess(
         plugin,
         *extra_args,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+    except FileNotFoundError:
+        raise RuntimeError(
+            "vol3: binary not found. Install volatility3 and ensure " "it is on PATH."
+        )
     if result.returncode != 0:
         raise RuntimeError(
             f"vol3 '{plugin}' failed (rc={result.returncode}):\n"
@@ -90,9 +98,9 @@ class VolatilityRunner:
         family = distro_id.split("-", 1)[0]
         matches = sorted(self._isf_dir.glob(f"{family}_*.json"))
         if not matches:
-            raise FileNotFoundError(
-                f"No ISF found for '{distro_id}' in {self._isf_dir}. "
-                "Run 'forensic-lab setup' first."
+            raise RuntimeError(
+                f"ISF: no symbol file found for distro family '{family}' "
+                f"in {self._isf_dir}. Run 'python cli.py setup --distro {distro_id}' first."
             )
         return matches[-1]
 
@@ -147,10 +155,10 @@ class VolatilityRunner:
                 try:
                     _, rows = future.result()
                     results[plugin] = rows
-                    print(f"[+] vol3 {plugin}: {len(rows)} row(s)")
+                    _log.debug("[+] vol3 %s: %d row(s)", plugin, len(rows))
                 except Exception as exc:
                     failures.append(f"{plugin}: {exc}")
-                    print(f"[!] vol3 {plugin} failed: {exc}")
+                    _log.warning("[!] vol3 %s failed: %s", plugin, exc)
 
         if failures:
             raise RuntimeError("Volatility plugins failed:\n" + "\n".join(failures))
@@ -189,7 +197,7 @@ class VolatilityRunner:
                 "ISF may not match this kernel -- check dwarf2json output"
             )
 
-        print(
-            "[+] ISF probe passed: linux.pslist.PsList returned "
-            f"{len(rows_list)} process(es)"
+        _log.info(
+            "[+] ISF probe passed: linux.pslist.PsList returned %d process(es)",
+            len(rows_list),
         )

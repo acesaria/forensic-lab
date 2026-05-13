@@ -10,6 +10,7 @@ Lifecycle contract:
   - open_ssh assumes the VM is already running and returns an owned SSHClient.
 """
 
+import logging
 import subprocess
 import tempfile
 import time
@@ -26,6 +27,8 @@ from orchestrator.core.config import (
 )
 from orchestrator.core.ssh_client import SSHClient
 
+_log = logging.getLogger(__name__)
+
 
 class VMManager:
     def __init__(
@@ -35,14 +38,12 @@ class VMManager:
         ssh_key: str,
         ssh_pub_key: str,
         repo_root: Path,
-        debug: bool = False,
     ) -> None:
         self._provider = provider
         self._images_dir = images_path.expanduser().resolve()
         self._ssh_key = Path(ssh_key).expanduser()
         self._ssh_pubkey_text = Path(ssh_pub_key).expanduser().read_text().strip()
         self._repo_root = repo_root
-        self._debug = debug
 
     # --- infra setup (one-time, delegated to provider) -------------------
 
@@ -55,7 +56,20 @@ class VMManager:
     # --- image and VM creation -------------------------------------------
 
     def ensure_base_image(self, profile: dict[str, Any]) -> Path:
-        return ensure_image(profile, self._images_dir)
+        img_cfg = profile["image"]
+        url = img_cfg["url"]
+        filename = img_cfg.get("filename") or url.rstrip("/").split("/")[-1]
+        dest = self._images_dir / filename
+        distro_id = profile.get("distro_id", "unknown")
+        try:
+            return ensure_image(profile, self._images_dir)
+        except OSError as exc:
+            if dest.exists():
+                dest.unlink()
+            raise RuntimeError(
+                f"download: failed to fetch image for '{distro_id}': {exc}\n"
+                "Check host network connectivity."
+            ) from exc
 
     def vm_exists(self, vm_name: str) -> bool:
         return self._provider.vm_exists(vm_name)
@@ -75,7 +89,7 @@ class VMManager:
         """
         vm_name = f"{role}-{distro_id}"
         if self._provider.vm_exists(vm_name):
-            print(f"[i] VM '{vm_name}' already exists, skipping creation")
+            _log.info("[i] VM '%s' already exists, skipping creation", vm_name)
             return vm_name
         seed_path = self._create_cloud_init_seed(vm_name)
         return self._provider.create_vm(
@@ -116,8 +130,8 @@ class VMManager:
         Returns the IP once ready.
         """
         ip = self._provider.get_vm_ip(vm_name)
-        label = f" [{reason}]" if reason else ""
-        print(f"[*] Waiting for SSH on {vm_name} ({ip}){label}...")
+        label = f" [{reason}]" if (reason and _log.isEnabledFor(logging.DEBUG)) else ""
+        _log.info("[*] Waiting for SSH on %s (%s)%s...", vm_name, ip, label)
 
         deadline = time.time() + timeout
         last_error = ""
@@ -125,7 +139,7 @@ class VMManager:
             try:
                 with SSHClient(ip, LAB_USER, str(self._ssh_key)) as ssh:
                     ssh.run_checked("true")
-                print(f"[+] SSH ready on {vm_name} ({ip}){label}")
+                _log.info("[+] SSH ready on %s (%s)%s", vm_name, ip, label)
                 return ip
             except Exception as exc:
                 last_error = str(exc)
@@ -197,11 +211,15 @@ class VMManager:
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
             playbook = self._repo_root / LAB_BASELINE_PLAYBOOK
             self._run_playbook(ip, playbook, reason="baseline provisioning")
-            print(f"[*] Shutting down {vm_name} before snapshot...")
+            _log.info("[*] Shutting down %s before snapshot...", vm_name)
             self._provider.shutdown_vm(vm_name)
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         else:
-            print(f"[i] Snapshot '{BASELINE_SNAPSHOT}' already on '{vm_name}'")
+            _log.info(
+                "[i] Snapshot '%s' already on '%s'",
+                BASELINE_SNAPSHOT,
+                vm_name,
+            )
 
         return vm_name
 
@@ -219,7 +237,7 @@ class VMManager:
                 f"No baseline snapshot on '{vm_name}'. Run 'prepare' first."
             )
         if self._provider.is_running(vm_name):
-            print(f"[*] Shutting down '{vm_name}' before snapshot revert...")
+            _log.info("[*] Shutting down '%s' before snapshot revert...", vm_name)
             self._provider.shutdown_vm(vm_name)
         self._provider.revert_snapshot(vm_name, BASELINE_SNAPSHOT)
         return vm_name
@@ -243,7 +261,7 @@ class VMManager:
         reason: str = "",
     ) -> None:
         label = f" [{reason}]" if reason else ""
-        print(f"[*] Running playbook {playbook.name} on {ip}{label}...")
+        _log.debug("[*] Running playbook %s on %s%s...", playbook.name, ip, label)
         cmd = [
             "ansible-playbook",
             "-i",
@@ -259,20 +277,17 @@ class VMManager:
         if extra_vars:
             for k, v in extra_vars.items():
                 cmd.extend(["-e", f"{k}={v}"])
-        result = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=not self._debug,
-            text=True,
-        )
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
         if result.returncode != 0:
             stdout = result.stdout or ""
             stderr = result.stderr or ""
             raise RuntimeError(
-                f"Playbook failed: {playbook.name}\nstdout:\n{stdout}\nstderr:\n{stderr}"
+                f"Ansible playbook failed (rc={result.returncode}): {playbook}\n"
+                f"{stdout}\n{stderr}"
             )
-        if not self._debug:
-            print(f"[+] Playbook {playbook.name} done")
+        if _log.isEnabledFor(logging.DEBUG):
+            _log.debug("%s", result.stdout or "")
+            _log.debug("[+] Playbook %s done", playbook.name)
 
     def _create_cloud_init_seed(self, vm_name: str) -> Path:
         pool_path = self._provider.pool_path()

@@ -1,6 +1,8 @@
 """CLI entry point for forensic-lab."""
 
 import argparse
+import logging
+import sys
 from pathlib import Path
 
 from infra.provider import Provider
@@ -12,6 +14,8 @@ from orchestrator.forensics.dumper import Dumper
 from orchestrator.forensics.sleuth_runner import SleuthKitRunner
 from orchestrator.forensics.vol_runner import VolatilityRunner
 
+_log = logging.getLogger(__name__)
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -22,7 +26,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--debug",
         action="store_true",
         default=False,
-        help="Show raw subprocess output (ansible, ewfacquire, virsh)",
+        help="Show verbose subprocess output and internal detail",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -63,18 +67,49 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _section(title: str) -> None:
-    print(f"\n=== {title} ===")
+    _log.info("\n=== %s ===", title)
+
+
+def _setup_logging(debug: bool) -> None:
+    console = logging.StreamHandler(sys.stdout)
+    console.setLevel(logging.DEBUG if debug else logging.INFO)
+    console.setFormatter(logging.Formatter("%(message)s"))
+    root = logging.getLogger()
+    root.setLevel(logging.DEBUG)
+    root.addHandler(console)
+    for noisy in ("paramiko", "ansible", "libvirt", "urllib3"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
+
+
+def _check_prerequisites() -> None:
+    import shutil
+
+    required = {
+        "virsh": "libvirt-clients",
+        "virt-install": "virtinst",
+        "qemu-img": "qemu-utils",
+        "ewfacquire": "libewf-dev",
+        "vol3": "volatility3 (install manually)",
+    }
+    missing = [
+        f"  {cmd}  (apt: {pkg})"
+        for cmd, pkg in required.items()
+        if shutil.which(cmd) is None
+    ]
+    if missing:
+        raise RuntimeError("prereq: Missing required binaries:\n" + "\n".join(missing))
 
 
 # --- main ----------------------------------------------------------------
 
 
 def main() -> None:
-    repo_root = Path(__file__).resolve().parent
     args = build_parser().parse_args()
-    debug: bool = args.debug
-    if debug:
-        print("[i] Debug mode on: subprocess output will be shown")
+    _setup_logging(args.debug)
+    _check_prerequisites()
+    if args.debug:
+        _log.info("[i] Debug mode on")
+    repo_root = Path(__file__).resolve().parent
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
     role_defaults = cfg.get("role_defaults") or {}
@@ -91,10 +126,9 @@ def main() -> None:
         ssh_key=host_cfg["ssh_key"],
         ssh_pub_key=host_cfg["ssh_pub_key"],
         repo_root=repo_root,
-        debug=debug,
     )
 
-    dumper = Dumper(repo_root, debug=debug)
+    dumper = Dumper(repo_root)
     results_path = Path(host_cfg["shared_dir"]).expanduser() / "results"
 
     # VolatilityRunner is always constructible -- only validates the binary.
@@ -114,7 +148,6 @@ def main() -> None:
             repo_root=repo_root,
             results_path=results_path,
             role_defaults=role_defaults,
-            debug=debug,
         ) as orchestrator:
 
             if args.command == "init":
@@ -122,6 +155,15 @@ def main() -> None:
                 orchestrator.setup_infra()
 
             elif args.command == "setup":
+                from orchestrator.core.config import load_profile
+
+                try:
+                    load_profile(repo_root, args.distro)
+                except (KeyError, FileNotFoundError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"config: distro '{args.distro}' not found: {exc}"
+                    ) from exc
+
                 _section("infra")
                 orchestrator.setup_infra()
                 _section("lab VM + baseline")
@@ -130,20 +172,42 @@ def main() -> None:
                 orchestrator.build_isf(distro_id)
                 _section("pipeline verify")
                 orchestrator.verify_pipeline(distro_id)
-                print(f"\n[+] Setup complete for '{distro_id}'")
+                _log.info("\n[+] Setup complete for '%s'", distro_id)
 
             elif args.command == "run":
+                from orchestrator.core.config import load_profile
+
+                try:
+                    load_profile(repo_root, args.distro)
+                except (KeyError, FileNotFoundError, ValueError) as exc:
+                    raise RuntimeError(
+                        f"config: distro '{args.distro}' not found: {exc}"
+                    ) from exc
+
                 if not orchestrator.lab_exists(distro_id):
-                    print(f"[!] Lab '{distro_id}' not found. " "Run 'setup' first.")
+                    _log.warning(
+                        "[!] Lab '%s' not found. Run 'setup' first.",
+                        distro_id,
+                    )
                     raise SystemExit(1)
                 orchestrator.run_experiment(distro_id, args.scenario)
 
             elif args.command == "destroy":
                 orchestrator.destroy_lab(distro_id)
 
-    except FileNotFoundError as e:
-        print(f"[!] {e}")
-        raise SystemExit(2)
+    except KeyboardInterrupt:
+        logging.info("\n[-] Interrupted")
+        sys.exit(1)
+    except RuntimeError as exc:
+        logging.error("[!] %s", exc)
+        if args.debug:
+            raise
+        sys.exit(1)
+    except Exception as exc:
+        logging.error("[!] Unexpected error: %s", exc)
+        if args.debug:
+            raise
+        sys.exit(1)
 
 
 if __name__ == "__main__":
