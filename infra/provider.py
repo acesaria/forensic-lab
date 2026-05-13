@@ -65,25 +65,6 @@ def _silence_libvirt_errors(_userdata: None, _err: Any) -> None:
 
 libvirt.registerErrorHandler(_silence_libvirt_errors, None)
 # ---------------------------------------------------------------------------
-# Infrastructure constants
-# Adjust the address range here if it conflicts with your local network.
-# ---------------------------------------------------------------------------
-
-_ISOLATED_NETWORK_NAME = "forensics-isolated"
-
-_ISOLATED_NETWORK_XML = f"""\
-<network>
-  <name>{_ISOLATED_NETWORK_NAME}</name>
-  <bridge name="virbr-forensics" stp="on" delay="0"/>
-  <ip address="192.168.100.1" netmask="255.255.255.0">
-    <dhcp>
-      <range start="192.168.100.10" end="192.168.100.99"/>
-    </dhcp>
-  </ip>
-</network>"""
-
-
-# ---------------------------------------------------------------------------
 # Provider
 # ---------------------------------------------------------------------------
 
@@ -99,10 +80,12 @@ class Provider:
         libvirt_uri: str,
         pool_name: str,
         pool_path: Path,
+        network_name: str,
     ) -> None:
         self._uri = libvirt_uri
         self._pool_name = pool_name
         self._pool_path = pool_path.expanduser().resolve()
+        self._network_name = network_name
         self._conn: libvirt.virConnect | None = None
 
     # --- public accessors ------------------------------------------------
@@ -139,21 +122,31 @@ class Provider:
         """Create and autostart the isolated network if not already present."""
         conn = self._connect()
         try:
-            net = conn.networkLookupByName(_ISOLATED_NETWORK_NAME)
+                        net = conn.networkLookupByName(self._network_name)
             if not net.isActive():
                 net.create()
             _log.info(
                 "[i] Network '%s' already present",
-                _ISOLATED_NETWORK_NAME,
+                                self._network_name,
             )
             return
         except libvirt.libvirtError:
             pass
-        _log.debug("[*] Defining network '%s'...", _ISOLATED_NETWORK_NAME)
-        net = conn.networkDefineXML(_ISOLATED_NETWORK_XML)
+                _log.debug("[*] Defining network '%s'...", self._network_name)
+                network_xml = f"""\
+<network>
+    <name>{self._network_name}</name>
+    <bridge name="virbr-forensics" stp="on" delay="0"/>
+    <ip address="192.168.100.1" netmask="255.255.255.0">
+        <dhcp>
+            <range start="192.168.100.10" end="192.168.100.99"/>
+        </dhcp>
+    </ip>
+</network>"""
+                net = conn.networkDefineXML(network_xml)
         net.setAutostart(1)
         net.create()
-        _log.info("[+] Network '%s' created", _ISOLATED_NETWORK_NAME)
+                _log.info("[+] Network '%s' created", self._network_name)
 
     def ensure_storage_pool(self) -> None:
         """Create and autostart the storage pool if not already present."""
@@ -181,12 +174,12 @@ class Provider:
     def _pool_xml(self) -> str:
         # Pool name and path are instance-specific, so this cannot be a module constant.
         return f"""\
-<pool type='dir'>
-  <name>{self._pool_name}</name>
-  <target>
-    <path>{self._pool_path}</path>
-  </target>
-</pool>"""
+        <pool type='dir'>
+        <name>{self._pool_name}</name>
+        <target>
+            <path>{self._pool_path}</path>
+        </target>
+        </pool>"""
 
     # --- VM existence and creation ---------------------------------------
 
@@ -298,7 +291,7 @@ class Provider:
             dom.create()
             _log.debug("[+] VM '%s' started", vm_name)
 
-    def shutdown_vm(self, vm_name: str, timeout: int = 90) -> None:
+    def shutdown_vm(self, vm_name: str, timeout: int = 60) -> None:
         """Graceful ACPI shutdown with force-off fallback."""
         conn = self._connect()
         dom = conn.lookupByName(vm_name)
@@ -381,7 +374,7 @@ class Provider:
 
     # --- introspection ---------------------------------------------------
 
-    def get_vm_ip(self, vm_name: str, timeout: int = 120) -> str:
+    def get_vm_ip(self, vm_name: str, timeout: int = 180) -> str:
         """Poll DHCP leases until an IPv4 address appears for the VM."""
         conn = self._connect()
         deadline = time.time() + timeout

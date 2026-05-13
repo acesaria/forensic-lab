@@ -114,10 +114,12 @@ def main() -> None:
     host_cfg = cfg["host"]
     role_defaults = cfg.get("role_defaults") or {}
 
+    network_name = host_cfg["isolated_network_name"]
     provider = Provider(
         libvirt_uri=host_cfg["libvirt_uri"],
         pool_name=host_cfg["pool_name"],
         pool_path=Path(host_cfg["pool_path"]),
+        network_name=network_name,
     )
 
     vm_manager = VMManager(

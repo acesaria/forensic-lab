@@ -106,7 +106,7 @@ class VMManager:
     def start_vm(self, vm_name: str) -> None:
         self._provider.start_vm(vm_name)
 
-    def shutdown_vm(self, vm_name: str, timeout: int = 90) -> None:
+    def shutdown_vm(self, vm_name: str, timeout: int = 60) -> None:
         self._provider.shutdown_vm(vm_name, timeout=timeout)
 
     def destroy_vm(self, vm_name: str) -> None:
@@ -121,7 +121,7 @@ class VMManager:
     def wait_ssh_ready(
         self,
         vm_name: str,
-        timeout: int = 180,
+        timeout: int = 240,
         reason: str = "",
     ) -> str:
         """

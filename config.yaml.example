@@ -5,10 +5,10 @@ host:
   ssh_key: ~/.ssh/forensics-lab
   ssh_pub_key: ~/.ssh/forensics-lab.pub
   libvirt_uri: qemu:///system
+  isolated_network_name: forensics-isolated
   pool_name: forensic-lab-pool
   pool_path: /var/lib/forensic-lab/disks
   images_path: /var/lib/forensic-lab/images
-  shared_dir: ./shared
 
 role_defaults:
   lab:
