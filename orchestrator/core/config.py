@@ -18,6 +18,17 @@ PROFILES_DIR = Path("infra/profiles")
 CLOUD_INIT_DIR = Path("infra/cloud-init")
 CLOUD_INIT_USER_DATA = CLOUD_INIT_DIR / "user-data"
 
+# VM name prefixes -- must match naming convention in README
+LAB_VM_PREFIX = "lab"
+BUILD_VM_PREFIX = "build-isf"
+
+# Baseline acquisition filenames
+BASELINE_MEMORY_FILENAME = "baseline_memory.raw"
+BASELINE_DISK_FILENAME = "baseline_disk.E01"
+
+# Scenario identifiers
+VERIFY_SCENARIO = "verify"
+
 # --- Loaders ---
 
 

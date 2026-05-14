@@ -31,4 +31,4 @@ class SleuthKitRunner:
                 f"mmls probe failed for {disk_path.name}:\n"
                 f"{result.stderr.strip() or '(no output)'}"
             )
-        print(f"[+] Disk probe passed ({disk_path.name})")
+        print(f"[+] Disk probe passed: filesystem readable ({disk_path.name})")

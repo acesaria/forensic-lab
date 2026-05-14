@@ -16,9 +16,7 @@ role_defaults:
     disk_size: 10G
     ram_mb: 2048
     vcpus: 2
-    network: forensics-isolated
   build-isf:
     disk_size: 15G
     ram_mb: 6144
     vcpus: 4
-    network: default
