@@ -44,6 +44,7 @@ class ImageMetadata:
     sha256: str | None
     size_bytes: int | None
     timestamp: float
+    segments: list[str] | None = None
     acquisition_seconds: float | None = None
     virtual_size_bytes: int | None = None
     ewf_size_bytes: int | None = None
@@ -97,6 +98,10 @@ class Dumper:
             )
         if _log.isEnabledFor(logging.DEBUG):
             _log.debug("%s", result.stdout or "")
+
+        if not dest.exists() or dest.stat().st_size == 0:
+            raise RuntimeError("Memory dump failed: output file not created or empty")
+
         elapsed = time.time() - started
         size_bytes = dest.stat().st_size if dest.exists() else None
         subprocess.run(
@@ -194,28 +199,36 @@ class Dumper:
             raise RuntimeError(f"EWF output not found for prefix {prefix}.E??")
 
         for seg in segments:
+            if Path(seg).stat().st_size == 0:
+                raise RuntimeError(f"EWF segment is zero bytes: {seg}")
+
+        for seg in segments:
             subprocess.run(
                 ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", seg],
                 check=True,
             )
 
         elapsed = time.time() - started
+        segment_count = len(segments)
         ewf_size = sum(Path(p).stat().st_size for p in segments)
-        segment_details = ", ".join(
-            f"{Path(seg).name} ({_format_bytes(Path(seg).stat().st_size)})"
-            for seg in segments
-        )
+        ewf_gib = _format_bytes(ewf_size)
+        virtual_gib = _format_bytes(virtual_size)
+
+        if segment_count == 1:
+            seg_info = f"ewf {ewf_gib}"
+        else:
+            seg_info = f"{segment_count} segments, ewf {ewf_gib} total"
+
         _log.info(
-            "[+] Disk acquisition done (%.1fs): %s (%d segment(s)) [virtual=%s, ewf=%s]\nsegments: %s",
+            "[+] Disk acquisition done (%.1fs): %s (virtual %s, %s)",
             elapsed,
-            str(Path(segments[0]).relative_to(self.repo_root)),
-            len(segments),
-            _format_bytes(virtual_size),
-            _format_bytes(ewf_size),
-            segment_details,
+            Path(segments[0]).relative_to(self.repo_root),
+            f"{virtual_gib}" if virtual_gib else "?",
+            seg_info,
         )
         return ImageMetadata(
             path=str(Path(segments[0]).relative_to(self.repo_root)),
+            segments=[str(Path(p).relative_to(self.repo_root)) for p in segments],
             tool="qemu-img convert -O raw && ewfacquire -u -c fast -j 4",
             sha256=self._sha256(Path(segments[0])),
             size_bytes=Path(segments[0]).stat().st_size,
@@ -267,4 +280,7 @@ class Dumper:
             )
             return json.loads(r.stdout).get("virtual-size")
         except Exception:
+            _log.warning(
+                "[!] Could not determine virtual disk size for %s", disk_source
+            )
             return None

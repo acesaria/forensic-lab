@@ -74,9 +74,11 @@ def _setup_logging(debug: bool) -> None:
     console = logging.StreamHandler(sys.stdout)
     console.setLevel(logging.DEBUG if debug else logging.INFO)
     console.setFormatter(logging.Formatter("%(message)s"))
+
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG)
+    root.setLevel(logging.DEBUG if debug else logging.INFO)  # <-- was always DEBUG
     root.addHandler(console)
+
     for noisy in ("paramiko", "ansible", "libvirt", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
@@ -113,6 +115,10 @@ def main() -> None:
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
     role_defaults = cfg.get("role_defaults") or {}
+    for role_key in ("lab", "build-isf"):
+        role_cfg = role_defaults.get(role_key)
+        if isinstance(role_cfg, dict):
+            role_cfg["network"] = host_cfg["isolated_network_name"]
 
     network_name = host_cfg["isolated_network_name"]
     provider = Provider(
@@ -166,13 +172,13 @@ def main() -> None:
                         f"config: distro '{args.distro}' not found: {exc}"
                     ) from exc
 
-                _section("infra")
+                _section("infrastracture")
                 orchestrator.setup_infra()
-                _section("lab VM + baseline")
+                _section("lab VM setup")
                 orchestrator.prepare_lab(distro_id)
-                _section("ISF")
+                _section("volatility symbols")
                 orchestrator.build_isf(distro_id)
-                _section("pipeline verify")
+                _section("pipeline verification")
                 orchestrator.verify_pipeline(distro_id)
                 _log.info("\n[+] Setup complete for '%s'", distro_id)
 

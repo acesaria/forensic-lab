@@ -198,6 +198,6 @@ class VolatilityRunner:
             )
 
         _log.info(
-            "[+] ISF probe passed: linux.pslist.PsList returned %d process(es)",
+            "[+] Memory probe passed: %d process visible (linux.pslist)",
             len(rows_list),
         )

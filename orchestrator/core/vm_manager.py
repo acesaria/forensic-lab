@@ -23,6 +23,7 @@ from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
     CLOUD_INIT_USER_DATA,
     LAB_BASELINE_PLAYBOOK,
+    LAB_VM_PREFIX,
     LAB_USER,
 )
 from orchestrator.core.ssh_client import SSHClient
@@ -196,7 +197,7 @@ class VMManager:
 
         Returns the VM name.
         """
-        vm_name = f"lab-{distro_id}"
+        vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         base_image = self.ensure_base_image(profile)
         self.create_vm(
             role="lab",
@@ -216,7 +217,7 @@ class VMManager:
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         else:
             _log.info(
-                "[i] Snapshot '%s' already on '%s'",
+                "[i] Snapshot '%s' already present on '%s'",
                 BASELINE_SNAPSHOT,
                 vm_name,
             )
@@ -231,7 +232,7 @@ class VMManager:
         Does NOT start the VM. Caller must call start_vm + wait_ssh_ready.
         Returns the VM name.
         """
-        vm_name = f"lab-{distro_id}"
+        vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
             raise RuntimeError(
                 f"No baseline snapshot on '{vm_name}'. Run 'prepare' first."
@@ -246,7 +247,7 @@ class VMManager:
 
     def destroy_lab(self, distro_id: str) -> None:
         """Remove the lab VM and all its storage."""
-        self._provider.destroy_vm(f"lab-{distro_id}")
+        self._provider.destroy_vm(f"{LAB_VM_PREFIX}-{distro_id}")
 
     def close(self) -> None:
         self._provider.close()

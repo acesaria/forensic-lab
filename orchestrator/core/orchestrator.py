@@ -29,6 +29,7 @@ _run_acquisition   ends ON (VM restarted after disk dump)
 run_experiment     ends ON (caller decides when to shut down)
 """
 
+from datetime import datetime
 import importlib
 import json
 import logging
@@ -36,7 +37,16 @@ import time
 from pathlib import Path
 from typing import Any
 
-from orchestrator.core.config import ISF_BUILD_PLAYBOOK, ISF_SHARED_DIR, load_profile
+from orchestrator.core.config import (
+    BASELINE_DISK_FILENAME,
+    BASELINE_MEMORY_FILENAME,
+    BUILD_VM_PREFIX,
+    ISF_BUILD_PLAYBOOK,
+    ISF_SHARED_DIR,
+    LAB_VM_PREFIX,
+    VERIFY_SCENARIO,
+    load_profile,
+)
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics.dumper import Dumper
 from orchestrator.forensics.sleuth_runner import SleuthKitRunner
@@ -99,7 +109,7 @@ class ForensicOrchestrator:
         VM ends OFF. Returns the ISF path.
         """
         profile = load_profile(self.repo_root, distro_id)
-        lab_vm_name = f"lab-{distro_id}"
+        lab_vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
 
         kernel_release = self._detect_kernel_release(lab_vm_name)
 
@@ -109,7 +119,7 @@ class ForensicOrchestrator:
         isf_path = isf_dir / isf_name
 
         if isf_path.exists():
-            _log.info("[i] ISF already present: %s", isf_path.absolute())
+            _log.info("[i] Symbol file already present: %s", isf_path.absolute())
             return isf_path
 
         role_cfg = self._role_defaults.get("build-isf")
@@ -131,7 +141,7 @@ class ForensicOrchestrator:
         return isf_path
 
     def lab_exists(self, distro_id: str) -> bool:
-        return self.vm_manager.vm_exists(f"lab-{distro_id}")
+        return self.vm_manager.vm_exists(f"{LAB_VM_PREFIX}-{distro_id}")
 
     # --- experiment loop -------------------------------------------------
 
@@ -152,7 +162,8 @@ class ForensicOrchestrator:
         """
         _log.info("\n[*] Starting experiment: %s on %s", scenario, distro_id)
         vm_name = self._reset_lab(distro_id)
-        scenario_id = f"{distro_id}__{scenario}__{int(time.time())}"
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        scenario_id = f"{distro_id}_{scenario}_{ts}"
 
         ground_truth = self._run_attack(scenario, vm_name, scenario_id)
         if ground_truth:
@@ -182,7 +193,7 @@ class ForensicOrchestrator:
     # --- private: setup helpers ------------------------------------------
 
     def _detect_kernel_release(self, lab_vm_name: str) -> str:
-        _log.info("[*] Detecting kernel version on %s...", lab_vm_name)
+        _log.info("[*] Detecting kernel on %s...", lab_vm_name)
         self.vm_manager.start_vm(lab_vm_name)
         self.vm_manager.wait_ssh_ready(lab_vm_name, reason="kernel detection")
         with self.vm_manager.open_ssh(lab_vm_name) as ssh:
@@ -203,7 +214,7 @@ class ForensicOrchestrator:
         Create a temporary build VM, run the ISF build playbook, destroy it.
         Lab VM is not touched here.
         """
-        build_vm_name = f"build-isf-{distro_id}"
+        build_vm_name = f"{BUILD_VM_PREFIX}-{distro_id}"
         base_image = self.vm_manager.ensure_base_image(profile)
         self.vm_manager.create_vm(
             role="build-isf",
@@ -244,7 +255,8 @@ class ForensicOrchestrator:
         VM ends OFF.
         """
         vm_name = self._reset_lab(distro_id)
-        scenario_id = f"{distro_id}__verify__{int(time.time())}"
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        scenario_id = f"{distro_id}_{VERIFY_SCENARIO}_{ts}"
 
         manifest_path = self._run_acquisition(vm_name, scenario_id)
 
@@ -255,7 +267,7 @@ class ForensicOrchestrator:
         _log.info("\n[*] Probing acquired images for %s...", distro_id)
         self._vol_runner.probe(memory_path, distro_id)
         self._sleuth_runner.probe(disk_path)
-        _log.info("[+] Pipeline probe passed for '%s'", distro_id)
+        _log.info("[+] Pipeline verified for '%s'", distro_id)
 
     # --- private: experiment helpers -------------------------------------
 
@@ -264,10 +276,9 @@ class ForensicOrchestrator:
         Revert to baseline snapshot, start VM, wait for SSH.
         VM ends ON + SSH ready. Returns vm_name.
         """
-        vm_name = f"lab-{distro_id}"
+        vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         _log.info("[*] Reverting '%s' to baseline snapshot...", vm_name)
         self.vm_manager.revert_to_baseline(distro_id)
-        _log.info("[*] Starting %s after snapshot revert...", vm_name)
         self.vm_manager.start_vm(vm_name)
         self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")
         return vm_name
@@ -279,8 +290,8 @@ class ForensicOrchestrator:
         """
         disk_source = self.vm_manager.get_disk_path(vm_name)
         scenario_dir = self.dumper.scenario_dir(scenario_id)
-        memory_path = scenario_dir / "memory" / "baseline_memory.raw"
-        disk_path = scenario_dir / "disk" / "baseline_disk.E01"
+        memory_path = scenario_dir / "memory" / BASELINE_MEMORY_FILENAME
+        disk_path = scenario_dir / "disk" / BASELINE_DISK_FILENAME
 
         memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
         self.vm_manager.shutdown_vm(vm_name)
