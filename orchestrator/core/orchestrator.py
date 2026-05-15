@@ -36,6 +36,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Any
+from orchestrator.attacks import ATTACK_MODULES
 
 from orchestrator.core.config import (
     BASELINE_DISK_FILENAME,
@@ -48,17 +49,10 @@ from orchestrator.core.config import (
     load_profile,
 )
 from orchestrator.core.vm_manager import VMManager
-from orchestrator.forensics.dumper import Dumper
-from orchestrator.forensics.sleuth_runner import SleuthKitRunner
-from orchestrator.forensics.vol_runner import VolatilityRunner
+from orchestrator.forensics import Dumper
+from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
 
 _log = logging.getLogger(__name__)
-
-ATTACK_MODULES: dict[str, str] = {
-    "ptrace": "orchestrator.attacks.attack_01_ptrace",
-    "metasploit": "orchestrator.attacks.attack_05_metasploit",
-    "kernel": "orchestrator.attacks.attack_06_kernel",
-}
 
 
 class ForensicOrchestrator:

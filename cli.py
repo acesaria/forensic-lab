@@ -10,9 +10,8 @@ from orchestrator.core.bootstrap import run_init
 from orchestrator.core.config import ISF_SHARED_DIR, load_config, load_profile
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.vm_manager import VMManager
-from orchestrator.forensics.dumper import Dumper
-from orchestrator.forensics.sleuth_runner import SleuthKitRunner
-from orchestrator.forensics.vol_runner import VolatilityRunner
+from orchestrator.forensics import Dumper
+from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
 
 _log = logging.getLogger(__name__)
 
