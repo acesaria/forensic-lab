@@ -1,0 +1,4 @@
+libvirt-python
+paramiko
+requests
+pyyaml

@@ -50,39 +50,39 @@ SCENARIO: dict[str, Any] = {
     ],
 }
 
-SCENARIO_2: dict[str, Any] = {
-    "scenario_id": "debian-13_atomic_t1059_simple_bash_20260515-153000",
-    "scenario": {
-        "id": "atomic-T1059.004-simple-bash",
-        "mitre": {
-            "tactic_id": "TA0002",
-            "tactic_name": "Execution",
-            "technique_id": "T1059",
-            "sub_technique_id": "004",
-            "technique_name": "Command and Scripting Interpreter: Bash",
-        },
-    },
-    "iocs": [
-        {
-            "id": "atomic_t1059_marker_process",
-            "type": "process",
-            "attributes": {
-                "name_contains": "bash",
-                "cmdline_contains": "atomic_t1059_marker",
-            },
-            "source_step": "step-1-start-marker-process",
-        },
-        {
-            "id": "atomic_t1059_marker_file",
-            "type": "file",
-            "attributes": {
-                "path": "/tmp/atomic_t1059_file.txt",
-                "content_contains": "atomic_t1059_file_marker",
-            },
-            "source_step": "step-2-create-marker-file",
-        },
-    ],
-}
+# expected_ground_truth =  {
+#     "scenario_id": "debian-13_atomic_t1059_simple_bash_20260515-153000",
+#     "scenario": {
+#         "id": "atomic-T1059.004-simple-bash",
+#         "mitre": {
+#             "tactic_id": "TA0002",
+#             "tactic_name": "Execution",
+#             "technique_id": "T1059",
+#             "sub_technique_id": "004",
+#             "technique_name": "Command and Scripting Interpreter: Bash",
+#         },
+#     },
+#     "iocs": [
+#         {
+#             "id": "atomic_t1059_marker_process",
+#             "type": "process",
+#             "attributes": {
+#                 "name_contains": "bash",
+#                 "cmdline_contains": "atomic_t1059_marker",
+#             },
+#             "source_step": "step-1-start-marker-process",
+#         },
+#         {
+#             "id": "atomic_t1059_marker_file",
+#             "type": "file",
+#             "attributes": {
+#                 "path": "/tmp/atomic_t1059_file.txt",
+#                 "content_contains": "atomic_t1059_file_marker",
+#             },
+#             "source_step": "step-2-create-marker-file",
+#         },
+#     ],
+# }
 
 
 def run(ssh, scenario_id: str) -> dict[str, Any]:
