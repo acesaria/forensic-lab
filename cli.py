@@ -45,13 +45,14 @@ def build_parser() -> argparse.ArgumentParser:
     # run: execute an experiment
     run = sub.add_parser(
         "run",
+        aliases=["run-experiment"],
         help="Run a full experiment: revert, attack, acquire",
     )
     run.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
     run.add_argument(
         "--scenario",
         required=True,
-        choices=["ptrace", "metasploit", "kernel"],
+        choices=["ptrace", "metasploit", "kernel", "art-t1070-003"],
         help="Attack scenario to run",
     )
 
@@ -181,7 +182,7 @@ def main() -> None:
                 orchestrator.verify_pipeline(distro_id)
                 _log.info("\n[+] Setup complete for '%s'", distro_id)
 
-            elif args.command == "run":
+            elif args.command in ("run", "run-experiment"):
                 from orchestrator.core.config import load_profile
 
                 try:
