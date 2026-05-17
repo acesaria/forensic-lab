@@ -1,0 +1,13 @@
+{
+  "scenario_id": "ubuntu-22.04_art-t1070-003_20260517-194011",
+  "scenario": {
+    "id": "art-T1070.003-clear-bash-history-rm",
+    "mitre": {
+      "tactic_id": "TA0005",
+      "tactic_name": "Defense Evasion",
+      "technique_id": "T1070",
+      "sub_technique_id": "003",
+      "technique_name": "Indicator Removal on Host: Clear Command History"
+    }
+  }
+}
