@@ -1,4 +1,4 @@
-"""Atomic Red Team (ART) test runner via atomic-operator and atomic_operator_runner over SSH."""
+"""Atomic Red Team (ART) test runner via atomic-operator over SSH."""
 
 from __future__ import annotations
 
@@ -19,20 +19,12 @@ class ArtRunner:
         ssh_key_path: str | Path,
         atomics_path: Path,
     ) -> None:
-        """
-        Initialize ART runner.
-
-        Args:
-            host: Remote VM IP or hostname.
-            username: SSH username on remote VM.
-            ssh_key_path: Path to SSH private key.
-            atomics_path: Path to atomics directory containing YAML files.
-        """
         self._host = host
         self._username = username
-        self._ssh_key_path = str(Path(ssh_key_path).expanduser())
-        self._private_key_string = Path(self._ssh_key_path).read_text()
-        self._atomics_path = Path(atomics_path)
+        # atomic-operator expects a plain string, not a Path
+        self._ssh_key_path = str(Path(ssh_key_path).expanduser().resolve())
+        # atomics_path must point to the atomics/ directory itself, as a string
+        self._atomics_path = str(Path(atomics_path).expanduser().resolve())
 
     def run_test(
         self,
@@ -40,28 +32,19 @@ class ArtRunner:
         test_guid: str,
         input_arguments: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """
-        Execute a single ART test on the remote VM.
-
-        Args:
-            technique_id: MITRE ATT&CK technique (e.g., "T1059.004").
-            test_guid: UUID of the test within the technique.
-            input_arguments: Optional test input arguments.
-
-        Returns:
-            Dict with keys: guid, name, stdout, stderr.
-        """
+        """Execute a single ART test on the remote VM."""
         test_name = self._get_test_name(technique_id, test_guid)
 
         operator = AtomicOperator()
         operator.run(
             techniques=[technique_id],
             test_guids=[test_guid],
-            atomics_path=str(self._atomics_path),
+            atomics_path=self._atomics_path,
             hosts=[self._host],
             username=self._username,
-            ssh_key_path=None,
-            private_key_string=self._private_key_string,
+            ssh_key_path=self._ssh_key_path,
+            # never pass private_key_string: the PKey() constructor is broken
+            # for Ed25519 keys; key_filename= works correctly in paramiko
             cleanup=False,
             command_timeout=60,
             input_arguments=input_arguments or {},
@@ -80,46 +63,27 @@ class ArtRunner:
         test_guid: str,
         input_arguments: dict[str, str] | None = None,
     ) -> None:
-        """
-        Execute cleanup commands for a test.
-
-        Args:
-            technique_id: MITRE ATT&CK technique (e.g., "T1059.004").
-            test_guid: UUID of the test.
-            input_arguments: Optional cleanup arguments.
-        """
+        """Execute cleanup commands for a test."""
         operator = AtomicOperator()
         operator.run(
             techniques=[technique_id],
             test_guids=[test_guid],
-            atomics_path=str(self._atomics_path),
+            atomics_path=self._atomics_path,
             hosts=[self._host],
             username=self._username,
-            ssh_key_path=None,
-            private_key_string=self._private_key_string,
+            ssh_key_path=self._ssh_key_path,
             cleanup=True,
             command_timeout=60,
             input_arguments=input_arguments or {},
         )
 
     def _get_test_name(self, technique_id: str, test_guid: str) -> str:
-        """
-        Look up test name from YAML metadata.
-
-        Args:
-            technique_id: MITRE ATT&CK technique.
-            test_guid: Test UUID.
-
-        Returns:
-            Test name string, or empty if not found.
-        """
-        path = self._atomics_path / technique_id / f"{technique_id}.yaml"
+        """Look up test name from YAML metadata."""
+        path = Path(self._atomics_path) / technique_id / f"{technique_id}.yaml"
         if not path.exists():
             return ""
-
         data = yaml.safe_load(path.read_text()) or {}
         for test in data.get("atomic_tests", []):
             if test.get("auto_generated_guid") == test_guid:
                 return test.get("name", "")
-
         return ""
