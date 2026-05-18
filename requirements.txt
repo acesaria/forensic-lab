@@ -1,10 +1,10 @@
 # atomic red team execution
-atomic-operator==0.9.0
-atomic-operator-runner==0.2.1
+atomic-operator
+atomic-operator-runner
 # paramiko is intentionally installed above the <3.0.0 pin declared by
 # atomic-operator-runner; setup-venv.sh patches the metadata after install.
 # The SSH client API used by atomic-operator-runner is unchanged in 3.x/5.x.
-paramiko>=3.0
+paramiko==2.11.0
 
 # forensic orchestration
 pyyaml>=6.0
