@@ -22,6 +22,9 @@ CLOUD_INIT_USER_DATA = CLOUD_INIT_DIR / "user-data"
 LAB_VM_PREFIX = "lab"
 BUILD_VM_PREFIX = "build-isf"
 
+# Atomic Red Team atomics directory
+ATOMICS_DIR = "atomics"
+
 # Baseline acquisition filenames
 BASELINE_MEMORY_FILENAME = "baseline_memory.raw"
 BASELINE_DISK_FILENAME = "baseline_disk.E01"

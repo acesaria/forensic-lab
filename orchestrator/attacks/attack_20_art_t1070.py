@@ -36,7 +36,12 @@ def run(ssh: SSHClient, scenario_id: str) -> dict:
     atomics_path = repo_root / "atomics"
     test_guid = _resolve_test_guid(atomics_path)
 
-    runner = ArtRunner(ssh, atomics_path)
+    runner = ArtRunner(
+        host=ssh._ip,
+        username=ssh._user,
+        ssh_key_path=ssh._key_path,
+        atomics_path=atomics_path,
+    )
     runner.run_test("T1070.003", test_guid)
     runner.run_cleanup("T1070.003", test_guid)
 
