@@ -1,18 +1,21 @@
 """
-Very simple Atomic-style scenario based on ATT&CK T1059.004 (Bash).
-The goal is to:
-- spawn a long-lived process with a recognizable command line;
-- create a marker file on disk;
-- return ground truth for those IOCs.
+ART-based scenario for ATT&CK T1059.004 (Command and Scripting Interpreter: Bash).
+Executes real ART tests from atomics/T1059.004/T1059.004.yaml via atomic-operator.
 """
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-# This is intentionally very close to an Atomic "atomic_test", but simplified.
+import yaml
+
+from orchestrator.core.art_runner import ArtRunner
+from orchestrator.core.config import ATOMICS_DIR
+from orchestrator.core.ssh_client import SSHClient
+
 SCENARIO: dict[str, Any] = {
-    "id": "atomic-T1059.004-simple-bash",
+    "id": "atomic-T1059.004-bash",
     "mitre": {
         "tactic_id": "TA0002",
         "tactic_name": "Execution",
@@ -20,115 +23,84 @@ SCENARIO: dict[str, Any] = {
         "sub_technique_id": "004",
         "technique_name": "Command and Scripting Interpreter: Bash",
     },
-    "steps": [
-        {
-            "id": "step-1-start-marker-process",
-            "description": "Start a long-lived bash loop as a marker process.",
-            "command": (
-                "nohup bash -c '"
-                'while true; do echo "atomic_t1059_marker" >/tmp/atomic_t1059_marker.log; '
-                "sleep 60; "
-                "done"
-                "' >/tmp/atomic_t1059_nohup.out 2>&1 &"
-            ),
-            "mitre": {
-                "tactic_id": "TA0002",
-                "technique_id": "T1059",
-                "sub_technique_id": "004",
-            },
-        },
-        {
-            "id": "step-2-create-marker-file",
-            "description": "Create a static marker file on disk.",
-            "command": "echo 'atomic_t1059_file_marker' > /tmp/atomic_t1059_file.txt",
-            "mitre": {
-                "tactic_id": "TA0002",
-                "technique_id": "T1059",
-                "sub_technique_id": "004",
-            },
-        },
-    ],
 }
 
-# expected_ground_truth =  {
-#     "scenario_id": "debian-13_atomic_t1059_simple_bash_20260515-153000",
-#     "scenario": {
-#         "id": "atomic-T1059.004-simple-bash",
-#         "mitre": {
-#             "tactic_id": "TA0002",
-#             "tactic_name": "Execution",
-#             "technique_id": "T1059",
-#             "sub_technique_id": "004",
-#             "technique_name": "Command and Scripting Interpreter: Bash",
-#         },
-#     },
-#     "iocs": [
-#         {
-#             "id": "atomic_t1059_marker_process",
-#             "type": "process",
-#             "attributes": {
-#                 "name_contains": "bash",
-#                 "cmdline_contains": "atomic_t1059_marker",
-#             },
-#             "source_step": "step-1-start-marker-process",
-#         },
-#         {
-#             "id": "atomic_t1059_marker_file",
-#             "type": "file",
-#             "attributes": {
-#                 "path": "/tmp/atomic_t1059_file.txt",
-#                 "content_contains": "atomic_t1059_file_marker",
-#             },
-#             "source_step": "step-2-create-marker-file",
-#         },
-#     ],
-# }
 
-
-def run(ssh, scenario_id: str) -> dict[str, Any]:
+def _select_tests(atomics_path: Path) -> list[str]:
     """
-    Execute the scenario steps over SSH and return ground truth.
-
-    Ground truth is minimal but structured so it can be matched later
-    against Volatility3 and Sleuth Kit output.
+    Select 2 simple Linux-compatible ART tests that don't require external downloads.
+    Returns list of test GUIDs.
     """
-    for step in SCENARIO["steps"]:
-        ssh.run_checked(step["command"])
+    path = atomics_path / "T1059.004" / "T1059.004.yaml"
+    data = yaml.safe_load(path.read_text()) or {}
+    tests = data.get("atomic_tests", [])
 
-    # We do not resolve PIDs here; that will be done from memory later.
+    selected = []
+    for test in tests:
+        platforms = test.get("supported_platforms", [])
+        if "linux" not in platforms:
+            continue
+
+        deps = test.get("dependencies", [])
+        if deps:
+            continue
+
+        cmd = test.get("executor", {}).get("command", "")
+        if "curl" in cmd or "wget" in cmd or "http" in cmd:
+            continue
+
+        guid = test.get("auto_generated_guid")
+        if guid:
+            selected.append(guid)
+            if len(selected) >= 2:
+                break
+
+    return selected
+
+
+def run(ssh: SSHClient, scenario_id: str) -> dict[str, Any]:
+    """
+    Execute ART T1059.004 tests over SSH via atomic-operator.
+
+    Args:
+        ssh: Connected SSH client.
+        scenario_id: Scenario execution identifier.
+
+    Returns:
+        Ground truth dict with scenario metadata and executed tests.
+    """
+    repo_root = Path(__file__).resolve().parents[2]
+    atomics_path = repo_root / ATOMICS_DIR
+
+    runner = ArtRunner(
+        host=ssh._ip,
+        username=ssh._user,
+        ssh_key_path=ssh._key_path,
+        atomics_path=atomics_path,
+    )
+
+    test_guids = _select_tests(atomics_path)
+
+    tests_run: list[dict[str, Any]] = []
+    for guid in test_guids:
+        result = runner.run_test("T1059.004", guid)
+        tests_run.append(
+            {
+                "guid": result["guid"],
+                "name": result["name"],
+                "technique": "T1059.004",
+                "stdout": result["stdout"],
+                "stderr": result["stderr"],
+            }
+        )
+
     ground_truth: dict[str, Any] = {
         "scenario_id": scenario_id,
         "scenario": {
             "id": SCENARIO["id"],
             "mitre": SCENARIO["mitre"],
         },
-        "iocs": [
-            {
-                "id": "atomic_t1059_marker_process",
-                "type": "process",
-                "attributes": {
-                    "name_contains": "bash",
-                    "cmdline_contains": "atomic_t1059_marker",
-                },
-                "source_step": "step-1-start-marker-process",
-            },
-            {
-                "id": "atomic_t1059_marker_file",
-                "type": "file",
-                "attributes": {
-                    "path": "/tmp/atomic_t1059_file.txt",
-                    "content_contains": "atomic_t1059_file_marker",
-                },
-                "source_step": "step-2-create-marker-file",
-            },
-            {
-                "id": "atomic_t1059_log_file",
-                "type": "file",
-                "attributes": {
-                    "path": "/tmp/atomic_t1059_marker.log",
-                },
-                "source_step": "step-1-start-marker-process",
-            },
-        ],
+        "tests_run": tests_run,
     }
+
     return ground_truth
