@@ -1,16 +1,18 @@
-"""Atomic Red Team (ART) test runner via atomic-operator over SSH."""
+"""Atomic Red Team test runner using atomic-operator CLI via subprocess."""
 
 from __future__ import annotations
 
+import json
+import logging
+import subprocess
 from pathlib import Path
 from typing import Any
 
-import yaml
-from atomic_operator import AtomicOperator
+_log = logging.getLogger(__name__)
 
 
 class ArtRunner:
-    """Thin adapter over atomic-operator for executing ART tests via SSH."""
+    """Executes ART tests via atomic-operator CLI subprocess wrapper."""
 
     def __init__(
         self,
@@ -18,43 +20,98 @@ class ArtRunner:
         username: str,
         ssh_key_path: str | Path,
         atomics_path: Path,
+        art_bin: str = ".venv-art/bin/atomic-operator",
     ) -> None:
         self._host = host
         self._username = username
-        # atomic-operator expects a plain string, not a Path
         self._ssh_key_path = str(Path(ssh_key_path).expanduser().resolve())
-        # atomics_path must point to the atomics/ directory itself, as a string
         self._atomics_path = str(Path(atomics_path).expanduser().resolve())
+        self._art_bin = art_bin
 
     def run_test(
         self,
         technique_id: str,
         test_guid: str,
         input_arguments: dict[str, str] | None = None,
+        cleanup: bool = False,
     ) -> dict[str, Any]:
-        """Execute a single ART test on the remote VM."""
-        test_name = self._get_test_name(technique_id, test_guid)
+        """
+        Execute an ART test via atomic-operator CLI.
 
-        operator = AtomicOperator()
-        operator.run(
-            techniques=[technique_id],
-            test_guids=[test_guid],
-            atomics_path=self._atomics_path,
-            hosts=[self._host],
-            username=self._username,
-            ssh_key_path=self._ssh_key_path,
-            # never pass private_key_string: the PKey() constructor is broken
-            # for Ed25519 keys; key_filename= works correctly in paramiko
-            cleanup=False,
-            command_timeout=60,
-            input_arguments=input_arguments or {},
-        )
+        Args:
+            technique_id: e.g., "T1059.004"
+            test_guid: Test GUID from YAML
+            input_arguments: Optional override arguments
+            cleanup: If True, run cleanup instead of test
+
+        Returns:
+            Dict with guid, name, stdout, stderr, and full result
+
+        Raises:
+            RuntimeError: If subprocess fails and no JSON found
+        """
+        cmd = [
+            self._art_bin,
+            "run",
+            "--techniques",
+            technique_id,
+            "--test-guids",
+            test_guid,
+            "--atomics-path",
+            self._atomics_path,
+            "--hosts",
+            self._host,
+            "--username",
+            self._username,
+            "--ssh-key-path",
+            self._ssh_key_path,
+            "--cleanup",
+            str(cleanup),
+            "--command-timeout",
+            "60",
+        ]
+
+        if input_arguments:
+            for name, value in input_arguments.items():
+                cmd.extend(["--input-argument", f"{name}={value}"])
+
+        _log.debug("[*] Running: %s", " ".join(cmd))
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(f"atomic-operator timed out after 120s: {exc}") from exc
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                f"atomic-operator binary not found: {self._art_bin}"
+            ) from exc
+
+        if result.returncode != 0:
+            _log.warning("[!] atomic-operator exit code: %d", result.returncode)
+            _log.debug("[!] stderr: %s", result.stderr)
+
+        parsed_result = self._parse_json_result(result.stdout, test_guid)
+        if parsed_result is None:
+            parsed_result = {}
+
+        if result.returncode != 0 and not parsed_result:
+            raise RuntimeError(
+                f"atomic-operator failed with exit code {result.returncode}. "
+                f"stderr: {result.stderr}"
+            )
 
         return {
             "guid": test_guid,
-            "name": test_name,
-            "stdout": "",
-            "stderr": "",
+            "name": parsed_result.get("name", ""),
+            "stdout": result.stdout,
+            "stderr": result.stderr,
+            "result": parsed_result,
         }
 
     def run_cleanup(
@@ -63,27 +120,34 @@ class ArtRunner:
         test_guid: str,
         input_arguments: dict[str, str] | None = None,
     ) -> None:
-        """Execute cleanup commands for a test."""
-        operator = AtomicOperator()
-        operator.run(
-            techniques=[technique_id],
-            test_guids=[test_guid],
-            atomics_path=self._atomics_path,
-            hosts=[self._host],
-            username=self._username,
-            ssh_key_path=self._ssh_key_path,
+        """Run cleanup for a test (calls run_test with cleanup=True)."""
+        self.run_test(
+            technique_id,
+            test_guid,
+            input_arguments=input_arguments,
             cleanup=True,
-            command_timeout=60,
-            input_arguments=input_arguments or {},
         )
 
-    def _get_test_name(self, technique_id: str, test_guid: str) -> str:
-        """Look up test name from YAML metadata."""
-        path = Path(self._atomics_path) / technique_id / f"{technique_id}.yaml"
-        if not path.exists():
-            return ""
-        data = yaml.safe_load(path.read_text()) or {}
-        for test in data.get("atomic_tests", []):
-            if test.get("auto_generated_guid") == test_guid:
-                return test.get("name", "")
-        return ""
+    @staticmethod
+    def _parse_json_result(stdout: str, test_guid: str) -> dict[str, Any] | None:
+        """
+        Parse JSON result from atomic-operator stdout.
+
+        The output format is: <guid> <json_object>
+        Returns the parsed JSON object or None if not found.
+        """
+        for line in stdout.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith(test_guid):
+                json_part = line[len(test_guid) :].strip()
+                if json_part:
+                    try:
+                        return json.loads(json_part)
+                    except json.JSONDecodeError as exc:
+                        _log.warning("[!] Failed to parse JSON: %s", exc)
+                        return None
+
+        return None

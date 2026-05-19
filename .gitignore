@@ -22,6 +22,7 @@ node_modules/
 venv/
 env/
 .venv/
+.venv-art/
 dist/
 build/
 .cache/

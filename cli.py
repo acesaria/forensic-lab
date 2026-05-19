@@ -2,10 +2,12 @@
 
 import argparse
 import logging
+import shutil
 import sys
 from pathlib import Path
 
 from infra.provider import Provider
+from orchestrator.attacks import ALL_SCENARIOS
 from orchestrator.core.bootstrap import run_init
 from orchestrator.core.config import ISF_SHARED_DIR, load_config, load_profile
 from orchestrator.core.orchestrator import ForensicOrchestrator
@@ -45,14 +47,13 @@ def build_parser() -> argparse.ArgumentParser:
     # run: execute an experiment
     run = sub.add_parser(
         "run",
-        aliases=["run-experiment"],
         help="Run a full experiment: revert, attack, acquire",
     )
     run.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
     run.add_argument(
         "--scenario",
         required=True,
-        choices=["ptrace", "metasploit", "kernel", "art-t1070-003"],
+        choices=ALL_SCENARIOS,
         help="Attack scenario to run",
     )
 
@@ -84,8 +85,6 @@ def _setup_logging(debug: bool) -> None:
 
 
 def _check_prerequisites() -> None:
-    import shutil
-
     required = {
         "virsh": "libvirt-clients",
         "virt-install": "virtinst",
@@ -163,8 +162,6 @@ def main() -> None:
                 orchestrator.setup_infra()
 
             elif args.command == "setup":
-                from orchestrator.core.config import load_profile
-
                 try:
                     load_profile(repo_root, args.distro)
                 except (KeyError, FileNotFoundError, ValueError) as exc:
@@ -182,9 +179,7 @@ def main() -> None:
                 orchestrator.verify_pipeline(distro_id)
                 _log.info("\n[+] Setup complete for '%s'", distro_id)
 
-            elif args.command in ("run", "run-experiment"):
-                from orchestrator.core.config import load_profile
-
+            elif args.command == "run":
                 try:
                     load_profile(repo_root, args.distro)
                 except (KeyError, FileNotFoundError, ValueError) as exc:
