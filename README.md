@@ -180,6 +180,32 @@ This is handled automatically when a matching ISF file is missing. It only runs 
 
 ---
 
+## Setup
+
+### Atomic Red Team (ART)
+
+The lab uses Atomic Red Team for attack scenarios. Before running ART-based experiments:
+
+1. Clone the atomic-operator repository:
+
+```bash
+git clone https://github.com/swimlane/atomic-operator.git /path/to/atomic-operator
+```
+
+2. Run the setup script to create an isolated `.venv-art/` environment:
+
+```bash
+./setup-venv-art.sh /path/to/atomic-operator
+```
+
+The script is idempotent — run it again without consequence if `.venv-art` already exists.
+
+**Why the patch:** The atomic-operator library has an unfixed upstream bug in `models.py` where `Base.get_abs_path()` is called as a class method instead of an instance method. The setup script applies this patch automatically.
+
+**TripleDES deprecation warnings:** You may see OpenSSL warnings about deprecated TripleDES ciphers during execution. These are harmless and can be ignored.
+
+---
+
 ## Prerequisites
 
 On the host machine:

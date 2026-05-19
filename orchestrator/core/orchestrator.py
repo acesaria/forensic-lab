@@ -36,7 +36,8 @@ import logging
 import time
 from pathlib import Path
 from typing import Any
-from orchestrator.attacks import ATTACK_MODULES
+
+from orchestrator.attacks import ATTACK_MODULES, ART_SCENARIOS, attack_art
 
 from orchestrator.core.config import (
     BASELINE_DISK_FILENAME,
@@ -294,10 +295,15 @@ class ForensicOrchestrator:
         return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
 
     def _run_attack(self, scenario: str, vm_name: str, scenario_id: str) -> dict | None:
+        if scenario in ART_SCENARIOS:
+            with self.vm_manager.open_ssh(vm_name) as ssh:
+                return attack_art.run(ssh, scenario_id, config=ART_SCENARIOS[scenario])
+
         module_path = ATTACK_MODULES.get(scenario)
         if not module_path:
             raise ValueError(
-                f"Unknown scenario '{scenario}'. " f"Available: {list(ATTACK_MODULES)}"
+                f"Unknown scenario '{scenario}'. "
+                f"Available: {list(ATTACK_MODULES) + list(ART_SCENARIOS)}"
             )
         module = importlib.import_module(module_path)
         with self.vm_manager.open_ssh(vm_name) as ssh:
