@@ -1,0 +1,10 @@
+# ART scenarios. technique_id and test_guid are required.
+# cleanup is optional, default false.
+art-t1070-003:
+  technique_id: T1070.003
+  test_guid: cbf506a5-dd78-43e5-be7e-a46b7c7a0a11
+  cleanup: false
+
+atomic-t1059-simple-bash:
+  technique_id: T1059.004
+  test_guid: ""   # empty = run all guids found in atomics YAML

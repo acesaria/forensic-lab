@@ -30,14 +30,10 @@ run_experiment     ends ON (caller decides when to shut down)
 """
 
 from datetime import datetime
-import importlib
 import json
 import logging
-import time
 from pathlib import Path
-from typing import Any
-
-from orchestrator.attacks import ATTACK_MODULES, ART_SCENARIOS, attack_art
+from typing import Any, Callable
 
 from orchestrator.core.config import (
     BASELINE_DISK_FILENAME,
@@ -50,6 +46,7 @@ from orchestrator.core.config import (
     load_profile,
 )
 from orchestrator.core.vm_manager import VMManager
+from orchestrator.attacks import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
 
@@ -60,6 +57,7 @@ class ForensicOrchestrator:
     def __init__(
         self,
         vm_manager: VMManager,
+        art_runner: ArtRunner,
         dumper: Dumper,
         vol_runner: VolatilityRunner,
         sleuth_runner: SleuthKitRunner,
@@ -68,6 +66,7 @@ class ForensicOrchestrator:
         role_defaults: dict[str, Any],
     ) -> None:
         self.vm_manager = vm_manager
+        self._art_runner = art_runner
         self.dumper = dumper
         self._vol_runner = vol_runner
         self._sleuth_runner = sleuth_runner
@@ -143,7 +142,7 @@ class ForensicOrchestrator:
     def run_experiment(
         self,
         distro_id: str,
-        scenario: str,
+        scenario_cfg: dict[str, Any],
         acquire: bool = True,
     ) -> str | None:
         """
@@ -155,12 +154,19 @@ class ForensicOrchestrator:
         VM ends OFF after acquisition.
         Returns manifest path if acquired, else None.
         """
-        _log.info("\n[*] Starting experiment: %s on %s", scenario, distro_id)
+        scenario_id = scenario_cfg["technique_id"]
+        _log.info("\n[*] Starting experiment: %s on %s", scenario_id, distro_id)
         vm_name = self._reset_lab(distro_id)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        scenario_id = f"{distro_id}_{scenario}_{ts}"
+        scenario_ts = f"{distro_id}_{scenario_id}_{ts}"
 
-        ground_truth = self._run_attack(scenario, vm_name, scenario_id)
+        with self.vm_manager.open_ssh(vm_name) as ssh:
+            ground_truth = self._art_runner.run_test(
+                ssh._ip,
+                scenario_id,
+                scenario_cfg["test_guid"],
+                cleanup=scenario_cfg["cleanup"],
+            )
         if ground_truth:
             gt_path = self.results_path / f"gt_{scenario_id}.json"
             gt_path.write_text(json.dumps(ground_truth, indent=2))
@@ -293,21 +299,6 @@ class ForensicOrchestrator:
         disk_meta = self.dumper.acquire_disk(vm_name, disk_source, disk_path)
 
         return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
-
-    def _run_attack(self, scenario: str, vm_name: str, scenario_id: str) -> dict | None:
-        if scenario in ART_SCENARIOS:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                return attack_art.run(ssh, scenario_id, config=ART_SCENARIOS[scenario])
-
-        module_path = ATTACK_MODULES.get(scenario)
-        if not module_path:
-            raise ValueError(
-                f"Unknown scenario '{scenario}'. "
-                f"Available: {list(ATTACK_MODULES) + list(ART_SCENARIOS)}"
-            )
-        module = importlib.import_module(module_path)
-        with self.vm_manager.open_ssh(vm_name) as ssh:
-            return module.run(ssh, scenario_id)
 
 
 # --- module helpers ------------------------------------------------------
