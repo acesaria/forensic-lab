@@ -2,7 +2,7 @@
 # cleanup is optional, default false.
 art-t1070-003:
   technique_id: T1070.003
-  test_guid: 5f8abd62-f615-43c5-b6be-f780f25790a1
+  test_guid: a934276e-2be5-4a36-93fd-98adbb5bd4fc #5f8abd62-f615-43c5-b6be-f780f25790a1
   cleanup: false
 
   

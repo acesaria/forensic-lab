@@ -140,9 +140,6 @@ def main() -> None:
         repo_root=repo_root,
     )
 
-    art_runner = ArtRunner(
-        LAB_USER, host_cfg["ssh_key"], host_cfg["atomics_path"], host_cfg["atomics_bin"]
-    )
     dumper = Dumper(repo_root)
     results_path = Path(host_cfg["shared_dir"]).expanduser() / "results"
 
@@ -157,11 +154,11 @@ def main() -> None:
     try:
         with ForensicOrchestrator(
             vm_manager=vm_manager,
-            art_runner=art_runner,
             dumper=dumper,
             vol_runner=vol_runner,
             sleuth_runner=sleuth_runner,
             repo_root=repo_root,
+            atomic_path=host_cfg["atomics_path"],
             results_path=results_path,
             role_defaults=role_defaults,
         ) as orchestrator:
@@ -208,7 +205,7 @@ def main() -> None:
 
                 elif "technique_id" in scenario_cfg:
                     ## run_experiment()
-                    orchestrator.run_experiment(distro_id, scenario_cfg)
+                    orchestrator.run_experiment(distro_id, scenario_cfg, acquire=False)
 
                 else:
                     raise RuntimeError(f"Invalid scenario config for '{args.scenario}'")

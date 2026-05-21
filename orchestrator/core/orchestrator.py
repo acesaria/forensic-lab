@@ -57,20 +57,20 @@ class ForensicOrchestrator:
     def __init__(
         self,
         vm_manager: VMManager,
-        art_runner: ArtRunner,
         dumper: Dumper,
         vol_runner: VolatilityRunner,
         sleuth_runner: SleuthKitRunner,
         repo_root: Path,
+        atomic_path: Path,
         results_path: Path,
         role_defaults: dict[str, Any],
     ) -> None:
         self.vm_manager = vm_manager
-        self._art_runner = art_runner
         self.dumper = dumper
         self._vol_runner = vol_runner
         self._sleuth_runner = sleuth_runner
         self.repo_root = repo_root
+        self.atomic_path = atomic_path
         self.results_path = results_path
         self.results_path.mkdir(parents=True, exist_ok=True)
         self._role_defaults = role_defaults
@@ -155,22 +155,21 @@ class ForensicOrchestrator:
         Returns manifest path if acquired, else None.
         """
         scenario_id = scenario_cfg["technique_id"]
+        test_guid = scenario_cfg["test_guid"]
         _log.info("\n[*] Starting experiment: %s on %s", scenario_id, distro_id)
         vm_name = self._reset_lab(distro_id)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         scenario_ts = f"{distro_id}_{scenario_id}_{ts}"
 
+        ip = self.vm_manager.wait_ssh_ready(vm_name, reason="before attack scenario")
+
         with self.vm_manager.open_ssh(vm_name) as ssh:
-            ground_truth = self._art_runner.run_test(
-                ssh._ip,
-                scenario_id,
-                scenario_cfg["test_guid"],
-                cleanup=scenario_cfg["cleanup"],
-            )
-        if ground_truth:
-            gt_path = self.results_path / f"gt_{scenario_ts}.json"
-            gt_path.write_text(json.dumps(ground_truth, indent=2))
-            _log.info("[+] Ground truth saved: %s", gt_path)
+
+            runner = ArtRunner(ssh, self.atomic_path)
+            ground_truth = runner.run_test(scenario_id, test_guid, raise_on_error=False)
+
+            print("\n=== GROUND TRUTH ===")
+            print(ground_truth)
 
         if acquire:
             return self._run_acquisition(vm_name, scenario_ts)
