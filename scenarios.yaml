@@ -2,9 +2,10 @@
 # cleanup is optional, default false.
 art-t1070-003:
   technique_id: T1070.003
-  test_guid: cbf506a5-dd78-43e5-be7e-a46b7c7a0a11
+  test_guid: 5f8abd62-f615-43c5-b6be-f780f25790a1
   cleanup: false
 
+  
 atomic-t1059-simple-bash:
   technique_id: T1059.004
   test_guid: ""   # empty = run all guids found in atomics YAML

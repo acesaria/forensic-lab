@@ -168,12 +168,12 @@ class ForensicOrchestrator:
                 cleanup=scenario_cfg["cleanup"],
             )
         if ground_truth:
-            gt_path = self.results_path / f"gt_{scenario_id}.json"
+            gt_path = self.results_path / f"gt_{scenario_ts}.json"
             gt_path.write_text(json.dumps(ground_truth, indent=2))
             _log.info("[+] Ground truth saved: %s", gt_path)
 
         if acquire:
-            return self._run_acquisition(vm_name, scenario_id)
+            return self._run_acquisition(vm_name, scenario_ts)
         return None
 
     # --- teardown --------------------------------------------------------

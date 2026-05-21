@@ -36,5 +36,17 @@ fi
 
 sed -i 's/Base\.get_abs_path(value)/os.path.abspath(os.path.expanduser(os.path.expandvars(value)))/' "$MODELS_PATH"
 
+PROCESSOR=".venv-art/lib/python3.$(python3 -c 'import sys; print(sys.version_info.minor)')/site-packages/atomic_operator_runner/processor.py"
+
+python3 - "$PROCESSOR" <<'EOF'
+import sys
+path = sys.argv[1]
+src = open(path).read()
+old = "        if not isinstance(record, list):\n            record = [record]\n        if not self.response.records:"
+new = "        if not isinstance(record, list):\n            record = [record]\n        record = [r for r in record if r is not None]\n        if not self.response.records:"
+open(path, "w").write(src.replace(old, new))
+print(f"Patched {path}")
+EOF
+
 touch "$MARKER_FILE"
 echo "[+] .venv-art ready"
