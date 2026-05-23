@@ -9,3 +9,10 @@ art-t1070-003:
 atomic-t1059-simple-bash:
   technique_id: T1059.004
   test_guid: ""   # empty = run all guids found in atomics YAML
+
+scenario-01-ldpreload:
+  type: complex
+  module: orchestrator.attacks.scenario_01_ldpreload
+  run_cleanup: false   # set true to test cleanup path; false to preserve
+
+  
