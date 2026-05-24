@@ -182,27 +182,18 @@ This is handled automatically when a matching ISF file is missing. It only runs 
 
 ## Setup
 
-### Atomic Red Team (ART)
-
-The lab uses Atomic Red Team for attack scenarios. Before running ART-based experiments:
-
-1. Clone the atomic-operator repository:
+### Python environment
 
 ```bash
-git clone https://github.com/swimlane/atomic-operator.git /path/to/atomic-operator
+./setup-venv.sh
+source .venv/bin/activate
 ```
 
-2. Run the setup script to create an isolated `.venv-art/` environment:
+That's the whole setup. No `atomic-operator`, no patched virtualenv — ART tests are driven by an in-tree runner (`orchestrator/attacks/art_runner.py`) that parses the technique YAML directly and runs the executor over SSH.
 
-```bash
-./setup-venv-art.sh /path/to/atomic-operator
-```
+### Atomic Red Team test YAMLs
 
-The script is idempotent — run it again without consequence if `.venv-art` already exists.
-
-**Why the patch:** The atomic-operator library has an unfixed upstream bug in `models.py` where `Base.get_abs_path()` is called as a class method instead of an instance method. The setup script applies this patch automatically.
-
-**TripleDES deprecation warnings:** You may see OpenSSL warnings about deprecated TripleDES ciphers during execution. These are harmless and can be ignored.
+ART YAMLs live under `vendor/atomic-red-team/atomics/`, vendored as a slimmed copy of the upstream repo (atomics + LICENSE only). `config.yaml` points `atomics_path` at that directory; the runner looks up tests by `T<id>/T<id>.yaml`.
 
 ---
 
@@ -240,3 +231,9 @@ A few things that guided the architecture choices:
 **Ephemeral build VMs.** The `build-isf` VM is created and destroyed in a single session. It never accumulates state and doesn't need to be managed.
 
 ---
+
+## Atomic Red Team
+
+`vendor/atomic-red-team/atomics/` contains the ART technique YAMLs (plus `LICENSE.txt`), copied from [redcanaryco/atomic-red-team](https://github.com/redcanaryco/atomic-red-team). Only the `atomics/` tree and license are vendored — the rest of the upstream repo (gemspec, poetry config, bin scripts, etc.) is not used by this project and is intentionally excluded.
+
+To refresh against upstream, manually overwrite `vendor/atomic-red-team/atomics/` from a fresh clone of the upstream repo and commit the diff.

@@ -1,29 +1,22 @@
 """CLI entry point for forensic-lab."""
 
 import argparse
-import importlib
 import logging
 import shutil
 import sys
 from pathlib import Path
 
-import yaml
-
 from infra.provider import Provider
-from orchestrator.attacks.art_runner import ArtRunner
 from orchestrator.core.bootstrap import run_init
-from orchestrator.core.config import ISF_SHARED_DIR, LAB_USER, load_config, load_profile
+from orchestrator.core.config import load_config, load_profile, load_scenarios
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.vm_manager import VMManager
-from orchestrator.forensics import Dumper
-from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
+from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
 
 _log = logging.getLogger(__name__)
-_SCENARIOS = yaml.safe_load(Path("scenarios.yaml").read_text()) or {}
-_SCENARIO_KEYS = tuple(sorted(_SCENARIOS.keys()))
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forensic-lab",
         description="Reproducible Linux attack reconstruction lab.",
@@ -58,8 +51,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--scenario",
         required=True,
-        choices=_SCENARIO_KEYS,
+        choices=scenario_keys,
         help="Attack scenario to run",
+    )
+    run.add_argument(
+        "--acquire",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Acquire memory + disk after the scenario (default: enabled)",
     )
 
     # destroy: remove lab VM and storage
@@ -110,12 +109,16 @@ def _check_prerequisites() -> None:
 
 
 def main() -> None:
-    args = build_parser().parse_args()
+    repo_root = Path(__file__).resolve().parent
+    scenarios = load_scenarios(repo_root)
+    args = build_parser(tuple(sorted(scenarios.keys()))).parse_args()
     _setup_logging(args.debug)
     _check_prerequisites()
     if args.debug:
         _log.info("[i] Debug mode on")
-    repo_root = Path(__file__).resolve().parent
+
+    # All host path fields are absolute Paths after load_config(); no further
+    # normalization is needed downstream. See orchestrator/core/config.py.
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
     role_defaults = cfg.get("role_defaults") or {}
@@ -124,28 +127,27 @@ def main() -> None:
         if isinstance(role_cfg, dict):
             role_cfg["network"] = host_cfg["isolated_network_name"]
 
-    network_name = host_cfg["isolated_network_name"]
     provider = Provider(
         libvirt_uri=host_cfg["libvirt_uri"],
         pool_name=host_cfg["pool_name"],
-        pool_path=Path(host_cfg["pool_path"]),
-        network_name=network_name,
+        pool_path=host_cfg["pool_path"],
+        network_name=host_cfg["isolated_network_name"],
     )
 
     vm_manager = VMManager(
         provider=provider,
-        images_path=Path(host_cfg["images_path"]),
+        images_path=host_cfg["images_path"],
         ssh_key=host_cfg["ssh_key"],
         ssh_pub_key=host_cfg["ssh_pub_key"],
         repo_root=repo_root,
     )
 
-    dumper = Dumper(repo_root)
-    results_path = Path(host_cfg["shared_dir"]).expanduser() / "results"
+    # shared_dir is the single root for all derived output locations.
+    shared_dir = host_cfg["shared_dir"]
+    dumps_dir = shared_dir / "dumps"
+    isf_dir = shared_dir / "isf"
 
-    # VolatilityRunner is always constructible -- only validates the binary.
-    # ISF lookup happens at call time inside VolatilityRunner via distro_id.
-    isf_dir = repo_root / ISF_SHARED_DIR
+    dumper = Dumper(repo_root, dumps_dir)
     vol_runner = VolatilityRunner.from_config(host_cfg, isf_dir)
     sleuth_runner = SleuthKitRunner.from_config(host_cfg)
 
@@ -158,8 +160,8 @@ def main() -> None:
             vol_runner=vol_runner,
             sleuth_runner=sleuth_runner,
             repo_root=repo_root,
-            atomic_path=host_cfg["atomics_path"],
-            results_path=results_path,
+            atomics_path=host_cfg["atomics_path"],
+            isf_dir=isf_dir,
             role_defaults=role_defaults,
         ) as orchestrator:
 
@@ -175,7 +177,7 @@ def main() -> None:
                         f"config: distro '{args.distro}' not found: {exc}"
                     ) from exc
 
-                _section("infrastracture")
+                _section("infrastructure")
                 orchestrator.setup_infra()
                 _section("lab VM setup")
                 orchestrator.prepare_lab(distro_id)
@@ -199,14 +201,11 @@ def main() -> None:
                         distro_id,
                     )
                     raise SystemExit(1)
-                scenario_cfg = _SCENARIOS.get(args.scenario)
+                scenario_cfg = scenarios.get(args.scenario)
                 if not scenario_cfg:
                     raise RuntimeError(f"Unknown scenario '{args.scenario}'")
-
-                elif "technique_id" in scenario_cfg:
-                    ## run_experiment()
-                    orchestrator.run_experiment(distro_id, scenario_cfg, acquire=False)
-
+                if "technique_id" in scenario_cfg or "module" in scenario_cfg:
+                    orchestrator.run_experiment(distro_id, scenario_cfg, acquire=args.acquire)
                 else:
                     raise RuntimeError(f"Invalid scenario config for '{args.scenario}'")
 

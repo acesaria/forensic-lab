@@ -36,14 +36,16 @@ class VMManager:
         self,
         provider: Provider,
         images_path: Path,
-        ssh_key: str,
-        ssh_pub_key: str,
+        ssh_key: Path,
+        ssh_pub_key: Path,
         repo_root: Path,
     ) -> None:
         self._provider = provider
-        self._images_dir = images_path.expanduser().resolve()
-        self._ssh_key = Path(ssh_key).expanduser()
-        self._ssh_pubkey_text = Path(ssh_pub_key).expanduser().read_text().strip()
+        # images_path / ssh_key / ssh_pub_key are already absolute Paths --
+        # normalization happens in load_config().
+        self._images_dir = images_path
+        self._ssh_key = ssh_key
+        self._ssh_pubkey_text = ssh_pub_key.read_text().strip()
         self._repo_root = repo_root
 
     # --- infra setup (one-time, delegated to provider) -------------------
@@ -138,7 +140,7 @@ class VMManager:
         last_error = ""
         while time.time() < deadline:
             try:
-                with SSHClient(ip, LAB_USER, str(self._ssh_key)) as ssh:
+                with SSHClient(ip, LAB_USER, self._ssh_key) as ssh:
                     ssh.run_checked("true")
                 _log.info("[+] SSH ready on %s (%s)%s", vm_name, ip, label)
                 return ip
@@ -157,7 +159,7 @@ class VMManager:
         VM must already be running.
         """
         ip = self._provider.get_vm_ip(vm_name)
-        client = SSHClient(ip, LAB_USER, str(self._ssh_key))
+        client = SSHClient(ip, LAB_USER, self._ssh_key)
         client.connect()
         return client
 

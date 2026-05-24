@@ -84,7 +84,8 @@ class Provider:
     ) -> None:
         self._uri = libvirt_uri
         self._pool_name = pool_name
-        self._pool_path = pool_path.expanduser().resolve()
+        # pool_path is already absolute -- normalization happens in load_config().
+        self._pool_path = pool_path
         self._network_name = network_name
         self._conn: libvirt.virConnect | None = None
 

@@ -8,7 +8,7 @@ art-t1070-003:
   
 atomic-t1059-simple-bash:
   technique_id: T1059.004
-  test_guid: ""   # empty = run all guids found in atomics YAML
+  test_guid: ""   # empty = run the first test defined for the technique
 
 scenario-01-ldpreload:
   type: complex

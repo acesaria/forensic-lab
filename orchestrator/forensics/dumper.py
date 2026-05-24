@@ -39,7 +39,8 @@ def _format_bytes(size: int | None) -> str:
 
 @dataclass
 class ImageMetadata:
-    # path is relative to repo_root -- re-anchored by orchestrator when reading manifest
+    # path is relative to repo_root when possible, else absolute
+    # (re-anchored by orchestrator when reading manifest)
     path: str
     tool: str
     sha256: str | None
@@ -60,10 +61,19 @@ class AcquisitionManifest:
 
 
 class Dumper:
-    def __init__(self, repo_root: Path) -> None:
+    def __init__(self, repo_root: Path, dumps_dir: Path) -> None:
+        # repo_root anchors manifest paths so they stay portable within the project
+        # (fallback to absolute when dumps_dir lives outside repo_root).
         self.repo_root = repo_root
-        self.dumps_root = repo_root / "shared" / "dumps"
+        self.dumps_root = dumps_dir
         self.dumps_root.mkdir(parents=True, exist_ok=True)
+
+    def _rel_or_abs(self, p: Path) -> str:
+        """Render p relative to repo_root if possible, else absolute."""
+        try:
+            return str(p.relative_to(self.repo_root))
+        except ValueError:
+            return str(p)
 
     # --- directory layout ------------------------------------------------
 
@@ -111,11 +121,11 @@ class Dumper:
         _log.info(
             "[+] Memory dump done (%.1fs): %s, %s",
             elapsed,
-            str(dest.relative_to(self.repo_root)),
+            self._rel_or_abs(dest),
             _format_bytes(size_bytes),
         )
         return ImageMetadata(
-            path=str(dest.relative_to(self.repo_root)),
+            path=self._rel_or_abs(dest),
             tool="virsh dump --memory-only --live",
             sha256=self._sha256(dest),
             size_bytes=size_bytes,
@@ -153,9 +163,10 @@ class Dumper:
         self._log_disk_result(elapsed, ewf_segments, virtual_size, ewf_total_size)
 
         return ImageMetadata(
-            # paths relative to repo_root -- re-anchored by orchestrator when reading manifest
-            path=str(Path(ewf_segments[0]).relative_to(self.repo_root)),
-            segments=[str(Path(s).relative_to(self.repo_root)) for s in ewf_segments],
+            # paths relative to repo_root when possible -- re-anchored by orchestrator
+            # when reading manifest; absolute fallback when dumps_dir is outside repo_root
+            path=self._rel_or_abs(Path(ewf_segments[0])),
+            segments=[self._rel_or_abs(Path(s)) for s in ewf_segments],
             tool="qemu-img convert -O raw && ewfacquire -u -c fast",
             sha256=self._sha256(Path(ewf_segments[0])),
             size_bytes=Path(ewf_segments[0]).stat().st_size,
@@ -183,7 +194,7 @@ class Dumper:
         manifest_path = self.scenario_dir(scenario_id) / "manifest.json"
         with open(manifest_path, "w") as f:
             json.dump(asdict(manifest), f, indent=2)
-        _log.info("[+] Manifest written: %s", str(manifest_path.relative_to(self.repo_root)))
+        _log.info("[+] Manifest written: %s", self._rel_or_abs(manifest_path))
         return str(manifest_path)
 
     # --- private: disk acquisition steps ---------------------------------
@@ -270,7 +281,7 @@ class Dumper:
         _log.info(
             "[+] Disk acquisition done (%.1fs): %s (virtual %s, %s)",
             elapsed,
-            Path(segments[0]).relative_to(self.repo_root),
+            self._rel_or_abs(Path(segments[0])),
             _format_bytes(virtual_size),
             size_info,
         )

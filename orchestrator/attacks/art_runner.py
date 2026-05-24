@@ -38,7 +38,8 @@ class ArtRunner:
 
     def __init__(self, ssh: SSHClient, atomics_path: Path) -> None:
         self._ssh = ssh
-        self._atomics_path = Path(atomics_path).expanduser().resolve()
+        # atomics_path is already absolute -- normalization happens in load_config().
+        self._atomics_path = atomics_path
 
     # ------------------------------------------------------------------
     # Public API
@@ -142,7 +143,14 @@ class ArtRunner:
     def _load_test(self, technique_id: str, guid: str) -> dict[str, Any]:
         yaml_path = self._atomics_path / technique_id / f"{technique_id}.yaml"
         data = yaml.safe_load(yaml_path.read_text()) or {}
-        for test in data.get("atomic_tests", []):
+        tests = data.get("atomic_tests", []) or []
+        # Empty guid: pick the first test defined for the technique.
+        # Used by scenarios.yaml entries that don't pin a specific guid.
+        if not guid:
+            if not tests:
+                raise ValueError(f"No atomic_tests defined in {yaml_path}")
+            return tests[0]
+        for test in tests:
             if test.get("auto_generated_guid") == guid:
                 return test
         raise ValueError(f"GUID {guid} not found in {technique_id} ({yaml_path})")

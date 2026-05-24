@@ -44,7 +44,9 @@ Thumbs.db
 config.yaml
 manifest.json
 .github/instructions/*
+CLAUDE.md
 shared/results/*.json
 orchestrator/attacks/attack_01_ptrace.py
 orchestrator/attacks/attack_05_metasploit.py
 orchestrator/attacks/attack_06_kernel.py
+CLAUDE.local.md

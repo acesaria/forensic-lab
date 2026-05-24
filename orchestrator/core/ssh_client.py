@@ -19,12 +19,13 @@ class SSHClient:
         self,
         ip: str,
         user: str,
-        key_path: str,
+        key_path: Path,
         port: int = 22,
     ) -> None:
         self._ip = ip
         self._user = user
-        self._key_path = str(Path(key_path).expanduser())
+        # key_path is already absolute -- normalization happens in load_config().
+        self._key_path = key_path
         self._port = port
         self._client: Optional[paramiko.SSHClient] = None
 
@@ -34,7 +35,7 @@ class SSHClient:
         client.connect(
             hostname=self._ip,
             username=self._user,
-            key_filename=self._key_path,
+            key_filename=str(self._key_path),
             port=self._port,
             timeout=timeout,
             banner_timeout=timeout,

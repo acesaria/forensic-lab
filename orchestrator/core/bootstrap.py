@@ -75,7 +75,8 @@ def run_init(repo_root: Path, host_cfg: dict) -> None:
     username = pwd.getpwuid(os.getuid()).pw_name
     uid = os.getuid()
     kvm_gid = grp.getgrnam("kvm").gr_gid
-    dumps_dir = Path(host_cfg["shared_dir"]).expanduser() / "dumps"
+    # host_cfg["shared_dir"] is an absolute Path -- load_config() normalizes it.
+    dumps_dir = host_cfg["shared_dir"] / "dumps"
     _create_system_dirs(uid, kvm_gid)
     _setup_dumps_dir(repo_root, uid, kvm_gid)
     _install_sudoers(username, dumps_dir)

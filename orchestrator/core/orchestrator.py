@@ -40,7 +40,6 @@ from orchestrator.core.config import (
     BASELINE_MEMORY_FILENAME,
     BUILD_VM_PREFIX,
     ISF_BUILD_PLAYBOOK,
-    ISF_SHARED_DIR,
     LAB_VM_PREFIX,
     VERIFY_SCENARIO,
     load_profile,
@@ -61,8 +60,8 @@ class ForensicOrchestrator:
         vol_runner: VolatilityRunner,
         sleuth_runner: SleuthKitRunner,
         repo_root: Path,
-        atomic_path: Path,
-        results_path: Path,
+        atomics_path: Path,
+        isf_dir: Path,
         role_defaults: dict[str, Any],
     ) -> None:
         self.vm_manager = vm_manager
@@ -70,9 +69,8 @@ class ForensicOrchestrator:
         self._vol_runner = vol_runner
         self._sleuth_runner = sleuth_runner
         self.repo_root = repo_root
-        self.atomic_path = atomic_path
-        self.results_path = results_path
-        self.results_path.mkdir(parents=True, exist_ok=True)
+        self.atomics_path = atomics_path
+        self._isf_dir = isf_dir
         self._role_defaults = role_defaults
 
     # --- one-time setup --------------------------------------------------
@@ -108,9 +106,8 @@ class ForensicOrchestrator:
         kernel_release = self._detect_kernel_release(lab_vm_name)
 
         isf_name = _isf_filename(distro_id, kernel_release)
-        isf_dir = self.repo_root / ISF_SHARED_DIR
-        isf_dir.mkdir(parents=True, exist_ok=True)
-        isf_path = isf_dir / isf_name
+        self._isf_dir.mkdir(parents=True, exist_ok=True)
+        isf_path = self._isf_dir / isf_name
 
         if isf_path.exists():
             _log.info("[i] Symbol file already present: %s", isf_path.absolute())
@@ -165,7 +162,7 @@ class ForensicOrchestrator:
 
         with self.vm_manager.open_ssh(vm_name) as ssh:
 
-            runner = ArtRunner(ssh, self.atomic_path)
+            runner = ArtRunner(ssh, self.atomics_path)
             ground_truth = runner.run_test(scenario_id, test_guid, raise_on_error=False)
 
             print("\n=== GROUND TRUTH ===")
@@ -232,7 +229,7 @@ class ForensicOrchestrator:
                     extra_vars={
                         "kernel_version": kernel_release,
                         "isf_filename": isf_name,
-                        "shared_isf_dir": str(self.repo_root / ISF_SHARED_DIR),
+                        "shared_isf_dir": str(self._isf_dir),
                     },
                     reason="isf build",
                 )
@@ -261,6 +258,8 @@ class ForensicOrchestrator:
         manifest_path = self._run_acquisition(vm_name, scenario_id)
 
         manifest = json.loads(Path(manifest_path).read_text())
+        # Manifest paths are relative to repo_root when possible; Path() leaves
+        # absolute paths untouched, so `repo_root / abs_path` correctly yields abs_path.
         memory_path = self.repo_root / manifest["memory_image"]["path"]
         disk_path = self.repo_root / manifest["disk_image"]["path"]
 
