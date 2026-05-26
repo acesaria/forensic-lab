@@ -18,12 +18,20 @@ from typing import Any
 
 import yaml
 
+from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
 
 _log = logging.getLogger(__name__)
 
 # Matches both ${arg} and #{arg} placeholder styles used in ART YAMLs.
 _PLACEHOLDER = re.compile(r"[\$#]\{([^}]+)\}")
+
+# Where ART asset trees (T<id>/src/...) are SFTP'd on the lab VM. The literal
+# token "PathToAtomicsFolder" embedded in YAML defaults is rewritten to this
+# path inside _build_command, mirroring upstream atomic-operator behavior.
+# /tmp is writeable without sudo and is wiped by the baseline snapshot revert,
+# so each experiment starts from a clean upload.
+_REMOTE_ATOMICS_ROOT = "/tmp/atomics"
 
 
 class ArtRunner:
@@ -54,12 +62,13 @@ class ArtRunner:
         raise_on_error: bool = True,
     ) -> dict[str, Any]:
         test = self._load_test(technique_id, test_guid)
+        self._ensure_assets(technique_id)
         cmd = self._build_command(test["executor"]["command"], test, input_arguments)
-        _log.info("[*] %s/%s  %s", technique_id, test_guid, test.get("name", ""))
+        console.step(f"{technique_id}/{test_guid}  {test.get('name', '')}")
         code, out, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
-            _log.warning(
-                "[!] exit %d for %s/%s: %s", code, technique_id, test_guid, err.strip()
+            console.warn(
+                f"exit {code} for {technique_id}/{test_guid}: {err.strip()}"
             )
             if raise_on_error:
                 raise RuntimeError(
@@ -84,17 +93,14 @@ class ArtRunner:
         test = self._load_test(technique_id, test_guid)
         cleanup_cmd = test.get("executor", {}).get("cleanup_command")
         if not cleanup_cmd:
-            _log.debug("No cleanup defined for %s/%s", technique_id, test_guid)
+            _log.debug("no cleanup defined for %s/%s", technique_id, test_guid)
             return
+        self._ensure_assets(technique_id)
         cmd = self._build_command(cleanup_cmd, test, input_arguments)
         code, out, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
-            _log.warning(
-                "[!] Cleanup exited %d for %s/%s: %s",
-                code,
-                technique_id,
-                test_guid,
-                err.strip(),
+            console.warn(
+                f"cleanup exited {code} for {technique_id}/{test_guid}: {err.strip()}"
             )
 
     def run_prerequisites(
@@ -110,13 +116,14 @@ class ArtRunner:
         Each prerequisite is: run check, skip if exit 0, run prereq if non-zero.
         Raises RuntimeError if a prereq_command itself fails.
 
-        Not called automatically – invoke explicitly before run_test()
+        Not called automatically -- invoke explicitly before run_test()
         when a YAML lists dependencies (get_prereq_command sections).
         """
         test = self._load_test(technique_id, test_guid)
         prereqs = test.get("dependencies", [])
         if not prereqs:
             return
+        self._ensure_assets(technique_id)
 
         for i, dep in enumerate(prereqs):
             check_cmd = dep.get("prereq_command")
@@ -128,11 +135,12 @@ class ArtRunner:
             code, _, _ = self._ssh.run(check, timeout=timeout)
             if code == 0:
                 _log.debug(
-                    "Prereq %d already satisfied for %s/%s", i, technique_id, test_guid
+                    "prereq %d already satisfied for %s/%s",
+                    i, technique_id, test_guid,
                 )
                 continue
 
-            _log.info("[*] Installing prereq %d for %s/%s", i, technique_id, test_guid)
+            console.step(f"installing prereq {i} for {technique_id}/{test_guid}...")
             install = self._build_command(install_cmd, test, input_arguments)
             self._ssh.run_checked(install, timeout=timeout)
 
@@ -155,6 +163,37 @@ class ArtRunner:
                 return test
         raise ValueError(f"GUID {guid} not found in {technique_id} ({yaml_path})")
 
+    def _ensure_assets(self, technique_id: str) -> None:
+        """
+        SFTP the local atomics/<technique_id>/src/ tree to the VM under
+        _REMOTE_ATOMICS_ROOT so that ART YAML defaults referencing
+        `PathToAtomicsFolder/...` resolve on the test target.
+
+        No-op if the technique has no src/ subtree locally, or if the tree
+        is already present on the VM (cheap re-check via `test -d`).
+        """
+        src_root = self._atomics_path / technique_id / "src"
+        if not src_root.is_dir():
+            return
+        remote_tech_root = f"{_REMOTE_ATOMICS_ROOT}/{technique_id}"
+        code, _, _ = self._ssh.run(f"test -d {remote_tech_root}/src", timeout=10)
+        if code == 0:
+            return
+        self._ssh.run_checked(f"mkdir -p {remote_tech_root}", timeout=10)
+        uploaded = 0
+        for path in sorted(src_root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(self._atomics_path / technique_id)
+            remote = f"{remote_tech_root}/{rel.as_posix()}"
+            self._ssh.run_checked(f"mkdir -p $(dirname '{remote}')", timeout=10)
+            self._ssh.put(path, remote)
+            uploaded += 1
+        console.ok(
+            f"uploaded {uploaded} atomics asset(s) for {technique_id} "
+            f"to {remote_tech_root}"
+        )
+
     @staticmethod
     def _build_command(
         raw: str,
@@ -167,4 +206,8 @@ class ArtRunner:
             for k, v in (test.get("input_arguments") or {}).items()
         }
         args = {**defaults, **(overrides or {})}
-        return _PLACEHOLDER.sub(lambda m: args.get(m.group(1), m.group(0)), raw)
+        cmd = _PLACEHOLDER.sub(lambda m: args.get(m.group(1), m.group(0)), raw)
+        # ART YAML defaults embed the literal token "PathToAtomicsFolder" to
+        # mean "the atomics tree on the test target". Map it to the location
+        # _ensure_assets uploads to. Mirrors upstream atomic-operator behavior.
+        return cmd.replace("PathToAtomicsFolder", _REMOTE_ATOMICS_ROOT)

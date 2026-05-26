@@ -15,6 +15,13 @@
       loop: "{{ baseline_disable_services }}"
       failed_when: false
 
+    - name: Install offline-scenario prerequisites (per-distro)
+      ansible.builtin.apt:
+        name: "{{ baseline_present_pkgs }}"
+        state: present
+        update_cache: yes
+      when: baseline_present_pkgs | length > 0
+
     - name: Remove noisy packages (per-distro)
       ansible.builtin.apt:
         name: "{{ baseline_absent_pkgs }}"

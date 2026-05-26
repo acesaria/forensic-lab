@@ -50,6 +50,8 @@ from typing import Any, cast
 
 import libvirt
 
+from orchestrator.core import console
+
 _log = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -126,14 +128,11 @@ class Provider:
             net = conn.networkLookupByName(self._network_name)
             if not net.isActive():
                 net.create()
-            _log.info(
-                "[i] Network '%s' already present",
-                self._network_name,
-            )
+            console.info(f"network '{self._network_name}' already present")
             return
         except libvirt.libvirtError:
             pass
-        _log.debug("[*] Defining network '%s'...", self._network_name)
+        _log.debug("defining network '%s'...", self._network_name)
         network_xml = f"""\
 <network>
   <name>{self._network_name}</name>
@@ -147,7 +146,7 @@ class Provider:
         net = conn.networkDefineXML(network_xml)
         net.setAutostart(1)
         net.create()
-        _log.info("[+] Network '%s' created", self._network_name)
+        console.ok(f"network '{self._network_name}' created")
 
     def ensure_storage_pool(self) -> None:
         """Create and autostart the storage pool if not already present."""
@@ -157,20 +156,18 @@ class Provider:
             pool = conn.storagePoolLookupByName(self._pool_name)
             if not pool.isActive():
                 pool.create()
-            _log.info("[i] Pool '%s' already present", self._pool_name)
+            console.info(f"pool '{self._pool_name}' already present")
             return
         except libvirt.libvirtError:
             pass
         _log.debug(
-            "[*] Defining pool '%s' at %s...",
-            self._pool_name,
-            self._pool_path,
+            "defining pool '%s' at %s...", self._pool_name, self._pool_path,
         )
         pool = conn.storagePoolDefineXML(self._pool_xml())
         pool.setAutostart(1)
         pool.build(0)
         pool.create()
-        _log.info("[+] Pool '%s' created", self._pool_name)
+        console.ok(f"pool '{self._pool_name}' created")
 
     def _pool_xml(self) -> str:
         # Pool name and path are instance-specific, so this cannot be a module constant.
@@ -215,7 +212,7 @@ class Provider:
         conn = self._connect()
         try:
             conn.lookupByName(vm_name)
-            _log.info("[i] VM '%s' already exists, skipping", vm_name)
+            console.info(f"VM '{vm_name}' already exists; skipping")
             return vm_name
         except libvirt.libvirtError:
             pass
@@ -223,9 +220,10 @@ class Provider:
         disk_path = self._pool_path / f"{vm_name}.qcow2"
         self._create_disk_overlay(base_image, disk_path, role_cfg["disk_size"])
         network = role_cfg.get("network")
+        nat_network = role_cfg.get("nat_network")
         os_variant = profile.get("os_variant") or "generic"
 
-        _log.debug("[*] Creating VM '%s'...", vm_name)
+        _log.debug("creating VM '%s'...", vm_name)
         cmd = [
             "virt-install",
             "--name",
@@ -247,6 +245,11 @@ class Provider:
             "pty,target_type=virtio",
             "--noautoconsole",
         ]
+        if nat_network:
+            # Secondary NIC starts link-down; VMManager.internet_on toggles it.
+            cmd.extend(
+                ["--network", f"network={nat_network},model=virtio,link.state=down"]
+            )
         if seed_path is not None:
             cmd.extend(
                 ["--disk", f"path={seed_path},format=raw,bus=virtio,readonly=on"]
@@ -255,7 +258,7 @@ class Provider:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"virt-install failed:\n{result.stderr.strip()}")
-        _log.info("[+] VM '%s' created", vm_name)
+        console.ok(f"VM '{vm_name}' created")
         return vm_name
 
     def _create_disk_overlay(
@@ -290,7 +293,7 @@ class Provider:
         dom = conn.lookupByName(vm_name)
         if dom.state()[0] != libvirt.VIR_DOMAIN_RUNNING:
             dom.create()
-            _log.debug("[+] VM '%s' started", vm_name)
+            _log.debug("VM '%s' started", vm_name)
 
     def shutdown_vm(self, vm_name: str, timeout: int = 60) -> None:
         """Graceful ACPI shutdown with force-off fallback."""
@@ -306,10 +309,10 @@ class Provider:
             except libvirt.libvirtError:
                 return  # domain disappeared: already off
             if state == libvirt.VIR_DOMAIN_SHUTOFF:
-                _log.info("[+] '%s' shut down gracefully", vm_name)
+                console.ok(f"VM '{vm_name}' shut down gracefully")
                 return
             time.sleep(2)
-        _log.info("[i] Graceful shutdown timed out, forcing off '%s'", vm_name)
+        console.info(f"graceful shutdown timed out; forcing off '{vm_name}'")
         conn.lookupByName(vm_name).destroy()
 
     def restart_vm(self, vm_name: str) -> None:
@@ -328,7 +331,7 @@ class Provider:
         try:
             dom = conn.lookupByName(vm_name)
         except libvirt.libvirtError:
-            _log.info("[i] VM '%s' not found, nothing to destroy", vm_name)
+            console.info(f"VM '{vm_name}' not found; nothing to destroy")
             return
         self._stop_domain_if_active(dom)
         self._undefine_domain(dom, vm_name)
@@ -360,7 +363,7 @@ class Provider:
         try:
             conn.lookupByName(vm_name)
         except libvirt.libvirtError:
-            _log.info("[+] VM '%s' undefined", vm_name)
+            console.ok(f"VM '{vm_name}' undefined")
         else:
             raise RuntimeError(
                 f"VM '{vm_name}' still defined after destroy; manual cleanup required"
@@ -371,7 +374,7 @@ class Provider:
             p = self._pool_path / f"{vm_name}{suffix}"
             if p.exists():
                 p.unlink()
-                _log.info("[+] Removed %s", p.name)
+                console.ok(f"removed {p.name}")
 
     # --- introspection ---------------------------------------------------
 
@@ -408,6 +411,37 @@ class Provider:
                 return src.attrib["file"]
         raise RuntimeError(f"Could not find disk path for '{vm_name}'")
 
+    # --- NAT NIC link toggle ---------------------------------------------
+
+    def set_nat_link(self, vm_name: str, up: bool) -> None:
+        """Toggle live link state of the NAT NIC via `virsh domif-setlink`.
+        Persistent XML keeps link.state=down, so snapshot reverts always
+        bring the VM up offline."""
+        dom = self._connect().lookupByName(vm_name)
+        root = ET.fromstring(dom.XMLDesc())
+        mac = next(
+            (
+                iface.find("mac").attrib["address"]
+                for iface in root.findall(".//devices/interface[@type='network']")
+                if iface.find("source").attrib.get("network") != self._network_name
+            ),
+            None,
+        )
+        if mac is None:
+            raise RuntimeError(f"VM '{vm_name}' has no secondary (NAT) NIC")
+        state = "up" if up else "down"
+        result = subprocess.run(
+            ["virsh", "-c", self._uri, "domif-setlink", vm_name, mac, state],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"virsh domif-setlink {vm_name} {mac} {state} failed: "
+                f"{result.stderr.strip()}"
+            )
+        console.info(f"NAT NIC link {state} on '{vm_name}' (mac={mac})")
+
     # --- snapshots -------------------------------------------------------
 
     def snapshot_exists(self, vm_name: str, snapshot_name: str) -> bool:
@@ -430,11 +464,7 @@ class Provider:
 </domainsnapshot>"""
         # Flag 0: disk-only when domain is shutoff, which is required by our workflow.
         dom.snapshotCreateXML(xml, 0)
-        _log.info(
-            "[+] Snapshot '%s' created on '%s'",
-            snapshot_name,
-            vm_name,
-        )
+        console.ok(f"snapshot '{snapshot_name}' created on '{vm_name}'")
 
     def revert_snapshot(self, vm_name: str, snapshot_name: str) -> None:
         """Revert to snapshot. Leaves VM shutoff - caller must start it."""
@@ -442,4 +472,4 @@ class Provider:
         dom = conn.lookupByName(vm_name)
         snap = dom.snapshotLookupByName(snapshot_name)
         dom.revertToSnapshot(snap)
-        _log.info("[+] '%s' reverted to '%s'", vm_name, snapshot_name)
+        console.ok(f"VM '{vm_name}' reverted to '{snapshot_name}'")

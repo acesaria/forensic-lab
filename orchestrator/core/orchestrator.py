@@ -30,8 +30,9 @@ run_experiment     ends ON (caller decides when to shut down)
 """
 
 from datetime import datetime
+import functools
+import importlib
 import json
-import logging
 from pathlib import Path
 from typing import Any, Callable
 
@@ -40,16 +41,17 @@ from orchestrator.core.config import (
     BASELINE_MEMORY_FILENAME,
     BUILD_VM_PREFIX,
     ISF_BUILD_PLAYBOOK,
+    ISOLATED_NETWORK_GATEWAY,
     LAB_VM_PREFIX,
     VERIFY_SCENARIO,
     load_profile,
 )
+from orchestrator.core import console
+from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.attacks import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
-
-_log = logging.getLogger(__name__)
 
 
 class ForensicOrchestrator:
@@ -91,7 +93,7 @@ class ForensicOrchestrator:
         if not isinstance(role_cfg, dict):
             raise RuntimeError("Missing 'role_defaults.lab' in config")
         self.vm_manager.prepare_lab(distro_id, profile, role_cfg)
-        _log.info("[+] '%s' ready for experiments", distro_id)
+        console.ok(f"'{distro_id}' ready for experiments")
 
     def build_isf(self, distro_id: str) -> Path:
         """
@@ -110,7 +112,7 @@ class ForensicOrchestrator:
         isf_path = self._isf_dir / isf_name
 
         if isf_path.exists():
-            _log.info("[i] Symbol file already present: %s", isf_path.absolute())
+            console.info(f"symbol file already present: {isf_path.absolute()}")
             return isf_path
 
         role_cfg = self._role_defaults.get("build-isf")
@@ -128,7 +130,7 @@ class ForensicOrchestrator:
         if not isf_path.exists():
             raise RuntimeError(f"ISF build completed but output not found: {isf_path}")
 
-        _log.info("[+] ISF exported: %s", isf_path)
+        console.ok(f"ISF exported: {isf_path}")
         return isf_path
 
     def lab_exists(self, distro_id: str) -> bool:
@@ -139,38 +141,98 @@ class ForensicOrchestrator:
     def run_experiment(
         self,
         distro_id: str,
+        scenario_id: str,
         scenario_cfg: dict[str, Any],
         acquire: bool = True,
     ) -> str | None:
         """
         Full experiment cycle:
         1. Revert VM to baseline and start it
-        2. Run attack scenario, save ground truth
+        2. Dispatch the scenario module, persist ground truth
         3. Acquire RAM + disk (unless acquire=False)
 
         VM ends OFF after acquisition.
         Returns manifest path if acquired, else None.
         """
-        scenario_id = scenario_cfg["technique_id"]
-        test_guid = scenario_cfg["test_guid"]
-        _log.info("\n[*] Starting experiment: %s on %s", scenario_id, distro_id)
+        console.section(f"experiment: {scenario_id} on {distro_id}")
         vm_name = self._reset_lab(distro_id)
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
         scenario_ts = f"{distro_id}_{scenario_id}_{ts}"
 
-        ip = self.vm_manager.wait_ssh_ready(vm_name, reason="before attack scenario")
-
         with self.vm_manager.open_ssh(vm_name) as ssh:
+            ground_truth = self._dispatch_scenario(
+                vm_name, ssh, scenario_id, scenario_cfg
+            )
 
-            runner = ArtRunner(ssh, self.atomics_path)
-            ground_truth = runner.run_test(scenario_id, test_guid, raise_on_error=False)
-
-            print("\n=== GROUND TRUTH ===")
-            print(ground_truth)
+        self._persist_ground_truth(scenario_ts, ground_truth)
 
         if acquire:
             return self._run_acquisition(vm_name, scenario_ts)
         return None
+
+    def _dispatch_scenario(
+        self,
+        vm_name: str,
+        ssh: SSHClient,
+        scenario_id: str,
+        scenario_cfg: dict[str, Any],
+    ) -> dict[str, Any]:
+        """
+        Import the scenario module named in scenario_cfg["module"], call its
+        run() with ssh/runner/host_ip + internet_on/off plus any remaining
+        cfg keys as kwargs, and stamp scenario_id onto the returned dict.
+
+        Ensures the NAT NIC link is down before returning so the memory dump
+        doesn't capture stray network state.
+        """
+        module_path = scenario_cfg.get("module")
+        if not module_path:
+            raise RuntimeError(f"scenario '{scenario_id}' missing 'module' key")
+        try:
+            module = importlib.import_module(module_path)
+        except ImportError as exc:
+            raise RuntimeError(
+                f"scenario '{scenario_id}': cannot import module '{module_path}': {exc}"
+            ) from exc
+        run_fn = getattr(module, "run", None)
+        if run_fn is None:
+            raise RuntimeError(
+                f"scenario module '{module_path}' has no top-level run() function"
+            )
+        extras = {k: v for k, v in scenario_cfg.items() if k != "module"}
+        runner = ArtRunner(ssh, self.atomics_path)
+        internet_on = functools.partial(self.vm_manager.internet_on, vm_name)
+        internet_off = functools.partial(self.vm_manager.internet_off, vm_name)
+        try:
+            ground_truth = run_fn(
+                ssh=ssh,
+                runner=runner,
+                host_ip=ISOLATED_NETWORK_GATEWAY,
+                internet_on=internet_on,
+                internet_off=internet_off,
+                **extras,
+            )
+        finally:
+            self.vm_manager.internet_off(vm_name)
+        if not isinstance(ground_truth, dict):
+            raise RuntimeError(
+                f"scenario '{scenario_id}' returned {type(ground_truth).__name__}, expected dict"
+            )
+        ground_truth["scenario_id"] = scenario_id
+        return ground_truth
+
+    def _persist_ground_truth(
+        self,
+        scenario_ts: str,
+        ground_truth: dict[str, Any],
+    ) -> Path:
+        """Write ground_truth.json beside the acquisition outputs."""
+        scenario_dir = self.dumper.scenario_dir(scenario_ts)
+        scenario_dir.mkdir(parents=True, exist_ok=True)
+        out = scenario_dir / "ground_truth.json"
+        out.write_text(json.dumps(ground_truth, indent=2, default=str))
+        console.ok(f"ground truth written: {out}")
+        return out
 
     # --- teardown --------------------------------------------------------
 
@@ -190,12 +252,12 @@ class ForensicOrchestrator:
     # --- private: setup helpers ------------------------------------------
 
     def _detect_kernel_release(self, lab_vm_name: str) -> str:
-        _log.info("[*] Detecting kernel on %s...", lab_vm_name)
+        console.step(f"detecting kernel on {lab_vm_name}...")
         self.vm_manager.start_vm(lab_vm_name)
         self.vm_manager.wait_ssh_ready(lab_vm_name, reason="kernel detection")
         with self.vm_manager.open_ssh(lab_vm_name) as ssh:
             kernel_release = ssh.run_checked("uname -r")
-        _log.info("[+] Kernel: %s", kernel_release)
+        console.ok(f"kernel: {kernel_release}")
         self.vm_manager.shutdown_vm(lab_vm_name)
         return kernel_release
 
@@ -222,6 +284,10 @@ class ForensicOrchestrator:
         )
         try:
             self.vm_manager.start_vm(build_vm_name)
+            console.step(
+                f"provisioning {distro_id} (kernel {kernel_release}) "
+                "(may take up to 20 minutes)..."
+            )
             try:
                 self.vm_manager.run_playbook_on_vm(
                     build_vm_name,
@@ -263,10 +329,10 @@ class ForensicOrchestrator:
         memory_path = self.repo_root / manifest["memory_image"]["path"]
         disk_path = self.repo_root / manifest["disk_image"]["path"]
 
-        _log.info("\n[*] Probing acquired images for %s...", distro_id)
+        console.step(f"probing acquired images for {distro_id}...")
         self._vol_runner.probe(memory_path, distro_id)
         self._sleuth_runner.probe(disk_path)
-        _log.info("[+] Pipeline verified for '%s'", distro_id)
+        console.ok(f"pipeline verified for '{distro_id}'")
 
     # --- private: experiment helpers -------------------------------------
 
@@ -276,7 +342,7 @@ class ForensicOrchestrator:
         VM ends ON + SSH ready. Returns vm_name.
         """
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
-        _log.info("[*] Reverting '%s' to baseline snapshot...", vm_name)
+        console.step(f"reverting '{vm_name}' to baseline snapshot...")
         self.vm_manager.revert_to_baseline(distro_id)
         self.vm_manager.start_vm(vm_name)
         self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")

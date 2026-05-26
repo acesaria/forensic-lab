@@ -12,3 +12,9 @@ baseline_disable_services:
 baseline_absent_pkgs:
   - unattended-upgrades
   - cloud-init
+
+# Packages baked into the lab baseline so offline scenarios can run their
+# compile/setup steps without network access (lab VM is on the isolated net).
+baseline_present_pkgs:
+  - build-essential
+  - netcat-openbsd

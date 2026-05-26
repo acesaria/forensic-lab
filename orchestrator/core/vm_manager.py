@@ -21,11 +21,13 @@ from infra.image_store import ensure_image
 from infra.provider import Provider
 from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
+    CLOUD_INIT_NETWORK_CONFIG,
     CLOUD_INIT_USER_DATA,
     LAB_BASELINE_PLAYBOOK,
     LAB_VM_PREFIX,
     LAB_USER,
 )
+from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
 
 _log = logging.getLogger(__name__)
@@ -92,9 +94,9 @@ class VMManager:
         """
         vm_name = f"{role}-{distro_id}"
         if self._provider.vm_exists(vm_name):
-            _log.info("[i] VM '%s' already exists, skipping creation", vm_name)
+            console.info(f"VM '{vm_name}' already exists; skipping creation")
             return vm_name
-        seed_path = self._create_cloud_init_seed(vm_name)
+        seed_path = self._create_cloud_init_seed(vm_name, role)
         return self._provider.create_vm(
             role=role,
             distro_id=distro_id,
@@ -134,7 +136,7 @@ class VMManager:
         """
         ip = self._provider.get_vm_ip(vm_name)
         label = f" [{reason}]" if (reason and _log.isEnabledFor(logging.DEBUG)) else ""
-        _log.info("[*] Waiting for SSH on %s (%s)%s...", vm_name, ip, label)
+        console.step(f"waiting for SSH on {vm_name} ({ip}){label}...")
 
         deadline = time.time() + timeout
         last_error = ""
@@ -142,7 +144,7 @@ class VMManager:
             try:
                 with SSHClient(ip, LAB_USER, self._ssh_key) as ssh:
                     ssh.run_checked("true")
-                _log.info("[+] SSH ready on %s (%s)%s", vm_name, ip, label)
+                console.ok(f"SSH ready on {vm_name} ({ip}){label}")
                 return ip
             except Exception as exc:
                 last_error = str(exc)
@@ -151,6 +153,15 @@ class VMManager:
         raise RuntimeError(
             f"SSH not ready on '{vm_name}' after {timeout}s: {last_error}"
         )
+
+    def internet_on(self, vm_name: str, wait: int = 5) -> None:
+        """Bring the NAT NIC link up; sleep briefly to let DHCP settle."""
+        self._provider.set_nat_link(vm_name, up=True)
+        time.sleep(wait)
+
+    def internet_off(self, vm_name: str) -> None:
+        """Bring the NAT NIC link down."""
+        self._provider.set_nat_link(vm_name, up=False)
 
     def open_ssh(self, vm_name: str) -> SSHClient:
         """
@@ -213,15 +224,21 @@ class VMManager:
 
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
             playbook = self._repo_root / LAB_BASELINE_PLAYBOOK
-            self._run_playbook(ip, playbook, reason="baseline provisioning")
-            _log.info("[*] Shutting down %s before snapshot...", vm_name)
+            self.internet_on(vm_name)
+            console.step(
+                f"provisioning lab VM with Ansible playbook {playbook} "
+                "(may take up to 5 minutes)..."
+            )
+            try:
+                self._run_playbook(ip, playbook, reason="baseline provisioning")
+            finally:
+                self.internet_off(vm_name)
+            console.step(f"shutting down {vm_name} before snapshot...")
             self._provider.shutdown_vm(vm_name)
             self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         else:
-            _log.info(
-                "[i] Snapshot '%s' already present on '%s'",
-                BASELINE_SNAPSHOT,
-                vm_name,
+            console.info(
+                f"snapshot '{BASELINE_SNAPSHOT}' already present on '{vm_name}'"
             )
 
         return vm_name
@@ -237,10 +254,10 @@ class VMManager:
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
             raise RuntimeError(
-                f"No baseline snapshot on '{vm_name}'. Run 'prepare' first."
+                f"No baseline snapshot on '{vm_name}'. Run 'setup' first."
             )
         if self._provider.is_running(vm_name):
-            _log.info("[*] Shutting down '%s' before snapshot revert...", vm_name)
+            console.step(f"shutting down '{vm_name}' before snapshot revert...")
             self._provider.shutdown_vm(vm_name)
         self._provider.revert_snapshot(vm_name, BASELINE_SNAPSHOT)
         return vm_name
@@ -264,7 +281,7 @@ class VMManager:
         reason: str = "",
     ) -> None:
         label = f" [{reason}]" if reason else ""
-        _log.debug("[*] Running playbook %s on %s%s...", playbook.name, ip, label)
+        _log.debug("running playbook %s on %s%s...", playbook.name, ip, label)
         cmd = [
             "ansible-playbook",
             "-i",
@@ -290,24 +307,32 @@ class VMManager:
             )
         if _log.isEnabledFor(logging.DEBUG):
             _log.debug("%s", result.stdout or "")
-            _log.debug("[+] Playbook %s done", playbook.name)
+            _log.debug("playbook %s done", playbook.name)
 
-    def _create_cloud_init_seed(self, vm_name: str) -> Path:
+    def _create_cloud_init_seed(self, vm_name: str, role: str) -> Path:
         pool_path = self._provider.pool_path()
         seed_path = pool_path / f"{vm_name}-seed.iso"
         if seed_path.exists():
             seed_path.unlink()
 
         with tempfile.TemporaryDirectory() as tmp:
-            meta_path = Path(tmp) / "meta-data"
-            user_path = Path(tmp) / "user-data"
+            tmp_dir = Path(tmp)
+            meta_path = tmp_dir / "meta-data"
+            user_path = tmp_dir / "user-data"
             meta_path.write_text(f"instance-id: {vm_name}\nlocal-hostname: {vm_name}\n")
             user_path.write_text(self._render_user_data())
-            result = subprocess.run(
-                ["cloud-localds", str(seed_path), str(user_path), str(meta_path)],
-                capture_output=True,
-                text=True,
-            )
+
+            cmd = ["cloud-localds"]
+            # Lab role gets a two-NIC explicit netplan so the isolated NIC's
+            # DHCP default route + DNS are suppressed; otherwise apt would
+            # sometimes route via the dead 192.168.100.1 gateway.
+            if role == "lab":
+                net_path = tmp_dir / "network-config"
+                net_path.write_text(self._render_network_data())
+                cmd.extend(["--network-config", str(net_path)])
+            cmd.extend([str(seed_path), str(user_path), str(meta_path)])
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"cloud-localds failed:\n{result.stderr.strip()}")
         return seed_path
@@ -315,3 +340,6 @@ class VMManager:
     def _render_user_data(self) -> str:
         template = (self._repo_root / CLOUD_INIT_USER_DATA).read_text()
         return template.replace("__SSH_PUBLIC_KEY__", self._ssh_pubkey_text)
+
+    def _render_network_data(self) -> str:
+        return (self._repo_root / CLOUD_INIT_NETWORK_CONFIG).read_text()

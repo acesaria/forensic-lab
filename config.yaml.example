@@ -6,6 +6,7 @@ host:
   ssh_pub_key: ~/.ssh/forensics-lab.pub
   libvirt_uri: qemu:///system
   isolated_network_name: forensics-isolated
+  nat_network_name: default
   pool_name: forensic-lab-pool
   pool_path: /var/lib/forensic-lab/disks
   images_path: /var/lib/forensic-lab/images

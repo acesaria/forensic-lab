@@ -28,10 +28,16 @@ ISF_BUILD_PLAYBOOK = Path("infra/ansible/isf_build.yml")
 PROFILES_DIR = Path("infra/profiles")
 CLOUD_INIT_DIR = Path("infra/cloud-init")
 CLOUD_INIT_USER_DATA = CLOUD_INIT_DIR / "user-data"
+CLOUD_INIT_NETWORK_CONFIG = CLOUD_INIT_DIR / "network-config"
 
 # VM name prefixes -- must match naming convention in README
 LAB_VM_PREFIX = "lab"
 BUILD_VM_PREFIX = "build-isf"
+
+# Gateway IP on the isolated libvirt network. Must match the address bound in
+# the network XML at infra/provider.py. Used by scenarios that need a
+# host-side listener (e.g. reverse shells) reachable from the lab VM.
+ISOLATED_NETWORK_GATEWAY = "192.168.100.1"
 
 # Baseline acquisition filenames
 BASELINE_MEMORY_FILENAME = "baseline_memory.raw"

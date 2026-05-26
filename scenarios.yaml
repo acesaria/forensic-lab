@@ -1,17 +1,4 @@
-# ART scenarios. technique_id and test_guid are required.
-# cleanup is optional, default false.
-art-t1070-003:
-  technique_id: T1070.003
-  test_guid: a934276e-2be5-4a36-93fd-98adbb5bd4fc #5f8abd62-f615-43c5-b6be-f780f25790a1
-  cleanup: false
-
-  
-atomic-t1059-simple-bash:
-  technique_id: T1059.004
-  test_guid: ""   # empty = run the first test defined for the technique
-
 scenario-01-ldpreload:
-  type: complex
   module: orchestrator.attacks.scenario_01_ldpreload
   run_cleanup: false   # set true to test cleanup path; false to preserve
 

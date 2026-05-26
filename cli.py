@@ -7,13 +7,12 @@ import sys
 from pathlib import Path
 
 from infra.provider import Provider
+from orchestrator.core import console
 from orchestrator.core.bootstrap import run_init
 from orchestrator.core.config import load_config, load_profile, load_scenarios
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
-
-_log = logging.getLogger(__name__)
 
 
 def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
@@ -71,18 +70,14 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
 # --- init helpers --------------------------------------------------------
 
 
-def _section(title: str) -> None:
-    _log.info("\n=== %s ===", title)
-
-
 def _setup_logging(debug: bool) -> None:
-    console = logging.StreamHandler(sys.stdout)
-    console.setLevel(logging.DEBUG if debug else logging.INFO)
-    console.setFormatter(logging.Formatter("%(message)s"))
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setLevel(logging.DEBUG if debug else logging.INFO)
+    handler.setFormatter(console.PrefixColorFormatter("%(message)s"))
 
     root = logging.getLogger()
-    root.setLevel(logging.DEBUG if debug else logging.INFO)  # <-- was always DEBUG
-    root.addHandler(console)
+    root.setLevel(logging.DEBUG if debug else logging.INFO)
+    root.addHandler(handler)
 
     for noisy in ("paramiko", "ansible", "libvirt", "urllib3"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
@@ -115,17 +110,19 @@ def main() -> None:
     _setup_logging(args.debug)
     _check_prerequisites()
     if args.debug:
-        _log.info("[i] Debug mode on")
+        console.info("debug mode on")
 
     # All host path fields are absolute Paths after load_config(); no further
     # normalization is needed downstream. See orchestrator/core/config.py.
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
     role_defaults = cfg.get("role_defaults") or {}
-    for role_key in ("lab", "build-isf"):
-        role_cfg = role_defaults.get(role_key)
-        if isinstance(role_cfg, dict):
-            role_cfg["network"] = host_cfg["isolated_network_name"]
+    nat_network = host_cfg.get("nat_network_name", "default")
+    if isinstance(role_defaults.get("lab"), dict):
+        role_defaults["lab"]["network"] = host_cfg["isolated_network_name"]
+        role_defaults["lab"]["nat_network"] = nat_network
+    if isinstance(role_defaults.get("build-isf"), dict):
+        role_defaults["build-isf"]["network"] = nat_network
 
     provider = Provider(
         libvirt_uri=host_cfg["libvirt_uri"],
@@ -177,15 +174,15 @@ def main() -> None:
                         f"config: distro '{args.distro}' not found: {exc}"
                     ) from exc
 
-                _section("infrastructure")
+                console.section("infrastructure")
                 orchestrator.setup_infra()
-                _section("lab VM setup")
+                console.section("lab VM setup")
                 orchestrator.prepare_lab(distro_id)
-                _section("volatility symbols")
+                console.section("volatility symbols")
                 orchestrator.build_isf(distro_id)
-                _section("pipeline verification")
+                console.section("pipeline verification")
                 orchestrator.verify_pipeline(distro_id)
-                _log.info("\n[+] Setup complete for '%s'", distro_id)
+                console.ok(f"setup complete for '{distro_id}'")
 
             elif args.command == "run":
                 try:
@@ -196,16 +193,18 @@ def main() -> None:
                     ) from exc
 
                 if not orchestrator.lab_exists(distro_id):
-                    _log.warning(
-                        "[!] Lab '%s' not found. Run 'setup' first.",
-                        distro_id,
+                    console.warn(
+                        f"lab '{distro_id}' not found; run 'setup' first"
                     )
                     raise SystemExit(1)
+                scenario_id = args.scenario
                 scenario_cfg = scenarios.get(args.scenario)
                 if not scenario_cfg:
                     raise RuntimeError(f"Unknown scenario '{args.scenario}'")
-                if "technique_id" in scenario_cfg or "module" in scenario_cfg:
-                    orchestrator.run_experiment(distro_id, scenario_cfg, acquire=args.acquire)
+                if "module" in scenario_cfg:
+                    orchestrator.run_experiment(
+                        distro_id, scenario_id, scenario_cfg, acquire=args.acquire
+                    )
                 else:
                     raise RuntimeError(f"Invalid scenario config for '{args.scenario}'")
 
@@ -213,15 +212,15 @@ def main() -> None:
                 orchestrator.destroy_lab(distro_id)
 
     except KeyboardInterrupt:
-        logging.info("\n[-] Interrupted")
+        console.err("interrupted")
         sys.exit(1)
     except RuntimeError as exc:
-        logging.error("[!] %s", exc)
+        console.err(str(exc))
         if args.debug:
             raise
         sys.exit(1)
     except Exception as exc:
-        logging.error("[!] Unexpected error: %s", exc)
+        console.err(f"unexpected error: {exc}")
         if args.debug:
             raise
         sys.exit(1)

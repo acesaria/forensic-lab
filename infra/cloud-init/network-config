@@ -1,0 +1,17 @@
+# cloud-init network-config v2 (netplan syntax). Used only for the lab role,
+# which is built with two NICs in virt-install order:
+#   enp1s0 = forensics-isolated (host-only, no upstream)
+#   enp2s0 = default            (NAT, link starts DOWN; toggled at runtime)
+# This file replaces cloud-init's auto-detected netplan so we can suppress
+# the default route + DNS on the isolated NIC. Without that, apt would
+# sometimes route via the dead 192.168.100.1 gateway.
+version: 2
+ethernets:
+  enp1s0:
+    dhcp4: true
+    dhcp4-overrides:
+      use-routes: false
+      use-dns: false
+  enp2s0:
+    dhcp4: true
+    optional: true
