@@ -5,6 +5,8 @@ import pwd
 import os
 import grp
 
+from orchestrator.core import console
+
 
 def _confirm_init() -> bool:
     print("[*] forensic-lab one-time host setup -- requires sudo:")
@@ -21,7 +23,7 @@ def _create_system_dirs(uid: int, kvm_gid: int) -> None:
         check=True,
     )
     subprocess.run(["sudo", "chmod", "-R", "2775", "/var/lib/forensic-lab"], check=True)
-    print("[+] System directories ready")
+    console.ok("system directories ready")
 
 
 def _setup_dumps_dir(repo_root: Path, uid: int, kvm_gid: int) -> None:
@@ -65,12 +67,12 @@ def _write_sudoers(path: str, content: str) -> None:
         raise RuntimeError(
             f"sudoers validation failed -- file removed:\n{check.stderr}"
         )
-    print(f"[+] Sudoers rules installed: {path}")
+    console.ok(f"sudoers rules installed: {path}")
 
 
 def run_init(repo_root: Path, host_cfg: dict) -> None:
     if not _confirm_init():
-        print("[-] Aborted.")
+        console.err("aborted")
         return
     username = pwd.getpwuid(os.getuid()).pw_name
     uid = os.getuid()
@@ -80,4 +82,4 @@ def run_init(repo_root: Path, host_cfg: dict) -> None:
     _create_system_dirs(uid, kvm_gid)
     _setup_dumps_dir(repo_root, uid, kvm_gid)
     _install_sudoers(username, dumps_dir)
-    print("\n[i] Next step: forensic-lab setup --distro ubuntu-22.04")
+    console.info("next step: forensic-lab setup --distro ubuntu-22.04")

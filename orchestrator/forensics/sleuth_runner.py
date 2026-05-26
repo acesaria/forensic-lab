@@ -8,6 +8,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+from orchestrator.core import console
+
 
 class SleuthKitRunner:
     def __init__(self, mmls_bin: str) -> None:
@@ -31,4 +33,4 @@ class SleuthKitRunner:
                 f"mmls probe failed for {disk_path.name}:\n"
                 f"{result.stderr.strip() or '(no output)'}"
             )
-        print(f"[+] Disk probe passed: filesystem readable ({disk_path.name})")
+        console.ok(f"disk probe passed: filesystem readable ({disk_path.name})")

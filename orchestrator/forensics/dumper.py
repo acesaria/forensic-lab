@@ -19,6 +19,8 @@ import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+from orchestrator.core import console
+
 _log = logging.getLogger(__name__)
 
 
@@ -94,7 +96,7 @@ class Dumper:
             dest.unlink()
 
         started = time.time()
-        _log.info("[*] Acquiring memory from '%s'...", domain)
+        console.step(f"acquiring memory from '{domain}'...")
         result = subprocess.run(
             ["virsh", "dump", domain, str(dest), "--memory-only"],
             check=False,
@@ -118,11 +120,9 @@ class Dumper:
             ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
             check=True,
         )
-        _log.info(
-            "[+] Memory dump done (%.1fs): %s, %s",
-            elapsed,
-            self._rel_or_abs(dest),
-            _format_bytes(size_bytes),
+        console.ok(
+            f"memory dump done ({elapsed:.1f}s): "
+            f"{self._rel_or_abs(dest)}, {_format_bytes(size_bytes)}"
         )
         return ImageMetadata(
             path=self._rel_or_abs(dest),
@@ -149,7 +149,7 @@ class Dumper:
 
         started = time.time()
         virtual_size = self._qemu_virtual_size(disk_source)
-        _log.info("[*] Acquiring disk from '%s'...", Path(disk_source).stem)
+        console.step(f"acquiring disk from '{Path(disk_source).stem}'...")
 
         self._convert_to_raw(disk_source, raw_path)
         self._run_ewfacquire(raw_path, ewf_prefix)
@@ -194,7 +194,7 @@ class Dumper:
         manifest_path = self.scenario_dir(scenario_id) / "manifest.json"
         with open(manifest_path, "w") as f:
             json.dump(asdict(manifest), f, indent=2)
-        _log.info("[+] Manifest written: %s", self._rel_or_abs(manifest_path))
+        console.ok(f"manifest written: {self._rel_or_abs(manifest_path)}")
         return str(manifest_path)
 
     # --- private: disk acquisition steps ---------------------------------
@@ -207,7 +207,7 @@ class Dumper:
 
     def _convert_to_raw(self, disk_source: str, raw_path: Path) -> None:
         """Convert qcow2 source to a flat raw image for ewfacquire."""
-        _log.debug("[*] Converting to raw: %s -> %s", disk_source, raw_path)
+        _log.debug("converting to raw: %s -> %s", disk_source, raw_path)
         try:
             subprocess.run(
                 ["qemu-img", "convert", "-O", "raw", disk_source, str(raw_path)],
@@ -227,7 +227,7 @@ class Dumper:
         ewf_prefix is the output path without extension; ewfacquire appends .E01, .E02, ...
         """
         threads = str(os.cpu_count() or 4)
-        _log.debug("[*] Running ewfacquire: %s -> %s.E??", raw_path, ewf_prefix)
+        _log.debug("running ewfacquire: %s -> %s.E??", raw_path, ewf_prefix)
         try:
             result = subprocess.run(
                 [
@@ -278,12 +278,10 @@ class Dumper:
             size_info = f"ewf {_format_bytes(ewf_total_size)}"
         else:
             size_info = f"{segment_count} segments, ewf {_format_bytes(ewf_total_size)} total"
-        _log.info(
-            "[+] Disk acquisition done (%.1fs): %s (virtual %s, %s)",
-            elapsed,
-            self._rel_or_abs(Path(segments[0])),
-            _format_bytes(virtual_size),
-            size_info,
+        console.ok(
+            f"disk acquisition done ({elapsed:.1f}s): "
+            f"{self._rel_or_abs(Path(segments[0]))} "
+            f"(virtual {_format_bytes(virtual_size)}, {size_info})"
         )
 
     # --- private: generic helpers ----------------------------------------
@@ -307,5 +305,5 @@ class Dumper:
             )
             return json.loads(result.stdout).get("virtual-size")
         except Exception:
-            _log.warning("[!] Could not determine virtual disk size for %s", disk_source)
+            console.warn(f"could not determine virtual disk size for {disk_source}")
             return None

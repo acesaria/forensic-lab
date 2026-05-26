@@ -14,6 +14,8 @@ from typing import Any
 
 import requests
 
+from orchestrator.core import console
+
 
 def _filename_from_url(url: str) -> str:
     # TODO: Add release number to filename to avoid collisions between different releases
@@ -69,33 +71,33 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
 
     # --- already present: just verify ---
     if dest.exists():
-        print(f"[i] Image already present: {dest}")
-        print(f"[*] Verifying {algo} checksum...")
+        console.info(f"image already present: {dest}")
+        console.step(f"verifying {algo} checksum...")
         actual = _compute_checksum(dest, algo)
         expected = _expected_checksum(checksum_url, filename, algo)
         if actual != expected:
             raise RuntimeError(
-                f"Checksum mismatch for {filename}\n"
+                f"checksum mismatch for {filename}\n"
                 f"  expected: {expected}\n"
                 f"  actual:   {actual}"
             )
-        print(f"[+] Checksum OK: {actual[:16]}...")
+        console.ok(f"checksum OK: {actual[:16]}...")
         return dest
 
     # --- not present: download then verify ---
-    print(f"[*] Downloading {filename} ...")
+    console.step(f"downloading {filename}...")
     _download(url, dest)
-    print(f"[*] Verifying {algo} checksum...")
+    console.step(f"verifying {algo} checksum...")
     actual = _compute_checksum(dest, algo)
     expected = _expected_checksum(checksum_url, filename, algo)
     if actual != expected:
         dest.unlink(missing_ok=True)
         raise RuntimeError(
-            f"Checksum mismatch after download — file removed.\n"
+            f"checksum mismatch after download; file removed\n"
             f"  expected: {expected}\n"
             f"  actual:   {actual}"
         )
-    print(f"[+] Checksum OK: {actual[:16]}...")
+    console.ok(f"checksum OK: {actual[:16]}...")
     return dest
 
 

@@ -19,6 +19,8 @@ import subprocess
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
+from orchestrator.core import console
+
 _log = logging.getLogger(__name__)
 
 
@@ -155,10 +157,10 @@ class VolatilityRunner:
                 try:
                     _, rows = future.result()
                     results[plugin] = rows
-                    _log.debug("[+] vol3 %s: %d row(s)", plugin, len(rows))
+                    _log.debug("vol3 %s: %d row(s)", plugin, len(rows))
                 except Exception as exc:
                     failures.append(f"{plugin}: {exc}")
-                    _log.warning("[!] vol3 %s failed: %s", plugin, exc)
+                    console.warn(f"vol3 {plugin} failed: {exc}")
 
         if failures:
             raise RuntimeError("Volatility plugins failed:\n" + "\n".join(failures))
@@ -197,7 +199,6 @@ class VolatilityRunner:
                 "ISF may not match this kernel -- check dwarf2json output"
             )
 
-        _log.info(
-            "[+] Memory probe passed: %d process visible (linux.pslist)",
-            len(rows_list),
+        console.ok(
+            f"memory probe passed: {len(rows_list)} process(es) visible (linux.pslist)"
         )
