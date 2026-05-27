@@ -21,9 +21,23 @@ from typing import Any, Callable
 from orchestrator.attacks.art_runner import ArtRunner
 from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
+from typing import Protocol
 
 _REVSHELL_PORT = 4444
 _REVSHELL_TIMEOUT = 10
+
+
+class ScenarioProtocol(Protocol):
+    def run(
+        self,
+        ssh: SSHClient,
+        runner: ArtRunner,
+        host_ip: str,
+        internet_on,
+        internet_off,
+        *,
+        run_cleanup: bool = False,
+    ) -> dict[str, Any]: ...
 
 
 @dataclass

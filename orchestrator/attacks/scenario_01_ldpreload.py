@@ -40,6 +40,7 @@ The orchestrator stamps "scenario_id" on top.
 """
 
 from __future__ import annotations
+from functools import partial
 
 from typing import Any
 
@@ -88,21 +89,16 @@ def run(
     *,
     run_cleanup: bool = False,
 ) -> dict[str, Any]:
+    _step = partial(
+        run_art_step, runner, internet_on=internet_on, internet_off=internet_off
+    )
     steps: list[dict[str, Any]] = []
 
     console.step_header("[1/4] discovery")
-    steps.append(run_art_step(runner, _DISCOVERY))
+    steps.append(_step(_DISCOVERY))
 
     console.step_header("[2/4] LD_PRELOAD infection")
-    steps.append(
-        run_art_step(
-            runner,
-            _LDPRELOAD,
-            internet_on=internet_on,
-            internet_off=internet_off,
-            raise_on_error=True,
-        )
-    )
+    steps.append(_step(_LDPRELOAD, raise_on_error=True))
 
     console.step_header("[3/4] LD_PRELOAD hook trigger")
     steps.append(_trigger_hook(ssh))
