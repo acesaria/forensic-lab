@@ -164,6 +164,7 @@ class ForensicOrchestrator:
                 vm_name, ssh, scenario_id, scenario_cfg
             )
 
+        console.section_end()
         self._persist_ground_truth(scenario_ts, ground_truth)
 
         if acquire:
@@ -213,7 +214,7 @@ class ForensicOrchestrator:
                 **extras,
             )
         finally:
-            self.vm_manager.internet_off(vm_name)
+            self.vm_manager.internet_off(vm_name, quiet=True)
         if not isinstance(ground_truth, dict):
             raise RuntimeError(
                 f"scenario '{scenario_id}' returned {type(ground_truth).__name__}, expected dict"
@@ -358,9 +359,11 @@ class ForensicOrchestrator:
         memory_path = scenario_dir / "memory" / BASELINE_MEMORY_FILENAME
         disk_path = scenario_dir / "disk" / BASELINE_DISK_FILENAME
 
+        console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
         self.vm_manager.shutdown_vm(vm_name)
         disk_meta = self.dumper.acquire_disk(vm_name, disk_source, disk_path)
+        console.section_end()
 
         return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
 

@@ -157,11 +157,16 @@ class VMManager:
     def internet_on(self, vm_name: str, wait: int = 5) -> None:
         """Bring the NAT NIC link up; sleep briefly to let DHCP settle."""
         self._provider.set_nat_link(vm_name, up=True)
+        console.info("NAT NIC link up", indent=True)
         time.sleep(wait)
 
-    def internet_off(self, vm_name: str) -> None:
-        """Bring the NAT NIC link down."""
+    def internet_off(self, vm_name: str, quiet: bool = False) -> None:
+        """Bring the NAT NIC link down. quiet=True suppresses the log line --
+        used by the orchestrator's safety-net so we don't double-print after
+        the scenario already cleaned up."""
         self._provider.set_nat_link(vm_name, up=False)
+        if not quiet:
+            console.info("NAT NIC link down", indent=True)
 
     def open_ssh(self, vm_name: str) -> SSHClient:
         """

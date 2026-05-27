@@ -161,7 +161,9 @@ class Provider:
         except libvirt.libvirtError:
             pass
         _log.debug(
-            "defining pool '%s' at %s...", self._pool_name, self._pool_path,
+            "defining pool '%s' at %s...",
+            self._pool_name,
+            self._pool_path,
         )
         pool = conn.storagePoolDefineXML(self._pool_xml())
         pool.setAutostart(1)
@@ -309,7 +311,7 @@ class Provider:
             except libvirt.libvirtError:
                 return  # domain disappeared: already off
             if state == libvirt.VIR_DOMAIN_SHUTOFF:
-                console.ok(f"VM '{vm_name}' shut down gracefully")
+                console.ok(f"VM '{vm_name}' shut down gracefully", indent=True)
                 return
             time.sleep(2)
         console.info(f"graceful shutdown timed out; forcing off '{vm_name}'")
@@ -440,7 +442,7 @@ class Provider:
                 f"virsh domif-setlink {vm_name} {mac} {state} failed: "
                 f"{result.stderr.strip()}"
             )
-        console.info(f"NAT NIC link {state} on '{vm_name}' (mac={mac})")
+        _log.debug("NAT NIC link %s on '%s' (mac=%s)", state, vm_name, mac)
 
     # --- snapshots -------------------------------------------------------
 

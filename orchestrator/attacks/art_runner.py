@@ -64,12 +64,12 @@ class ArtRunner:
         test = self._load_test(technique_id, test_guid)
         self._ensure_assets(technique_id)
         cmd = self._build_command(test["executor"]["command"], test, input_arguments)
-        console.step(f"{technique_id}/{test_guid}  {test.get('name', '')}")
+        short_guid = test_guid.split("-", 1)[0] if test_guid else ""
+        label = f"{technique_id}/{short_guid}  {test.get('name', '')}".rstrip()
+        console.step(label, indent=True)
         code, out, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
-            console.warn(
-                f"exit {code} for {technique_id}/{test_guid}: {err.strip()}"
-            )
+            console.warn(f"exit {code}: {err.strip()}", indent=True)
             if raise_on_error:
                 raise RuntimeError(
                     f"ART test {technique_id}/{test_guid} exited {code}.\n{err.strip()}"
@@ -100,7 +100,8 @@ class ArtRunner:
         code, out, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
             console.warn(
-                f"cleanup exited {code} for {technique_id}/{test_guid}: {err.strip()}"
+                f"cleanup exited {code} for {technique_id}: {err.strip()}",
+                indent=True,
             )
 
     def run_prerequisites(
@@ -140,7 +141,7 @@ class ArtRunner:
                 )
                 continue
 
-            console.step(f"installing prereq {i} for {technique_id}/{test_guid}...")
+            console.step(f"installing prereq {i}...", indent=True)
             install = self._build_command(install_cmd, test, input_arguments)
             self._ssh.run_checked(install, timeout=timeout)
 
@@ -191,7 +192,8 @@ class ArtRunner:
             uploaded += 1
         console.ok(
             f"uploaded {uploaded} atomics asset(s) for {technique_id} "
-            f"to {remote_tech_root}"
+            f"to {remote_tech_root}",
+            indent=True,
         )
 
     @staticmethod

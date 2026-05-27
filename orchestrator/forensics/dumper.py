@@ -96,7 +96,7 @@ class Dumper:
             dest.unlink()
 
         started = time.time()
-        console.step(f"acquiring memory from '{domain}'...")
+        console.step(f"acquiring memory from '{domain}'...", indent=True)
         result = subprocess.run(
             ["virsh", "dump", domain, str(dest), "--memory-only"],
             check=False,
@@ -122,7 +122,8 @@ class Dumper:
         )
         console.ok(
             f"memory dump done ({elapsed:.1f}s): "
-            f"{self._rel_or_abs(dest)}, {_format_bytes(size_bytes)}"
+            f"{self._rel_or_abs(dest)}, {_format_bytes(size_bytes)}",
+            indent=True,
         )
         return ImageMetadata(
             path=self._rel_or_abs(dest),
@@ -149,10 +150,11 @@ class Dumper:
 
         started = time.time()
         virtual_size = self._qemu_virtual_size(disk_source)
-        console.step(f"acquiring disk from '{Path(disk_source).stem}'...")
+        console.step(f"acquiring disk from '{Path(disk_source).stem}'...", indent=True)
 
         self._convert_to_raw(disk_source, raw_path)
         self._run_ewfacquire(raw_path, ewf_prefix)
+        # self._run_ewfacquire_from_qcow2(disk_source, ewf_prefix)
 
         ewf_segments = sorted(glob.glob(f"{ewf_prefix}.E??"))
         self._validate_ewf_segments(ewf_segments, ewf_prefix)
@@ -206,7 +208,8 @@ class Dumper:
             raw_path.unlink()
 
     def _convert_to_raw(self, disk_source: str, raw_path: Path) -> None:
-        """Convert qcow2 source to a flat raw image for ewfacquire."""
+        # Write to /dev/shm (tmpfs) to avoid a second disk write.
+        # For a sparse qcow2 the written size is much smaller than virtual size.
         _log.debug("converting to raw: %s -> %s", disk_source, raw_path)
         try:
             subprocess.run(
@@ -231,10 +234,14 @@ class Dumper:
         try:
             result = subprocess.run(
                 [
-                    "ewfacquire", "-u",
-                    "-c", "fast",
-                    "-j", threads,
-                    "-t", ewf_prefix,
+                    "ewfacquire",
+                    "-u",
+                    "-c",
+                    "empty-block",
+                    "-j",
+                    threads,
+                    "-t",
+                    ewf_prefix,
                     str(raw_path),
                 ],
                 check=False,
@@ -277,11 +284,14 @@ class Dumper:
         if segment_count == 1:
             size_info = f"ewf {_format_bytes(ewf_total_size)}"
         else:
-            size_info = f"{segment_count} segments, ewf {_format_bytes(ewf_total_size)} total"
+            size_info = (
+                f"{segment_count} segments, ewf {_format_bytes(ewf_total_size)} total"
+            )
         console.ok(
             f"disk acquisition done ({elapsed:.1f}s): "
             f"{self._rel_or_abs(Path(segments[0]))} "
-            f"(virtual {_format_bytes(virtual_size)}, {size_info})"
+            f"(virtual {_format_bytes(virtual_size)}, {size_info})",
+            indent=True,
         )
 
     # --- private: generic helpers ----------------------------------------

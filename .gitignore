@@ -50,3 +50,4 @@ orchestrator/attacks/attack_01_ptrace.py
 orchestrator/attacks/attack_05_metasploit.py
 orchestrator/attacks/attack_06_kernel.py
 CLAUDE.local.md
+shared/dumps

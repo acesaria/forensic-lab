@@ -64,8 +64,8 @@ class PrefixColorFormatter(logging.Formatter):
         msg = super().format(record)
         if not _color_enabled():
             return msg
-        # Preserve leading newlines used for visual breathing room.
-        stripped = msg.lstrip("\n")
+        # Preserve leading newlines and indentation; locate the prefix after them.
+        stripped = msg.lstrip("\n").lstrip(" ")
         leading = msg[: len(msg) - len(stripped)]
         for token, color in _COLORS.items():
             if stripped.startswith(token):
@@ -73,31 +73,45 @@ class PrefixColorFormatter(logging.Formatter):
         return msg
 
 
-def step(msg: str) -> None:
+_INDENT = "    "
+
+
+def step(msg: str, *, indent: bool = False) -> None:
     """[*] in-progress action. Caller usually ends `msg` with '...'."""
-    _log.info("[*] %s", msg)
+    _log.info("%s[*] %s", _INDENT if indent else "", msg)
 
 
-def ok(msg: str) -> None:
+def ok(msg: str, *, indent: bool = False) -> None:
     """[+] success / done. No trailing punctuation by convention."""
-    _log.info("[+] %s", msg)
+    _log.info("%s[+] %s", _INDENT if indent else "", msg)
 
 
-def info(msg: str) -> None:
+def info(msg: str, *, indent: bool = False) -> None:
     """[i] state / informational note."""
-    _log.info("[i] %s", msg)
+    _log.info("%s[i] %s", _INDENT if indent else "", msg)
 
 
-def warn(msg: str) -> None:
+def warn(msg: str, *, indent: bool = False) -> None:
     """[!] warning."""
-    _log.warning("[!] %s", msg)
+    _log.warning("%s[!] %s", _INDENT if indent else "", msg)
 
 
-def err(msg: str) -> None:
+def err(msg: str, *, indent: bool = False) -> None:
     """[-] error."""
-    _log.error("[-] %s", msg)
+    _log.error("%s[-] %s", _INDENT if indent else "", msg)
 
 
 def section(title: str) -> None:
-    """Blank line + `=== title ===` header."""
+    """Blank line + `=== title ===` top-level section header."""
     _log.info("\n=== %s ===", title)
+
+
+def step_header(label: str) -> None:
+    """Blank line + `--- label ---` sub-header for one step inside a section.
+    Subsequent log lines inside that step should use indent=True."""
+    _log.info("\n--- %s ---", label)
+
+
+def section_end() -> None:
+    """Emit a single blank line to break visual rhythm between blocks."""
+    _log.info("")
