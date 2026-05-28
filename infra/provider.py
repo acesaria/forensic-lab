@@ -27,7 +27,7 @@ VM lifecycle:
 
 Introspection:
     get_vm_ip(vm_name, timeout) -> str
-    get_disk_path(vm_name) -> str
+    get_disk_path(vm_name) -> Path
 
 Snapshots (disk-only, taken while VM is shutoff):
     snapshot_exists(vm_name, snapshot_name) -> bool
@@ -229,7 +229,7 @@ class Provider:
             pass
 
         disk_path = self._pool_path / f"{vm_name}.qcow2"
-        self._create_disk_overlay(base_image, disk_path, role_cfg["disk_size"])
+        self._create_vm_disk_from_base(base_image, disk_path, role_cfg["disk_size"])
         network = role_cfg.get("network")
         nat_network = role_cfg.get("nat_network")
         os_variant = profile.get("os_variant") or "generic"
@@ -272,29 +272,40 @@ class Provider:
         console.ok(f"VM '{vm_name}' created")
         return vm_name
 
-    def _create_disk_overlay(
-        self, base_image: Path, disk_path: Path, disk_size: str
+    def _create_vm_disk_from_base(
+        self,
+        base_image: Path,
+        disk_path: Path,
+        disk_size: str,
     ) -> None:
+        # The cached cloud image must stay immutable. Each lab VM gets its own
+        # standalone disk so experiment-time snapshots and commits never touch
+        # the shared source image in /images.
         if disk_path.exists():
             disk_path.unlink()
+
         result = subprocess.run(
             [
                 "qemu-img",
-                "create",
-                "-f",
+                "convert",
+                "-O",
                 "qcow2",
-                "-b",
                 str(base_image),
-                "-F",
-                "qcow2",
                 str(disk_path),
-                disk_size,
             ],
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            raise RuntimeError(f"qemu-img failed:\n{result.stderr.strip()}")
+            raise RuntimeError(f"qemu-img convert failed:\n{result.stderr.strip()}")
+
+        result = subprocess.run(
+            ["qemu-img", "resize", str(disk_path), disk_size],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(f"qemu-img resize failed:\n{result.stderr.strip()}")
 
     # --- VM lifecycle ----------------------------------------------------
 
@@ -502,7 +513,7 @@ class Provider:
             time.sleep(5)
         raise RuntimeError(f"Timed out waiting for IP on '{vm_name}' after {timeout}s")
 
-    def get_disk_path(self, vm_name: str) -> str:
+    def get_disk_path(self, vm_name: str) -> Path:
         """Return the primary qcow2 disk path for a domain."""
         conn = self._connect()
         dom = conn.lookupByName(vm_name)
@@ -510,7 +521,7 @@ class Provider:
         for disk in root.findall(".//disk[@type='file'][@device='disk']"):
             src = disk.find("source")
             if src is not None:
-                return src.attrib["file"]
+                return Path(src.attrib["file"])
         raise RuntimeError(f"Could not find disk path for '{vm_name}'")
 
     # --- NAT NIC link toggle ---------------------------------------------

@@ -188,7 +188,9 @@ class ForensicOrchestrator:
         self._persist_ground_truth(scenario_ts, ground_truth)
 
         if acquire:
-            return self._run_acquisition(vm_name, scenario_ts)
+            return self._run_acquisition(
+                vm_name, scenario_ts, disk_acquisition_mode="external_snapshot"
+            )
         return None
 
     def _dispatch_scenario(
@@ -409,16 +411,18 @@ class ForensicOrchestrator:
         manifest under disk_acquisition_mode.
         """
         mode = normalize_disk_acquisition_mode(disk_acquisition_mode)
-        disk_source = self.vm_manager.get_disk_path(vm_name)
+        vm_disk_path = self.vm_manager.get_disk_path(vm_name)
+
         scenario_dir = self.dumper.scenario_dir(scenario_id)
-        memory_path = scenario_dir / "memory" / BASELINE_MEMORY_FILENAME
-        disk_path = scenario_dir / "disk" / BASELINE_DISK_FILENAME
+        memory_dump_path = scenario_dir / "memory" / BASELINE_MEMORY_FILENAME
+        disk_dump_path = scenario_dir / "disk" / BASELINE_DISK_FILENAME
 
         console.step_header("acquisition")
-        memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
+        memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)
         disk_meta = self._acquire_disk_for_mode(
-            vm_name, disk_source, disk_path, "external_snapshot"
+            vm_name, vm_disk_path, disk_dump_path, mode
         )
+
         console.section_end()
 
         return self.dumper.write_manifest(
@@ -431,34 +435,39 @@ class ForensicOrchestrator:
     def _acquire_disk_for_mode(
         self,
         vm_name: str,
-        disk_source: str,
-        disk_path: Path,
+        vm_disk_path: Path,
+        dump_path: Path,
         mode: str,
     ) -> ImageMetadata:
         # Mode dispatch lives here, not in the dumper: VM lifecycle and
         # snapshot prepare/finalize are orchestration concerns, while the
         # dumper is pure host-side I/O.
         console.step(f"acquiring disk from '{vm_name} (mode={mode})'...", indent=True)
+
         if mode == "offline":
             # qemu-img convert needs the qcow2 not held by QEMU; a clean
             # guest shutdown is the simplest way to release the lock.
             self.vm_manager.shutdown_vm(vm_name)
-            return self.dumper.acquire_disk(disk_source, disk_path)
+            return self.dumper.acquire_disk(vm_disk_path, dump_path)
+
         if mode == "external_snapshot":
             # Live external disk snapshot diverts guest writes to an overlay,
-            # leaving the base qcow2 quiesced for host-side qemu-img convert.
-            # Avoids the filesystem noise (cleanup units, log rotation, fs
-            # sync) that a guest shutdown would introduce.
-            overlay_path = Path(disk_source).parent / (
+            # leaving the VM disk stable for host-side acquisition without the
+            # shutdown noise that would otherwise alter guest-visible artifacts.
+            overlay_path = vm_disk_path.parent / (
                 f"{vm_name}-acq-{int(datetime.now().timestamp())}.overlay.qcow2"
             )
+
             self.vm_manager.prepare_disk_acquisition_external(vm_name, overlay_path)
+
             acq_exc: BaseException | None = None
             disk_meta: ImageMetadata | None = None
+
             try:
-                disk_meta = self.dumper.acquire_disk(disk_source, disk_path)
+                disk_meta = self.dumper.acquire_disk(vm_disk_path, dump_path)
             except BaseException as exc:
                 acq_exc = exc
+
             try:
                 self.vm_manager.finalize_disk_acquisition_external(
                     vm_name, overlay_path
@@ -477,10 +486,13 @@ class ForensicOrchestrator:
                     "qcow2 chain may need manual cleanup.\n"
                     f"  overlay: {overlay_path}"
                 ) from fin_exc
+
             if acq_exc is not None:
                 raise acq_exc
+
             assert disk_meta is not None
             return disk_meta
+
         raise ValueError(f"unknown disk acquisition mode: {mode!r}")
 
 

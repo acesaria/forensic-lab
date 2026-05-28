@@ -142,7 +142,7 @@ class VMManager:
 
     # --- VM access and introspection -------------------------------------
 
-    def get_disk_path(self, vm_name: str) -> str:
+    def get_disk_path(self, vm_name: str) -> Path:
         """Return the host-side disk path for vm_name. Used by Dumper."""
         return self._provider.get_disk_path(vm_name)
 

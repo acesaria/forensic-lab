@@ -10,6 +10,7 @@ import hashlib
 import os
 import stat
 from pathlib import Path
+import subprocess
 from typing import Any
 
 import requests
@@ -97,7 +98,9 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
             f"  expected: {expected}\n"
             f"  actual:   {actual}"
         )
-    console.ok(f"checksum OK: {actual[:16]}...")
+    _lock_base_image(dest)
+    console.ok(f"checksum OK: {actual[:16]}... image locked read-only.")
+
     return dest
 
 
@@ -118,3 +121,26 @@ def _download(url: str, dest: Path) -> None:
                         flush=True,
                     )
     print()  # newline after progress
+
+
+def _lock_base_image(path: Path) -> None:
+    # Cached base images are pinned setup-time inputs. Lock them after
+    # checksum verification so experiment-time code cannot silently mutate them.
+    try:
+        subprocess.run(
+            ["sudo", "/bin/chown", "root:root", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(
+            ["sudo", "/bin/chmod", "0444", str(path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"failed to lock base image '{path}':\n"
+            f"{(exc.stderr or exc.stdout).strip()}"
+        ) from exc

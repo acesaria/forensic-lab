@@ -22,6 +22,7 @@ BASELINE_SNAPSHOT = "baseline"
 # Must match the user created in infra/cloud-init/user-data
 LAB_USER = "labuser"
 
+
 # Bundled paths -- relative to repo_root, joined at call sites.
 LAB_BASELINE_PLAYBOOK = Path("infra/ansible/lab_baseline.yml")
 ISF_BUILD_PLAYBOOK = Path("infra/ansible/isf_build.yml")

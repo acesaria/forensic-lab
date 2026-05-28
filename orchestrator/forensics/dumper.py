@@ -25,7 +25,6 @@ from pathlib import Path
 
 from orchestrator.core import console
 
-
 # Canonical labels used in manifests and across orchestration boundaries.
 # Legacy aliases ("shutdown", "suspend") are accepted for normalization
 # only -- they must never leak past normalize_disk_acquisition_mode().
@@ -47,6 +46,7 @@ def normalize_disk_acquisition_mode(mode: str) -> str:
         f"expected one of {_CANONICAL_MODES} "
         f"(legacy aliases: {sorted(_MODE_ALIASES)})"
     )
+
 
 _log = logging.getLogger(__name__)
 
@@ -173,7 +173,7 @@ class Dumper:
 
     # --- disk (VM must be OFF) -------------------------------------------
 
-    def acquire_disk(self, disk_source: str, dest: Path) -> ImageMetadata:
+    def acquire_disk(self, source_image_path: Path, dest: Path) -> ImageMetadata:
         """
         Pure host-side disk acquisition: qemu-img convert -> raw, then
         ewfacquire -> EWF. Assumes disk_source is safe to read (VM off, or
@@ -186,10 +186,12 @@ class Dumper:
         self._clean_previous_output(ewf_prefix, raw_path)
 
         started = time.time()
-        virtual_size = self._qemu_virtual_size(disk_source)
-        console.step(f"acquiring disk from '{Path(disk_source).stem}'...", indent=True)
+        virtual_size = self._qemu_virtual_size(source_image_path)
+        console.step(
+            f"acquiring disk from '{Path(source_image_path).stem}'...", indent=True
+        )
 
-        self._convert_to_raw(disk_source, raw_path)
+        self._convert_to_raw(source_image_path, raw_path)
         self._run_ewfacquire(raw_path, ewf_prefix)
         # self._run_ewfacquire_from_qcow2(disk_source, ewf_prefix)
 
@@ -256,13 +258,13 @@ class Dumper:
         if raw_path.exists():
             raw_path.unlink()
 
-    def _convert_to_raw(self, disk_source: str, raw_path: Path) -> None:
+    def _convert_to_raw(self, disk_source: Path, raw_path: Path) -> None:
         # Write to /dev/shm (tmpfs) to avoid a second disk write.
         # For a sparse qcow2 the written size is much smaller than virtual size.
         _log.debug("converting to raw: %s -> %s", disk_source, raw_path)
         try:
             subprocess.run(
-                ["qemu-img", "convert", "-O", "raw", disk_source, str(raw_path)],
+                ["qemu-img", "convert", "-O", "raw", str(disk_source), str(raw_path)],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -354,10 +356,10 @@ class Dumper:
         return h.hexdigest()
 
     @staticmethod
-    def _qemu_virtual_size(disk_source: str) -> int | None:
+    def _qemu_virtual_size(disk_source: Path) -> int | None:
         try:
             result = subprocess.run(
-                ["qemu-img", "info", "--output", "json", disk_source],
+                ["qemu-img", "info", "--output", "json", disk_source.absolute()],
                 capture_output=True,
                 text=True,
                 check=True,
