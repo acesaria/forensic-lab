@@ -25,8 +25,8 @@ VM power-state contract
 prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM destroyed)
 _reset_lab         ends ON + SSH ready
-_run_acquisition   ends ON (VM restarted after disk dump)
-run_experiment     ends ON (caller decides when to shut down)
+_run_acquisition   ends OFF (VM shut down before host-side disk dump)
+run_experiment     ends OFF after acquisition (or ON if acquire=False)
 """
 
 from datetime import datetime
@@ -52,6 +52,13 @@ from orchestrator.core.vm_manager import VMManager
 from orchestrator.attacks import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
+from orchestrator.forensics.plaso_runner import (
+    default_linux_filter,
+    read_timeline,
+    run_log2timeline,
+    run_psort,
+    verify_plaso_inputs,
+)
 
 
 class ForensicOrchestrator:
@@ -313,7 +320,7 @@ class ForensicOrchestrator:
 
     def verify_pipeline(self, distro_id: str) -> None:
         """
-        Acquire a baseline image and probe with Volatility + SleuthKit.
+        Acquire a baseline image and probe with Volatility + SleuthKit + Plaso.
         Called automatically at the end of the CLI 'setup' sequence.
         Requires the ISF to already exist (call after build_isf).
         VM ends OFF.
@@ -333,7 +340,30 @@ class ForensicOrchestrator:
         console.step(f"probing acquired images for {distro_id}...")
         self._vol_runner.probe(memory_path, distro_id)
         self._sleuth_runner.probe(disk_path)
+        self._verify_plaso(distro_id, disk_path)
         console.ok(f"pipeline verified for '{distro_id}'")
+
+    def _verify_plaso(self, distro_id: str, disk_path: Path) -> None:
+        # Shallow sanity check: confirm the host's Plaso toolchain can ingest
+        # the disk and emit at least one JSON event. Artifacts land under
+        # results/<distro>_verify_<ts>/ so they survive for inspection and
+        # don't sit inside the dumps tree (acquisition outputs) or the repo
+        # root. The default Linux filter keeps this fast and
+        # verify_plaso_inputs() catches missing binaries / YAML up front.
+        file_filter = default_linux_filter()
+        verify_plaso_inputs(file_filter=file_filter)
+        verify_dir = _make_verify_output_dir(self.repo_root, distro_id)
+        storage_path = verify_dir / "verify.plaso"
+        timeline_path = verify_dir / "verify.jsonl"
+        run_log2timeline(
+            disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
+        )
+        run_psort(storage_path=storage_path, output_path=timeline_path)
+        events = read_timeline(timeline_path)
+        console.ok(
+            f"plaso probe passed: {len(events)} event(s) readable "
+            f"(artifacts: {verify_dir})"
+        )
 
     # --- private: experiment helpers -------------------------------------
 
@@ -353,6 +383,12 @@ class ForensicOrchestrator:
         """
         Acquire memory (VM ON) then disk (VM OFF).
         VM ends OFF. Returns manifest path.
+
+        Note: shutdown_vm is intentionally retained here rather than swapping
+        in suspend_vm. virsh suspend leaves QEMU holding the qcow2, so the
+        host-side qemu-img convert path that acquire_disk uses cannot safely
+        read the active image. See the TODO in dumper.acquire_disk for the
+        snapshot-based path that would let us avoid the shutdown.
         """
         disk_source = self.vm_manager.get_disk_path(vm_name)
         scenario_dir = self.dumper.scenario_dir(scenario_id)
@@ -362,7 +398,9 @@ class ForensicOrchestrator:
         console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
         self.vm_manager.shutdown_vm(vm_name)
-        disk_meta = self.dumper.acquire_disk(vm_name, disk_source, disk_path)
+        disk_meta = self.dumper.acquire_disk(
+            vm_name, disk_source, disk_path, mode="suspend"
+        )
         console.section_end()
 
         return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
@@ -375,3 +413,14 @@ def _isf_filename(distro_id: str, kernel_release: str) -> str:
     family = distro_id.split("-", 1)[0]
     safe_kernel = kernel_release.replace("/", "_")
     return f"{family}_{safe_kernel}.json"
+
+
+def _make_verify_output_dir(base_dir: Path, distro_id: str) -> Path:
+    # Minimal sanitization: distro_id is expected to be like "ubuntu-22.04",
+    # but a stray '/' would punch a hole in the directory layout, so collapse
+    # it. Dots/dashes are fine on every supported filesystem.
+    safe_distro = distro_id.replace("/", "-")
+    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    verify_dir = base_dir / "results" / f"{safe_distro}_verify_{ts}"
+    verify_dir.mkdir(parents=True, exist_ok=False)
+    return verify_dir

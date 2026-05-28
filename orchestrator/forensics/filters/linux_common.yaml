@@ -1,0 +1,37 @@
+# Generic Linux targeted-collection filter for forensic-lab Plaso runs.
+# First-pass and scenario-agnostic: biases toward likely evidence locations,
+# excludes bulky low-value trees that dominate runtime.
+# Per-scenario tightening belongs in a separate filter alongside this one.
+
+description: linux baseline include
+type: include
+paths:
+- '/etc'
+- '/var/log'
+- '/tmp'
+- '/var/tmp'
+- '/home/.+/.bash_history'
+- '/root/.bash_history'
+- '/home/.+/.ssh'
+- '/root/.ssh'
+- '/var/spool/cron'
+- '/etc/crontab'
+- '/etc/cron[.]d'
+- '/etc/systemd'
+- '/usr/lib/systemd'
+- '/lib/systemd'
+---
+description: linux bulky low-value excludes
+type: exclude
+paths:
+- '/usr/share/man'
+- '/usr/share/doc'
+- '/usr/share/info'
+- '/usr/share/locale'
+- '/usr/share/help'
+- '/usr/share/icons'
+- '/usr/share/fonts'
+- '/snap'
+- '/var/cache'
+- '/var/lib/apt/lists'
+- '/usr/src'

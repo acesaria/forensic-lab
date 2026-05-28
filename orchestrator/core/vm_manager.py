@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from infra.image_store import ensure_image
-from infra.provider import Provider
+from infra.provider import Provider, remove_file_if_exists
 from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
     CLOUD_INIT_NETWORK_CONFIG,
@@ -113,6 +113,29 @@ class VMManager:
 
     def shutdown_vm(self, vm_name: str, timeout: int = 60) -> None:
         self._provider.shutdown_vm(vm_name, timeout=timeout)
+
+    def suspend_vm(self, vm_name: str) -> None:
+        self._provider.suspend_vm(vm_name)
+
+    def resume_vm(self, vm_name: str) -> None:
+        self._provider.resume_vm(vm_name)
+
+    def prepare_disk_acquisition_external(
+        self, vm_name: str, overlay_path: Path
+    ) -> None:
+        # Take a live external disk snapshot so guest writes divert to the
+        # overlay and the base qcow2 becomes safe for host-side acquisition.
+        # Guest stays running.
+        self._provider.create_external_disk_snapshot(vm_name, overlay_path)
+
+    def finalize_disk_acquisition_external(
+        self, vm_name: str, overlay_path: Path
+    ) -> None:
+        # Pivot the running guest back to the base chain, then drop the
+        # overlay file. blockcommit --pivot removes the overlay from the
+        # chain but typically leaves the file on disk.
+        self._provider.commit_external_disk_snapshot(vm_name)
+        remove_file_if_exists(overlay_path)
 
     def destroy_vm(self, vm_name: str) -> None:
         self._provider.destroy_vm(vm_name)

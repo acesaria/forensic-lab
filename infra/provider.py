@@ -22,6 +22,8 @@ VM lifecycle:
     start_vm(vm_name) -> None
     shutdown_vm(vm_name, timeout) -> None
     restart_vm(vm_name) -> None
+    suspend_vm(vm_name) -> None
+    resume_vm(vm_name) -> None
 
 Introspection:
     get_vm_ip(vm_name, timeout) -> str
@@ -31,6 +33,13 @@ Snapshots (disk-only, taken while VM is shutoff):
     snapshot_exists(vm_name, snapshot_name) -> bool
     create_snapshot(vm_name, snapshot_name) -> None
     revert_snapshot(vm_name, snapshot_name) -> None
+
+Live external disk snapshots (used by suspend-mode acquisition):
+    create_external_disk_snapshot(vm_name, overlay_path, disk_target) -> None
+    commit_external_disk_snapshot(vm_name, disk_target) -> None
+
+Module helpers:
+    remove_file_if_exists(path) -> None
 
 Notes:
 - Snapshots are disk-only, always taken while the VM is shutoff.
@@ -325,6 +334,97 @@ class Provider:
             dom.destroy()
         dom.create()
 
+    def suspend_vm(self, vm_name: str) -> None:
+        # Hypervisor-level pause. Implemented via virsh subprocess (rather
+        # than dom.suspend()) to keep this entry point usable from contexts
+        # that already shell out for virsh-only operations.
+        result = subprocess.run(
+            ["virsh", "suspend", vm_name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"virsh suspend failed for '{vm_name}' (rc={result.returncode})\n"
+                f"{result.stderr.strip() or '(no output)'}"
+            )
+
+    def resume_vm(self, vm_name: str) -> None:
+        result = subprocess.run(
+            ["virsh", "resume", vm_name],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"virsh resume failed for '{vm_name}' (rc={result.returncode})\n"
+                f"{result.stderr.strip() or '(no output)'}"
+            )
+
+    def create_external_disk_snapshot(
+        self,
+        vm_name: str,
+        overlay_path: Path,
+        disk_target: str = "vda",
+    ) -> None:
+        # Live external disk snapshot: writes are redirected to overlay_path,
+        # so the base qcow2 stops mutating and becomes safe for host-side
+        # qemu-img convert. Guest keeps running. --no-metadata avoids leaving
+        # snapshot records in libvirt that we'd otherwise need to clean up.
+        overlay_path.parent.mkdir(parents=True, exist_ok=True)
+        # Snapshot name is throwaway (no-metadata drops the record after
+        # creation) but virsh still requires one; timestamp keeps logs
+        # distinguishable across concurrent attempts.
+        snapshot_name = f"acq-{int(time.time())}"
+        result = subprocess.run(
+            [
+                "virsh",
+                "snapshot-create-as",
+                vm_name,
+                snapshot_name,
+                "--disk-only",
+                "--atomic",
+                "--no-metadata",
+                "--diskspec",
+                f"{disk_target},file={overlay_path}",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"virsh snapshot-create-as failed for '{vm_name}' "
+                f"(rc={result.returncode})\n"
+                f"{result.stderr.strip() or '(no output)'}"
+            )
+
+    def commit_external_disk_snapshot(
+        self,
+        vm_name: str,
+        disk_target: str = "vda",
+    ) -> None:
+        # blockcommit --active --pivot merges the overlay back into the base
+        # chain and atomically swaps the live disk reference. After this the
+        # original qcow2 is once again the head of the chain.
+        result = subprocess.run(
+            [
+                "virsh",
+                "blockcommit",
+                vm_name,
+                disk_target,
+                "--active",
+                "--pivot",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"virsh blockcommit failed for '{vm_name}' "
+                f"(rc={result.returncode})\n"
+                f"{result.stderr.strip() or '(no output)'}"
+            )
+
     # --- VM destruction --------------------------------------------------
 
     def destroy_vm(self, vm_name: str) -> None:
@@ -475,3 +575,14 @@ class Provider:
         snap = dom.snapshotLookupByName(snapshot_name)
         dom.revertToSnapshot(snap)
         console.ok(f"VM '{vm_name}' reverted to '{snapshot_name}'")
+
+
+def remove_file_if_exists(path: Path) -> None:
+    # Idempotent cleanup for overlay files after a successful blockcommit
+    # pivot. The overlay is dropped from the qcow2 chain but the file on
+    # disk often lingers; this clears it without caring whether it was
+    # already removed.
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        pass

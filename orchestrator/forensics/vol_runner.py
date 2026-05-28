@@ -24,34 +24,31 @@ from orchestrator.core import console
 _log = logging.getLogger(__name__)
 
 
-def _run_vol_subprocess(
+def _run_vol_command(
     vol_bin: str,
-    memory_path: str,
-    isf_path: str,
+    memory_path: Path,
+    isf_path: Path,
     plugin: str,
-    extra_args: list[str],
-) -> tuple[str, list[dict]]:
-    """
-    Module-level function required for pickling with ProcessPoolExecutor.
-    Returns (plugin_name, rows).
-    """
-    isf_dir = str(Path(isf_path).parent)
+    extra_args: list[str] | None = None,
+) -> list[dict]:
+    # Module-level so ProcessPoolExecutor can pickle it. Centralises JSON
+    # normalization so run_plugin and run_plugins agree on row shape.
     cmd = [
         vol_bin,
         "-f",
-        memory_path,
+        str(memory_path),
         "-s",
-        isf_dir,
+        str(isf_path.parent),
         "-r",
         "json",
         plugin,
-        *extra_args,
+        *(extra_args or []),
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError:
         raise RuntimeError(
-            "vol3: binary not found. Install volatility3 and ensure " "it is on PATH."
+            "vol3: binary not found. Install volatility3 and ensure it is on PATH."
         )
     if result.returncode != 0:
         raise RuntimeError(
@@ -60,16 +57,26 @@ def _run_vol_subprocess(
         )
     try:
         data = json.loads(result.stdout)
-        if isinstance(data, dict) and isinstance(data.get("rows"), list):
-            raw_rows = data["rows"]
-        elif isinstance(data, list):
-            raw_rows = data
-        else:
-            raw_rows = []
-        rows = [row for row in raw_rows if isinstance(row, dict)]
-        return plugin, rows
     except json.JSONDecodeError as exc:
         raise RuntimeError(f"vol3 '{plugin}' output is not valid JSON: {exc}") from exc
+
+    if isinstance(data, dict) and isinstance(data.get("rows"), list):
+        raw_rows = data["rows"]
+    elif isinstance(data, list):
+        raw_rows = data
+    else:
+        raw_rows = []
+    return [row for row in raw_rows if isinstance(row, dict)]
+
+
+def first_present(row: dict, *keys: str) -> object | None:
+    # Volatility field names drift between versions (PID vs Pid, etc.).
+    # Evaluator code can use this to stay tolerant without hard-coding one spelling.
+    for key in keys:
+        value = row.get(key)
+        if value not in (None, ""):
+            return value
+    return None
 
 
 class VolatilityRunner:
@@ -91,12 +98,6 @@ class VolatilityRunner:
         )
 
     def resolve_isf(self, distro_id: str) -> Path:
-        """
-        Find the ISF file for distro_id in isf_dir.
-        Matches on the distro family prefix (e.g. "ubuntu" from "ubuntu-22.04").
-        Returns the most recently modified match.
-        Raises if none found.
-        """
         family = distro_id.split("-", 1)[0]
         matches = sorted(self._isf_dir.glob(f"{family}_*.json"))
         if not matches:
@@ -113,29 +114,29 @@ class VolatilityRunner:
         plugin: str,
         extra_args: list[str] | None = None,
     ) -> list[dict]:
-        """Run a single vol3 plugin. Returns parsed JSON rows."""
         isf_path = self.resolve_isf(distro_id)
-        _, rows = _run_vol_subprocess(
+        return _run_vol_command(
             self._vol_bin,
-            str(memory_path),
-            str(isf_path),
+            memory_path,
+            isf_path,
             plugin,
-            extra_args or [],
+            extra_args,
         )
-        return rows
 
     def run_plugins(
         self,
         memory_path: Path,
         distro_id: str,
-        plugins: list[str],
+        plugins: list[str] | dict[str, list[str]],
         max_workers: int = 4,
     ) -> dict[str, list[dict]]:
-        """
-        Run multiple plugins in parallel against one memory image.
-        Returns {plugin_name: rows} for all plugins.
-        Raises RuntimeError listing all failures if any plugin fails.
-        """
+        # Accept either a flat list (no extra args) or a mapping of
+        # plugin -> args. Normalize to a single dict shape internally.
+        if isinstance(plugins, dict):
+            plugin_args: dict[str, list[str]] = {p: list(a) for p, a in plugins.items()}
+        else:
+            plugin_args = {p: [] for p in plugins}
+
         isf_path = self.resolve_isf(distro_id)
         results: dict[str, list[dict]] = {}
         failures: list[str] = []
@@ -143,19 +144,19 @@ class VolatilityRunner:
         with ProcessPoolExecutor(max_workers=max_workers) as pool:
             futures = {
                 pool.submit(
-                    _run_vol_subprocess,
+                    _run_vol_command,
                     self._vol_bin,
-                    str(memory_path),
-                    str(isf_path),
+                    memory_path,
+                    isf_path,
                     plugin,
-                    [],
+                    args,
                 ): plugin
-                for plugin in plugins
+                for plugin, args in plugin_args.items()
             }
             for future in as_completed(futures):
                 plugin = futures[future]
                 try:
-                    _, rows = future.result()
+                    rows = future.result()
                     results[plugin] = rows
                     _log.debug("vol3 %s: %d row(s)", plugin, len(rows))
                 except Exception as exc:
@@ -167,38 +168,26 @@ class VolatilityRunner:
         return results
 
     def probe(self, memory_path: Path, distro_id: str) -> None:
-        """Sanity check: linux.pslist must return at least one process row."""
         isf_path = self.resolve_isf(distro_id)
-        isf_dir = isf_path.parent
-        cmd = f"{self._vol_bin} -f {memory_path} -s {isf_dir} " "linux.pslist"
+        repro = f"{self._vol_bin} -f {memory_path} -s {isf_path.parent} linux.pslist"
 
         try:
             rows = self.run_plugin(memory_path, distro_id, "linux.pslist")
         except RuntimeError as exc:
             raise RuntimeError(
                 f"Volatility ISF probe failed for {memory_path.name}. "
-                f"ISF: {isf_path}. Repro: {cmd}. "
+                f"ISF: {isf_path}. Repro: {repro}. "
                 "ISF may not match this kernel -- check dwarf2json output"
             ) from exc
 
-        if isinstance(rows, dict) and "__children" in rows:
-            rows_list = rows.get("__children", [])
-        elif isinstance(rows, list):
-            rows_list = rows
-        else:
-            rows_list = []
-
-        has_pid = any(
-            isinstance(row, dict) and row.get("PID") not in (None, "")
-            for row in rows_list
-        )
-        if not rows_list or not has_pid:
+        has_pid = any(first_present(row, "PID", "Pid", "pid") is not None for row in rows)
+        if not rows or not has_pid:
             raise RuntimeError(
                 f"Volatility ISF probe returned no processes for {memory_path.name}. "
-                f"ISF: {isf_path}. Repro: {cmd}. "
+                f"ISF: {isf_path}. Repro: {repro}. "
                 "ISF may not match this kernel -- check dwarf2json output"
             )
 
         console.ok(
-            f"memory probe passed: {len(rows_list)} process(es) visible (linux.pslist)"
+            f"memory probe passed: {len(rows)} process(es) visible (linux.pslist)"
         )
