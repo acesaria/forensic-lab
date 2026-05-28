@@ -105,8 +105,13 @@ class ForensicOrchestrator:
         role_cfg = self._role_defaults.get("lab")
         if not isinstance(role_cfg, dict):
             raise RuntimeError("Missing 'role_defaults.lab' in config")
-        self.vm_manager.prepare_lab(distro_id, profile, role_cfg)
-        console.ok(f"'{distro_id}' ready for experiments")
+
+        vm_name = "lab-" + distro_id
+        if not self.vm_manager.vm_exists(vm_name):
+            self.vm_manager.prepare_lab(distro_id, profile, role_cfg)
+            console.ok(f"'{distro_id}' ready for experiments")
+        else:
+            console.ok(f"'{distro_id}' already present. Skipping setup")
 
     def build_isf(self, distro_id: str) -> Path:
         """
@@ -412,7 +417,7 @@ class ForensicOrchestrator:
         console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
         disk_meta = self._acquire_disk_for_mode(
-            vm_name, disk_source, disk_path, mode
+            vm_name, disk_source, disk_path, "external_snapshot"
         )
         console.section_end()
 
@@ -433,6 +438,7 @@ class ForensicOrchestrator:
         # Mode dispatch lives here, not in the dumper: VM lifecycle and
         # snapshot prepare/finalize are orchestration concerns, while the
         # dumper is pure host-side I/O.
+        console.step(f"acquiring disk from '{vm_name} (mode={mode})'...", indent=True)
         if mode == "offline":
             # qemu-img convert needs the qcow2 not held by QEMU; a clean
             # guest shutdown is the simplest way to release the lock.
@@ -446,9 +452,7 @@ class ForensicOrchestrator:
             overlay_path = Path(disk_source).parent / (
                 f"{vm_name}-acq-{int(datetime.now().timestamp())}.overlay.qcow2"
             )
-            self.vm_manager.prepare_disk_acquisition_external(
-                vm_name, overlay_path
-            )
+            self.vm_manager.prepare_disk_acquisition_external(vm_name, overlay_path)
             acq_exc: BaseException | None = None
             disk_meta: ImageMetadata | None = None
             try:
