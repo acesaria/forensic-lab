@@ -4,15 +4,13 @@ orchestrator/forensics/dumper.py
 RAM and disk acquisition pipeline. Pure I/O -- no VM lifecycle management.
 
 Caller contract (enforced by orchestrator._run_acquisition):
-  - domain must be ON when acquire_memory is called (virsh dump --live)
-  - acquire_disk has two modes:
-      mode="shutdown": domain must already be OFF; caller drove shutdown
-      mode="suspend":  domain must be RUNNING; dumper drives an external
-                       disk snapshot via the passed vm_manager so the base
-                       qcow2 is quiesced for qemu-img convert without a
-                       guest shutdown. Caller passes the VMManager.
-  - The orchestrator owns memory-step state transitions; the dumper owns
-    the snapshot lifecycle inside the "suspend" branch.
+  - acquire_memory: domain must be ON (virsh dump --live)
+  - acquire_disk:   disk_source must be safe to read at the host level. The
+                    orchestrator arranges this either by shutting the VM
+                    down ("offline" workflow) or by taking a live external
+                    disk snapshot so writes divert to an overlay
+                    ("external_snapshot" workflow). The dumper itself does
+                    no VM state transitions.
 """
 
 import glob
@@ -24,15 +22,31 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from orchestrator.core import console
 
-if TYPE_CHECKING:
-    # Only imported for typing; avoiding the runtime import keeps the
-    # dumper's dependency direction one-way (vm_manager uses dumper outputs,
-    # not the other way around).
-    from orchestrator.core.vm_manager import VMManager
+
+# Canonical labels used in manifests and across orchestration boundaries.
+# Legacy aliases ("shutdown", "suspend") are accepted for normalization
+# only -- they must never leak past normalize_disk_acquisition_mode().
+_CANONICAL_MODES = ("offline", "external_snapshot")
+_MODE_ALIASES = {
+    "shutdown": "offline",
+    "suspend": "external_snapshot",
+}
+
+
+def normalize_disk_acquisition_mode(mode: str) -> str:
+    if mode in _CANONICAL_MODES:
+        return mode
+    canonical = _MODE_ALIASES.get(mode)
+    if canonical is not None:
+        return canonical
+    raise ValueError(
+        f"unknown disk acquisition mode: {mode!r}. "
+        f"expected one of {_CANONICAL_MODES} "
+        f"(legacy aliases: {sorted(_MODE_ALIASES)})"
+    )
 
 _log = logging.getLogger(__name__)
 
@@ -73,14 +87,16 @@ class AcquisitionManifest:
     created_at: float
     memory_image: ImageMetadata
     disk_image: ImageMetadata
-    # User-facing mode label ("shutdown" or "suspend"). Note: "suspend" is
-    # historical -- the implementation uses a live external disk snapshot,
-    # not virsh suspend (see acquire_disk for the why).
-    disk_acquisition_mode: str = "shutdown"
-    # Implementation detail derived from the mode: how the disk was actually
-    # quiesced for host-side acquisition. Carried explicitly so downstream
-    # tools don't need to know the mode->preparation mapping.
-    disk_preparation: str = "guest_shutdown"
+    # Canonical mode label: "offline" or "external_snapshot".
+    # "offline"           = VM not actively using the disk during host-side
+    #                       acquisition (guest powered off first).
+    # "external_snapshot" = live external disk snapshot, used to avoid the
+    #                       active qcow2 lock and the filesystem noise that
+    #                       a guest shutdown would create.
+    disk_acquisition_mode: str = "offline"
+    # Derived from disk_acquisition_mode; carried explicitly so downstream
+    # tools don't have to know the mapping.
+    disk_preparation: str = "powered_off"
 
 
 class Dumper:
@@ -157,80 +173,13 @@ class Dumper:
 
     # --- disk (VM must be OFF) -------------------------------------------
 
-    def acquire_disk(
-        self,
-        vm_name: str,
-        disk_source: str,
-        dest: Path,
-        mode: str = "shutdown",
-        vm_manager: "VMManager | None" = None,
-    ) -> ImageMetadata:
+    def acquire_disk(self, disk_source: str, dest: Path) -> ImageMetadata:
         """
-        Acquire disk via ewfacquire. Dispatches on `mode`:
-
-          - "shutdown": VM must already be OFF; caller drove the shutdown.
-            Preserves the historical flow.
-          - "suspend":  VM is live. Take a live external disk snapshot so
-            writes divert to an overlay, then run the same host-side
-            qemu-img -> raw -> EWF chain against the now-quiesced base
-            qcow2, and blockcommit/pivot back at the end.
-
-        Note: the "suspend" mode name is historical/user-facing. The actual
-        implementation uses an external disk snapshot, not virsh suspend,
-        because suspending the VM does not release the qcow2 lock that
-        qemu-img convert needs.
-        TODO: rename mode to "external_snapshot" once config churn is
-        acceptable.
+        Pure host-side disk acquisition: qemu-img convert -> raw, then
+        ewfacquire -> EWF. Assumes disk_source is safe to read (VM off, or
+        behind an external snapshot overlay so writes don't touch it).
+        VM lifecycle preparation is the caller's responsibility.
         """
-        if mode == "shutdown":
-            return self._do_host_side_acquisition(disk_source, dest)
-        if mode == "suspend":
-            if vm_manager is None:
-                raise RuntimeError(
-                    "acquire_disk(mode='suspend') requires vm_manager to "
-                    "drive the live external disk snapshot"
-                )
-            # Overlay lives beside disk_source so it sits inside the libvirt
-            # pool directory, which qemu can write to without permission
-            # gymnastics.
-            overlay_path = Path(disk_source).parent / (
-                f"{vm_name}-acq-{int(time.time())}.overlay.qcow2"
-            )
-            vm_manager.prepare_disk_acquisition_external(vm_name, overlay_path)
-            acq_exc: BaseException | None = None
-            result: ImageMetadata | None = None
-            try:
-                result = self._do_host_side_acquisition(disk_source, dest)
-            except BaseException as exc:
-                acq_exc = exc
-            try:
-                vm_manager.finalize_disk_acquisition_external(vm_name, overlay_path)
-            except Exception as fin_exc:
-                if acq_exc is not None:
-                    raise RuntimeError(
-                        "disk acquisition failed AND snapshot finalize failed; "
-                        "qcow2 chain needs manual cleanup.\n"
-                        f"  acquisition: {acq_exc}\n"
-                        f"  finalize:    {fin_exc}\n"
-                        f"  overlay:     {overlay_path}"
-                    ) from acq_exc
-                raise RuntimeError(
-                    "disk acquisition succeeded but snapshot finalize failed; "
-                    "qcow2 chain may need manual cleanup.\n"
-                    f"  overlay: {overlay_path}"
-                ) from fin_exc
-            if acq_exc is not None:
-                raise acq_exc
-            assert result is not None
-            return result
-        raise RuntimeError(f"unknown disk acquisition mode: {mode!r}")
-
-    def _do_host_side_acquisition(
-        self, disk_source: str, dest: Path
-    ) -> ImageMetadata:
-        # qemu-img convert -> raw, then ewfacquire -> EWF. Shared by both
-        # modes; assumes disk_source is in a state safe to read (VM off, or
-        # behind a snapshot overlay so writes don't touch it).
         ewf_prefix = str(dest.with_suffix(""))
         raw_path = dest.with_suffix(".raw")
 
@@ -273,20 +222,24 @@ class Dumper:
         scenario_id: str,
         memory_meta: ImageMetadata,
         disk_meta: ImageMetadata,
-        disk_acquisition_mode: str = "shutdown",
+        disk_acquisition_mode: str = "offline",
     ) -> str:
         """Write AcquisitionManifest to disk. Returns the manifest path as str."""
+        # Defensive normalization: callers should already pass canonical
+        # labels, but accepting legacy aliases here means no manifest can
+        # accidentally record "shutdown" or "suspend".
+        canonical_mode = normalize_disk_acquisition_mode(disk_acquisition_mode)
         preparation = (
             "external_snapshot"
-            if disk_acquisition_mode == "suspend"
-            else "guest_shutdown"
+            if canonical_mode == "external_snapshot"
+            else "powered_off"
         )
         manifest = AcquisitionManifest(
             scenario_id=scenario_id,
             created_at=time.time(),
             memory_image=memory_meta,
             disk_image=disk_meta,
-            disk_acquisition_mode=disk_acquisition_mode,
+            disk_acquisition_mode=canonical_mode,
             disk_preparation=preparation,
         )
         manifest_path = self.scenario_dir(scenario_id) / "manifest.json"

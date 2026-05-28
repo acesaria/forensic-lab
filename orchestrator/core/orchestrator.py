@@ -25,8 +25,10 @@ VM power-state contract
 prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM destroyed)
 _reset_lab         ends ON + SSH ready
-_run_acquisition   ends OFF (VM shut down before host-side disk dump)
-run_experiment     ends OFF after acquisition (or ON if acquire=False)
+_run_acquisition   end state depends on mode: "offline" -> OFF,
+                   "external_snapshot" -> ON (guest never stopped)
+run_experiment     mirrors _run_acquisition when acquire=True; ends ON when
+                   acquire=False
 """
 
 from datetime import datetime
@@ -52,6 +54,10 @@ from orchestrator.core.vm_manager import VMManager
 from orchestrator.attacks import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
+from orchestrator.forensics.dumper import (
+    ImageMetadata,
+    normalize_disk_acquisition_mode,
+)
 from orchestrator.forensics.plaso_runner import (
     default_linux_filter,
     read_timeline,
@@ -158,7 +164,9 @@ class ForensicOrchestrator:
         2. Dispatch the scenario module, persist ground truth
         3. Acquire RAM + disk (unless acquire=False)
 
-        VM ends OFF after acquisition.
+        End VM state mirrors the acquisition mode: "offline" leaves the
+        VM OFF, "external_snapshot" leaves it ON. When acquire=False the
+        VM is left ON.
         Returns manifest path if acquired, else None.
         """
         console.section(f"experiment: {scenario_id} on {distro_id}")
@@ -379,17 +387,23 @@ class ForensicOrchestrator:
         self.vm_manager.wait_ssh_ready(vm_name, reason="after snapshot revert")
         return vm_name
 
-    def _run_acquisition(self, vm_name: str, scenario_id: str) -> str:
+    def _run_acquisition(
+        self,
+        vm_name: str,
+        scenario_id: str,
+        disk_acquisition_mode: str = "offline",
+    ) -> str:
         """
-        Acquire memory (VM ON) then disk (VM OFF).
-        VM ends OFF. Returns manifest path.
+        Acquire memory (VM ON) then disk via the chosen workflow:
+          - "offline":           shut down VM, then host-side acquire qcow2.
+          - "external_snapshot": take a live external disk snapshot so writes
+                                 divert to an overlay, host-side acquire the
+                                 quiesced base, then blockcommit + pivot.
 
-        Note: shutdown_vm is intentionally retained here rather than swapping
-        in suspend_vm. virsh suspend leaves QEMU holding the qcow2, so the
-        host-side qemu-img convert path that acquire_disk uses cannot safely
-        read the active image. See the TODO in dumper.acquire_disk for the
-        snapshot-based path that would let us avoid the shutdown.
+        Returns manifest path. The canonical mode label is recorded in the
+        manifest under disk_acquisition_mode.
         """
+        mode = normalize_disk_acquisition_mode(disk_acquisition_mode)
         disk_source = self.vm_manager.get_disk_path(vm_name)
         scenario_dir = self.dumper.scenario_dir(scenario_id)
         memory_path = scenario_dir / "memory" / BASELINE_MEMORY_FILENAME
@@ -397,13 +411,73 @@ class ForensicOrchestrator:
 
         console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_path)
-        self.vm_manager.shutdown_vm(vm_name)
-        disk_meta = self.dumper.acquire_disk(
-            vm_name, disk_source, disk_path, mode="suspend"
+        disk_meta = self._acquire_disk_for_mode(
+            vm_name, disk_source, disk_path, mode
         )
         console.section_end()
 
-        return self.dumper.write_manifest(scenario_id, memory_meta, disk_meta)
+        return self.dumper.write_manifest(
+            scenario_id,
+            memory_meta,
+            disk_meta,
+            disk_acquisition_mode=mode,
+        )
+
+    def _acquire_disk_for_mode(
+        self,
+        vm_name: str,
+        disk_source: str,
+        disk_path: Path,
+        mode: str,
+    ) -> ImageMetadata:
+        # Mode dispatch lives here, not in the dumper: VM lifecycle and
+        # snapshot prepare/finalize are orchestration concerns, while the
+        # dumper is pure host-side I/O.
+        if mode == "offline":
+            # qemu-img convert needs the qcow2 not held by QEMU; a clean
+            # guest shutdown is the simplest way to release the lock.
+            self.vm_manager.shutdown_vm(vm_name)
+            return self.dumper.acquire_disk(disk_source, disk_path)
+        if mode == "external_snapshot":
+            # Live external disk snapshot diverts guest writes to an overlay,
+            # leaving the base qcow2 quiesced for host-side qemu-img convert.
+            # Avoids the filesystem noise (cleanup units, log rotation, fs
+            # sync) that a guest shutdown would introduce.
+            overlay_path = Path(disk_source).parent / (
+                f"{vm_name}-acq-{int(datetime.now().timestamp())}.overlay.qcow2"
+            )
+            self.vm_manager.prepare_disk_acquisition_external(
+                vm_name, overlay_path
+            )
+            acq_exc: BaseException | None = None
+            disk_meta: ImageMetadata | None = None
+            try:
+                disk_meta = self.dumper.acquire_disk(disk_source, disk_path)
+            except BaseException as exc:
+                acq_exc = exc
+            try:
+                self.vm_manager.finalize_disk_acquisition_external(
+                    vm_name, overlay_path
+                )
+            except Exception as fin_exc:
+                if acq_exc is not None:
+                    raise RuntimeError(
+                        "disk acquisition failed AND snapshot finalize failed; "
+                        "qcow2 chain needs manual cleanup.\n"
+                        f"  acquisition: {acq_exc}\n"
+                        f"  finalize:    {fin_exc}\n"
+                        f"  overlay:     {overlay_path}"
+                    ) from acq_exc
+                raise RuntimeError(
+                    "disk acquisition succeeded but snapshot finalize failed; "
+                    "qcow2 chain may need manual cleanup.\n"
+                    f"  overlay: {overlay_path}"
+                ) from fin_exc
+            if acq_exc is not None:
+                raise acq_exc
+            assert disk_meta is not None
+            return disk_meta
+        raise ValueError(f"unknown disk acquisition mode: {mode!r}")
 
 
 # --- module helpers ------------------------------------------------------
