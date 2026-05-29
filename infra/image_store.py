@@ -8,7 +8,7 @@ VMs use qcow2 overlays so the base image is never written to directly
 
 import hashlib
 import os
-import stat
+import tempfile
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -58,8 +58,9 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
     """
     Ensure the base image for *profile* exists in *images_dir* and is valid.
 
-    Returns the absolute path to the verified image.
-    Raises RuntimeError on checksum mismatch.
+    Returns the absolute path to the verified image. A cached file whose
+    checksum no longer matches is removed and re-downloaded once; the user
+    never has to manually rm a corrupt cache.
     """
     images_dir.mkdir(parents=True, exist_ok=True)
 
@@ -69,57 +70,70 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
     algo: str = img_cfg["checksum_algo"]
     filename: str = img_cfg.get("filename") or _filename_from_url(url)
     dest = images_dir / filename
+    expected = _expected_checksum(checksum_url, filename, algo)
 
-    # --- already present: just verify ---
     if dest.exists():
         console.info(f"image already present: {dest}")
         console.step(f"verifying {algo} checksum...")
         actual = _compute_checksum(dest, algo)
-        expected = _expected_checksum(checksum_url, filename, algo)
-        if actual != expected:
-            raise RuntimeError(
-                f"checksum mismatch for {filename}\n"
-                f"  expected: {expected}\n"
-                f"  actual:   {actual}"
-            )
-        console.ok(f"checksum OK: {actual[:16]}...")
-        return dest
-
-    # --- not present: download then verify ---
-    console.step(f"downloading {filename}...")
-    _download(url, dest)
-    console.step(f"verifying {algo} checksum...")
-    actual = _compute_checksum(dest, algo)
-    expected = _expected_checksum(checksum_url, filename, algo)
-    if actual != expected:
-        dest.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"checksum mismatch after download; file removed\n"
-            f"  expected: {expected}\n"
-            f"  actual:   {actual}"
+        if actual == expected:
+            console.ok(f"checksum OK: {actual[:16]}...")
+            return dest
+        console.warn(
+            f"cached image checksum mismatch ({actual[:8]} != {expected[:8]}); "
+            "redownloading"
         )
-    _lock_base_image(dest)
-    console.ok(f"checksum OK: {actual[:16]}... image locked read-only.")
+        dest.unlink()
 
+    console.step(f"downloading {filename}...")
+    _download_atomic(url, dest, expected, algo)
+    _lock_base_image(dest)
+    console.ok(f"image ready: {dest.name} (locked read-only)")
     return dest
 
 
-def _download(url: str, dest: Path) -> None:
+def _download_atomic(url: str, dest: Path, expected: str, algo: str) -> None:
+    # Stream into a sibling .part file and only rename on verified checksum.
+    # tempfile.mkstemp + os.replace is the stdlib atomic-write pattern and
+    # survives SIGINT, network drops, and disk-full mid-write without ever
+    # leaving a half-written file at the canonical path.
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{dest.name}.", suffix=".part", dir=dest.parent
+    )
+    tmp_path = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            _stream_to_file(url, fh)
+        console.step(f"verifying {algo} checksum...")
+        actual = _compute_checksum(tmp_path, algo)
+        if actual != expected:
+            raise RuntimeError(
+                "checksum mismatch after download\n"
+                f"  expected: {expected}\n"
+                f"  actual:   {actual}"
+            )
+        os.replace(tmp_path, dest)
+        console.ok(f"checksum OK: {actual[:16]}...")
+    except BaseException:
+        tmp_path.unlink(missing_ok=True)
+        raise
+
+
+def _stream_to_file(url: str, fh) -> None:
     with requests.get(url, stream=True, timeout=60) as resp:
         resp.raise_for_status()
         total = int(resp.headers.get("content-length", 0))
         downloaded = 0
-        with open(dest, "wb") as fh:
-            for chunk in resp.iter_content(chunk_size=4 * 1024 * 1024):
-                fh.write(chunk)
-                downloaded += len(chunk)
-                if total:
-                    pct = downloaded * 100 // total
-                    print(
-                        f"\r    {pct:3d}%  {downloaded // 1024 // 1024} MB",
-                        end="",
-                        flush=True,
-                    )
+        for chunk in resp.iter_content(chunk_size=4 * 1024 * 1024):
+            fh.write(chunk)
+            downloaded += len(chunk)
+            if total:
+                pct = downloaded * 100 // total
+                print(
+                    f"\r    {pct:3d}%  {downloaded // 1024 // 1024} MB",
+                    end="",
+                    flush=True,
+                )
     print()  # newline after progress
 
 

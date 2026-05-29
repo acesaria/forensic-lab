@@ -35,9 +35,14 @@ class ScenarioProtocol(Protocol):
         host_ip: str,
         internet_on,
         internet_off,
+        ground_truth: dict[str, Any],
         *,
         run_cleanup: bool = False,
-    ) -> dict[str, Any]: ...
+    ) -> None:
+        # Scenarios append per-step dicts to ground_truth["steps"]. The
+        # caller (orchestrator) persists ground_truth in a finally clause,
+        # so partial state survives a mid-run exception.
+        ...
 
 
 @dataclass
@@ -111,7 +116,7 @@ def plant_history(ssh: SSHClient, steps: list[dict[str, Any]]) -> None:
     """
     cmd = "bash -ic 'echo marker >> ~/.bash_history; history -w' 2>/dev/null; true"
     code, _, _ = ssh.run(cmd, timeout=10)
-    console.ok("bash history planted", indent=True)
+    console.ok("bash history planted")
     steps.append({"step": "plant_history", "exit_code": code})
 
 
@@ -144,7 +149,7 @@ def run_reverse_shell(
                 srv.listen(1)
                 srv.settimeout(timeout)
                 conn, addr = srv.accept()
-                console.ok(f"reverse shell connected from {addr}", indent=True)
+                console.ok(f"reverse shell connected from {addr}")
                 conn.sendall(b"id\n")
                 time.sleep(0.8)
                 data = conn.recv(4096).decode(errors="replace")
@@ -175,11 +180,11 @@ def run_reverse_shell(
     listener.join(timeout=timeout + 2)
 
     if error:
-        console.warn(f"reverse shell listener error: {error[0]}", indent=True)
+        console.warn(f"reverse shell listener error: {error[0]}")
     elif not received:
-        console.warn("reverse shell: no data received", indent=True)
+        console.warn("reverse shell: no data received")
     else:
-        console.ok(f"id output: {received[0]}", indent=True)
+        console.ok(f"id output: {received[0]}")
 
     steps.append(
         {

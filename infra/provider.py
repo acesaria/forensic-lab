@@ -331,9 +331,9 @@ class Provider:
             except libvirt.libvirtError:
                 return  # domain disappeared: already off
             if state == libvirt.VIR_DOMAIN_SHUTOFF:
-                console.ok(f"VM '{vm_name}' shut down gracefully", indent=True)
+                console.ok(f"VM '{vm_name}' shut down gracefully")
                 return
-            time.sleep(2)
+            time.sleep(0.5)
         console.info(f"graceful shutdown timed out; forcing off '{vm_name}'")
         conn.lookupByName(vm_name).destroy()
 
@@ -346,31 +346,11 @@ class Provider:
         dom.create()
 
     def suspend_vm(self, vm_name: str) -> None:
-        # Hypervisor-level pause. Implemented via virsh subprocess (rather
-        # than dom.suspend()) to keep this entry point usable from contexts
-        # that already shell out for virsh-only operations.
-        result = subprocess.run(
-            ["virsh", "suspend", vm_name],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"virsh suspend failed for '{vm_name}' (rc={result.returncode})\n"
-                f"{result.stderr.strip() or '(no output)'}"
-            )
+        # Hypervisor-level pause; guest CPU stops, memory state preserved.
+        self._connect().lookupByName(vm_name).suspend()
 
     def resume_vm(self, vm_name: str) -> None:
-        result = subprocess.run(
-            ["virsh", "resume", vm_name],
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"virsh resume failed for '{vm_name}' (rc={result.returncode})\n"
-                f"{result.stderr.strip() or '(no output)'}"
-            )
+        self._connect().lookupByName(vm_name).resume()
 
     def create_external_disk_snapshot(
         self,
@@ -380,34 +360,28 @@ class Provider:
     ) -> None:
         # Live external disk snapshot: writes are redirected to overlay_path,
         # so the base qcow2 stops mutating and becomes safe for host-side
-        # qemu-img convert. Guest keeps running. --no-metadata avoids leaving
+        # qemu-img convert. Guest keeps running. NO_METADATA avoids leaving
         # snapshot records in libvirt that we'd otherwise need to clean up.
         overlay_path.parent.mkdir(parents=True, exist_ok=True)
-        # Snapshot name is throwaway (no-metadata drops the record after
-        # creation) but virsh still requires one; timestamp keeps logs
+        # Snapshot name is throwaway (NO_METADATA drops the record after
+        # creation) but libvirt still requires one; timestamp keeps logs
         # distinguishable across concurrent attempts.
         snapshot_name = f"acq-{int(time.time())}"
-        result = subprocess.run(
-            [
-                "virsh",
-                "snapshot-create-as",
-                vm_name,
-                snapshot_name,
-                "--disk-only",
-                "--atomic",
-                "--no-metadata",
-                "--diskspec",
-                f"{disk_target},file={overlay_path}",
-            ],
-            capture_output=True,
-            text=True,
+        xml = f"""\
+<domainsnapshot>
+  <name>{snapshot_name}</name>
+  <disks>
+    <disk name='{disk_target}' snapshot='external'>
+      <source file='{overlay_path}'/>
+    </disk>
+  </disks>
+</domainsnapshot>"""
+        flags = (
+            libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY
+            | libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_ATOMIC
+            | libvirt.VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"virsh snapshot-create-as failed for '{vm_name}' "
-                f"(rc={result.returncode})\n"
-                f"{result.stderr.strip() or '(no output)'}"
-            )
+        self._connect().lookupByName(vm_name).snapshotCreateXML(xml, flags)
 
     def commit_external_disk_snapshot(
         self,
@@ -492,8 +466,13 @@ class Provider:
     # --- introspection ---------------------------------------------------
 
     def get_vm_ip(self, vm_name: str, timeout: int = 180) -> str:
-        """Poll DHCP leases until an IPv4 address appears for the VM."""
+        """
+        Poll DHCP leases until an IPv4 address appears on the isolated NIC.
+        Lab VMs always SSH over the isolated network; the NAT NIC (when up)
+        also gets a lease but must never be used as the SSH target.
+        """
         conn = self._connect()
+        isolated_mac = self._isolated_nic_mac(vm_name).lower()
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -505,13 +484,33 @@ class Provider:
                     cast(dict[str, dict[str, Any]], raw) or {}
                 )
                 for iface in ifaces.values():
+                    if (iface.get("hwaddr") or "").lower() != isolated_mac:
+                        continue
                     for addr in iface.get("addrs", []):
                         if addr.get("type") == libvirt.VIR_IP_ADDR_TYPE_IPV4:
                             return addr["addr"]
             except libvirt.libvirtError:
                 pass
             time.sleep(5)
-        raise RuntimeError(f"Timed out waiting for IP on '{vm_name}' after {timeout}s")
+        raise RuntimeError(
+            f"Timed out waiting for IP on '{vm_name}' "
+            f"(isolated NIC mac={isolated_mac}) after {timeout}s"
+        )
+
+    def _isolated_nic_mac(self, vm_name: str) -> str:
+        """Return the MAC of the NIC attached to the isolated network."""
+        dom = self._connect().lookupByName(vm_name)
+        root = ET.fromstring(dom.XMLDesc())
+        for iface in root.findall(".//devices/interface[@type='network']"):
+            src = iface.find("source")
+            if src is not None and src.attrib.get("network") == self._network_name:
+                mac = iface.find("mac")
+                if mac is not None:
+                    return mac.attrib["address"]
+        raise RuntimeError(
+            f"VM '{vm_name}' has no interface on isolated network "
+            f"'{self._network_name}'"
+        )
 
     def get_disk_path(self, vm_name: str) -> Path:
         """Return the primary qcow2 disk path for a domain."""
@@ -527,9 +526,11 @@ class Provider:
     # --- NAT NIC link toggle ---------------------------------------------
 
     def set_nat_link(self, vm_name: str, up: bool) -> None:
-        """Toggle live link state of the NAT NIC via `virsh domif-setlink`.
+        """
+        Toggle the live link state of the NAT NIC.
         Persistent XML keeps link.state=down, so snapshot reverts always
-        bring the VM up offline."""
+        bring the VM up offline.
+        """
         dom = self._connect().lookupByName(vm_name)
         root = ET.fromstring(dom.XMLDesc())
         mac = next(
@@ -543,16 +544,15 @@ class Provider:
         if mac is None:
             raise RuntimeError(f"VM '{vm_name}' has no secondary (NAT) NIC")
         state = "up" if up else "down"
-        result = subprocess.run(
-            ["virsh", "-c", self._uri, "domif-setlink", vm_name, mac, state],
-            capture_output=True,
-            text=True,
+        # MAC is the only attribute libvirt needs to match the existing iface;
+        # the link element is the actual update payload.
+        iface_xml = (
+            f"<interface type='network'>"
+            f"<mac address='{mac}'/>"
+            f"<link state='{state}'/>"
+            f"</interface>"
         )
-        if result.returncode != 0:
-            raise RuntimeError(
-                f"virsh domif-setlink {vm_name} {mac} {state} failed: "
-                f"{result.stderr.strip()}"
-            )
+        dom.updateDeviceFlags(iface_xml, libvirt.VIR_DOMAIN_AFFECT_LIVE)
         _log.debug("NAT NIC link %s on '%s' (mac=%s)", state, vm_name, mac)
 
     # --- snapshots -------------------------------------------------------

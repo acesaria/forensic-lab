@@ -12,14 +12,18 @@ Convention
   [!]  warning                console.warn(msg)
   [-]  error                  console.err(msg)
   === title ===  section      console.section(title)
+  --- label  ---  step header console.step_header(label)
 
-The PrefixColorFormatter below also colors any pre-existing
-`_log.info("[X] ...")` call elsewhere in the project, so callers that still
-emit through their own module logger get consistent color for free.
+Indentation
+-----------
+Depth is implicit. `section()` and `section_end()` reset depth to 0;
+`step_header()` prints its header at depth 0 then opens depth 1, so every
+subsequent emit inside the step is auto-indented. Callers do not pass
+`indent=True` -- a `with console.indented():` block is the explicit escape
+hatch for anything that needs to nest deeper than the structural defaults.
 
-Color is enabled only when stdout is a TTY, NO_COLOR is unset, and
-TERM != "dumb". Plain text is the fallback. Script-friendly output is
-preserved in pipes and CI logs.
+State is held in a ContextVar so concurrent contexts (threads, asyncio
+tasks) cannot trample each other's depth.
 
 Wording conventions for new code
 --------------------------------
@@ -36,6 +40,9 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from contextlib import contextmanager
+from contextvars import ContextVar
+from typing import Iterator
 
 _log = logging.getLogger("console")
 
@@ -47,6 +54,13 @@ _COLORS = {
     "[!]": "\033[33m",  # yellow: warning
     "[-]": "\033[31m",  # red:    error
 }
+
+_INDENT_UNIT = "    "
+
+# Current indent depth. Mutated only by section/step_header/section_end and
+# by the indented() context manager. ContextVar (not a plain int) so a
+# future async or threaded caller can't corrupt the depth seen by another.
+_indent_level: ContextVar[int] = ContextVar("console_indent_level", default=0)
 
 
 def _color_enabled() -> bool:
@@ -73,45 +87,75 @@ class PrefixColorFormatter(logging.Formatter):
         return msg
 
 
-_INDENT = "    "
+def _prefix() -> str:
+    return _INDENT_UNIT * _indent_level.get()
 
 
-def step(msg: str, *, indent: bool = False) -> None:
+# --- emitters --------------------------------------------------------------
+
+
+def step(msg: str) -> None:
     """[*] in-progress action. Caller usually ends `msg` with '...'."""
-    _log.info("%s[*] %s", _INDENT if indent else "", msg)
+    _log.info("%s[*] %s", _prefix(), msg)
 
 
-def ok(msg: str, *, indent: bool = False) -> None:
+def ok(msg: str) -> None:
     """[+] success / done. No trailing punctuation by convention."""
-    _log.info("%s[+] %s", _INDENT if indent else "", msg)
+    _log.info("%s[+] %s", _prefix(), msg)
 
 
-def info(msg: str, *, indent: bool = False) -> None:
+def info(msg: str) -> None:
     """[i] state / informational note."""
-    _log.info("%s[i] %s", _INDENT if indent else "", msg)
+    _log.info("%s[i] %s", _prefix(), msg)
 
 
-def warn(msg: str, *, indent: bool = False) -> None:
+def warn(msg: str) -> None:
     """[!] warning."""
-    _log.warning("%s[!] %s", _INDENT if indent else "", msg)
+    _log.warning("%s[!] %s", _prefix(), msg)
 
 
-def err(msg: str, *, indent: bool = False) -> None:
+def err(msg: str) -> None:
     """[-] error."""
-    _log.error("%s[-] %s", _INDENT if indent else "", msg)
+    _log.error("%s[-] %s", _prefix(), msg)
+
+
+# --- structural transitions ------------------------------------------------
 
 
 def section(title: str) -> None:
-    """Blank line + `=== title ===` top-level section header."""
+    """`=== title ===` top-level section. Resets indent to 0."""
+    _indent_level.set(0)
     _log.info("\n=== %s ===", title)
 
 
 def step_header(label: str) -> None:
-    """Blank line + `--- label ---` sub-header for one step inside a section.
-    Subsequent log lines inside that step should use indent=True."""
+    """
+    `--- label ---` sub-header at depth 0; subsequent emits indent one level.
+    Pairs with section_end() to close.
+    """
+    _indent_level.set(0)
     _log.info("\n--- %s ---", label)
+    _indent_level.set(1)
 
 
 def section_end() -> None:
-    """Emit a single blank line to break visual rhythm between blocks."""
+    """Blank line + reset depth to 0. Closes a step_header block."""
+    _indent_level.set(0)
     _log.info("")
+
+
+# --- explicit nesting ------------------------------------------------------
+
+
+@contextmanager
+def indented() -> Iterator[None]:
+    """
+    Push one extra indent level for the block. Escape hatch for callers that
+    need to nest deeper than the structural defaults; the context manager
+    pattern guarantees the level is restored even on exceptions.
+    """
+    token = _indent_level.set(_indent_level.get() + 1)
+    try:
+        yield
+    finally:
+        _indent_level.reset(token)

@@ -28,6 +28,7 @@ from orchestrator.core.config import (
     LAB_USER,
 )
 from orchestrator.core import console
+from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.ssh_client import SSHClient
 
 _log = logging.getLogger(__name__)
@@ -37,18 +38,14 @@ class VMManager:
     def __init__(
         self,
         provider: Provider,
-        images_path: Path,
-        ssh_key: Path,
-        ssh_pub_key: Path,
-        repo_root: Path,
+        paths: ProjectPaths,
     ) -> None:
         self._provider = provider
-        # images_path / ssh_key / ssh_pub_key are already absolute Paths --
-        # normalization happens in load_config().
-        self._images_dir = images_path
-        self._ssh_key = ssh_key
-        self._ssh_pubkey_text = ssh_pub_key.read_text().strip()
-        self._repo_root = repo_root
+        self._paths = paths
+        self._images_dir = paths.images_dir
+        self._ssh_key = paths.ssh_key
+        self._ssh_pubkey_text = paths.ssh_pub_key.read_text().strip()
+        self._repo_root = paths.repo_root
 
     # --- infra setup (one-time, delegated to provider) -------------------
 
@@ -180,7 +177,7 @@ class VMManager:
     def internet_on(self, vm_name: str, wait: int = 5) -> None:
         """Bring the NAT NIC link up; sleep briefly to let DHCP settle."""
         self._provider.set_nat_link(vm_name, up=True)
-        console.info("NAT NIC link up", indent=True)
+        console.info("NAT NIC link up")
         time.sleep(wait)
 
     def internet_off(self, vm_name: str, quiet: bool = False) -> None:
@@ -189,7 +186,7 @@ class VMManager:
         the scenario already cleaned up."""
         self._provider.set_nat_link(vm_name, up=False)
         if not quiet:
-            console.info("NAT NIC link down", indent=True)
+            console.info("NAT NIC link down")
 
     def open_ssh(self, vm_name: str) -> SSHClient:
         """
@@ -213,11 +210,38 @@ class VMManager:
     ) -> str:
         """
         Wait for SSH, then run an Ansible playbook against vm_name.
-        VM must already be running before calling this.
-        Returns the IP used.
+        VM must already be running before calling this. Returns the IP.
+        Single entry point for playbook execution: ansible's own connect
+        retries are not generous enough for a freshly-booted VM, so the
+        wait_ssh_ready probe up-front is the only one we do.
         """
         ip = self.wait_ssh_ready(vm_name, reason=reason)
-        self._run_playbook(ip, playbook, extra_vars=extra_vars, reason=reason)
+        label = f" [{reason}]" if reason else ""
+        _log.debug("running playbook %s on %s%s...", playbook.name, ip, label)
+        cmd = [
+            "ansible-playbook",
+            "-i",
+            f"{ip},",
+            "-u",
+            LAB_USER,
+            "--private-key",
+            str(self._ssh_key),
+            "--ssh-common-args",
+            "-o StrictHostKeyChecking=no",
+            str(playbook),
+        ]
+        if extra_vars:
+            for k, v in extra_vars.items():
+                cmd.extend(["-e", f"{k}={v}"])
+        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"Ansible playbook failed (rc={result.returncode}): {playbook}\n"
+                f"{result.stdout or ''}\n{result.stderr or ''}"
+            )
+        if _log.isEnabledFor(logging.DEBUG):
+            _log.debug("%s", result.stdout or "")
+            _log.debug("playbook %s done", playbook.name)
         return ip
 
     # --- lab lifecycle (experiment-time operations) ----------------------
@@ -233,8 +257,7 @@ class VMManager:
           1. Download and verify base image
           2. Create VM (skips if already exists)
           3. Start VM
-          4. Wait for SSH
-          5. Run baseline playbook and snapshot (skips if snapshot exists)
+          4. Run baseline playbook (waits for SSH internally) and snapshot
 
         Returns the VM name.
         """
@@ -248,27 +271,18 @@ class VMManager:
             base_image=base_image,
         )
         self._provider.start_vm(vm_name)
-        ip = self.wait_ssh_ready(vm_name, reason="initial boot")
 
-        if not self._provider.snapshot_exists(vm_name, BASELINE_SNAPSHOT):
-            playbook = self._repo_root / LAB_BASELINE_PLAYBOOK
-            self.internet_on(vm_name)
-            console.step(
-                f"provisioning lab VM with Ansible playbook {playbook} "
-                "(may take up to 5 minutes)..."
+        playbook = self._repo_root / LAB_BASELINE_PLAYBOOK
+        self.internet_on(vm_name)
+        try:
+            self.run_playbook_on_vm(
+                vm_name, playbook, reason="baseline provisioning"
             )
-            try:
-                self._run_playbook(ip, playbook, reason="baseline provisioning")
-            finally:
-                self.internet_off(vm_name)
-            console.step(f"shutting down {vm_name} before snapshot...")
-            self._provider.shutdown_vm(vm_name)
-            self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
-        else:
-            console.info(
-                f"snapshot '{BASELINE_SNAPSHOT}' already present on '{vm_name}'"
-            )
-
+        finally:
+            self.internet_off(vm_name)
+        console.step(f"shutting down {vm_name} before snapshot...")
+        self._provider.shutdown_vm(vm_name)
+        self._provider.create_snapshot(vm_name, BASELINE_SNAPSHOT)
         return vm_name
 
     def revert_to_baseline(self, distro_id: str) -> str:
@@ -300,42 +314,6 @@ class VMManager:
         self._provider.close()
 
     # --- private helpers -------------------------------------------------
-
-    def _run_playbook(
-        self,
-        ip: str,
-        playbook: Path,
-        extra_vars: dict[str, str] | None = None,
-        reason: str = "",
-    ) -> None:
-        label = f" [{reason}]" if reason else ""
-        _log.debug("running playbook %s on %s%s...", playbook.name, ip, label)
-        cmd = [
-            "ansible-playbook",
-            "-i",
-            f"{ip},",
-            "-u",
-            LAB_USER,
-            "--private-key",
-            str(self._ssh_key),
-            "--ssh-common-args",
-            "-o StrictHostKeyChecking=no",
-            str(playbook),
-        ]
-        if extra_vars:
-            for k, v in extra_vars.items():
-                cmd.extend(["-e", f"{k}={v}"])
-        result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-        if result.returncode != 0:
-            stdout = result.stdout or ""
-            stderr = result.stderr or ""
-            raise RuntimeError(
-                f"Ansible playbook failed (rc={result.returncode}): {playbook}\n"
-                f"{stdout}\n{stderr}"
-            )
-        if _log.isEnabledFor(logging.DEBUG):
-            _log.debug("%s", result.stdout or "")
-            _log.debug("playbook %s done", playbook.name)
 
     def _create_cloud_init_seed(self, vm_name: str, role: str) -> Path:
         pool_path = self._provider.pool_path()

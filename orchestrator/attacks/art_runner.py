@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -66,10 +67,10 @@ class ArtRunner:
         cmd = self._build_command(test["executor"]["command"], test, input_arguments)
         short_guid = test_guid.split("-", 1)[0] if test_guid else ""
         label = f"{technique_id}/{short_guid}  {test.get('name', '')}".rstrip()
-        console.step(label, indent=True)
+        console.step(label)
         code, out, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
-            console.warn(f"exit {code}: {err.strip()}", indent=True)
+            console.warn(f"exit {code}: {err.strip()}")
             if raise_on_error:
                 raise RuntimeError(
                     f"ART test {technique_id}/{test_guid} exited {code}.\n{err.strip()}"
@@ -100,8 +101,7 @@ class ArtRunner:
         code, out, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
             console.warn(
-                f"cleanup exited {code} for {technique_id}: {err.strip()}",
-                indent=True,
+                f"cleanup exited {code} for {technique_id}: {err.strip()}"
             )
 
     def run_prerequisites(
@@ -141,7 +141,7 @@ class ArtRunner:
                 )
                 continue
 
-            console.step(f"installing prereq {i}...", indent=True)
+            console.step(f"installing prereq {i}...")
             install = self._build_command(install_cmd, test, input_arguments)
             self._ssh.run_checked(install, timeout=timeout)
 
@@ -177,23 +177,31 @@ class ArtRunner:
         if not src_root.is_dir():
             return
         remote_tech_root = f"{_REMOTE_ATOMICS_ROOT}/{technique_id}"
-        code, _, _ = self._ssh.run(f"test -d {remote_tech_root}/src", timeout=10)
+        code, _, _ = self._ssh.run(
+            f"test -d {shlex.quote(remote_tech_root)}/src", timeout=10
+        )
         if code == 0:
             return
-        self._ssh.run_checked(f"mkdir -p {remote_tech_root}", timeout=10)
+        self._ssh.run_checked(
+            f"mkdir -p {shlex.quote(remote_tech_root)}", timeout=10
+        )
         uploaded = 0
         for path in sorted(src_root.rglob("*")):
             if not path.is_file():
                 continue
             rel = path.relative_to(self._atomics_path / technique_id)
             remote = f"{remote_tech_root}/{rel.as_posix()}"
-            self._ssh.run_checked(f"mkdir -p $(dirname '{remote}')", timeout=10)
+            # Compute the parent in Python instead of shelling out to
+            # `dirname` so the remote command takes a single quoted literal.
+            remote_dir = f"{remote_tech_root}/{rel.parent.as_posix()}"
+            self._ssh.run_checked(
+                f"mkdir -p {shlex.quote(remote_dir)}", timeout=10
+            )
             self._ssh.put(path, remote)
             uploaded += 1
         console.ok(
             f"uploaded {uploaded} atomics asset(s) for {technique_id} "
-            f"to {remote_tech_root}",
-            indent=True,
+            f"to {remote_tech_root}"
         )
 
     @staticmethod
@@ -203,12 +211,28 @@ class ArtRunner:
         overrides: dict[str, str] | None,
     ) -> str:
         """Substitute ${arg} / #{arg} placeholders with defaults + overrides."""
-        defaults = {
-            k: str(v.get("default", ""))
-            for k, v in (test.get("input_arguments") or {}).items()
-        }
+        # YAML `default: null` would otherwise be str()'d into the literal
+        # token "None" and spliced into the shell. Coerce explicit nulls and
+        # missing defaults to the empty string here.
+        defaults: dict[str, str] = {}
+        for k, v in (test.get("input_arguments") or {}).items():
+            raw_default = v.get("default")
+            defaults[k] = "" if raw_default is None else str(raw_default)
         args = {**defaults, **(overrides or {})}
-        cmd = _PLACEHOLDER.sub(lambda m: args.get(m.group(1), m.group(0)), raw)
+
+        def _sub(m: re.Match[str]) -> str:
+            name = m.group(1)
+            if name not in args:
+                # Leave the placeholder literal so the surfaced shell error
+                # mentions it explicitly instead of silently expanding to "".
+                _log.warning(
+                    "ART placeholder %r left unresolved (no default or override)",
+                    m.group(0),
+                )
+                return m.group(0)
+            return args[name]
+
+        cmd = _PLACEHOLDER.sub(_sub, raw)
         # ART YAML defaults embed the literal token "PathToAtomicsFolder" to
         # mean "the atomics tree on the test target". Map it to the location
         # _ensure_assets uploads to. Mirrors upstream atomic-operator behavior.

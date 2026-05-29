@@ -6,28 +6,31 @@ import os
 import grp
 
 from orchestrator.core import console
+from orchestrator.core.paths import ProjectPaths
 
 
-def _confirm_init() -> bool:
+def _confirm_init(paths: ProjectPaths) -> bool:
     print("[*] forensic-lab one-time host setup -- requires sudo:")
-    print("  1. Create /var/lib/forensic-lab/{disks,images}")
+    print(f"  1. Create {paths.state_dir}/{{disks,images}}")
     print("  2. Install /etc/sudoers.d/forensic-lab")
     return input("[?] Proceed? [y/N] ").strip().lower() == "y"
 
 
-def _create_system_dirs(uid: int, kvm_gid: int) -> None:
-    for d in ("/var/lib/forensic-lab/disks", "/var/lib/forensic-lab/images"):
-        subprocess.run(["sudo", "mkdir", "-p", d], check=True)
+def _create_system_dirs(paths: ProjectPaths, uid: int, kvm_gid: int) -> None:
+    for d in (paths.pool_dir, paths.images_dir):
+        subprocess.run(["sudo", "mkdir", "-p", str(d)], check=True)
     subprocess.run(
-        ["sudo", "chown", "-R", f"{uid}:{kvm_gid}", "/var/lib/forensic-lab"],
+        ["sudo", "chown", "-R", f"{uid}:{kvm_gid}", str(paths.state_dir)],
         check=True,
     )
-    subprocess.run(["sudo", "chmod", "-R", "2775", "/var/lib/forensic-lab"], check=True)
+    subprocess.run(
+        ["sudo", "chmod", "-R", "2775", str(paths.state_dir)], check=True
+    )
     console.ok("system directories ready")
 
 
-def _setup_dumps_dir(repo_root: Path, uid: int, kvm_gid: int) -> None:
-    d = repo_root / "shared" / "dumps"
+def _setup_dumps_dir(paths: ProjectPaths, uid: int, kvm_gid: int) -> None:
+    d = paths.dumps_dir
     d.mkdir(parents=True, exist_ok=True)
     subprocess.run(["sudo", "chown", f"{uid}:{kvm_gid}", str(d)], check=True)
     subprocess.run(["sudo", "chmod", "2775", str(d)], check=True)
@@ -77,17 +80,15 @@ def _write_sudoers(path: str, content: str) -> None:
     console.ok(f"sudoers rules installed: {path}")
 
 
-def run_init(repo_root: Path, host_cfg: dict) -> None:
-    if not _confirm_init():
+def run_init(paths: ProjectPaths) -> None:
+    if not _confirm_init(paths):
         console.err("aborted")
         return
     username = pwd.getpwuid(os.getuid()).pw_name
     uid = os.getuid()
     kvm_gid = grp.getgrnam("kvm").gr_gid
-    # host_cfg["shared_dir"] is an absolute Path -- load_config() normalizes it.
-    dumps_dir = host_cfg["shared_dir"] / "dumps"
 
-    _create_system_dirs(uid, kvm_gid)
-    _setup_dumps_dir(repo_root, uid, kvm_gid)
-    _install_sudoers(username, host_cfg["images_path"], dumps_dir)
+    _create_system_dirs(paths, uid, kvm_gid)
+    _setup_dumps_dir(paths, uid, kvm_gid)
+    _install_sudoers(username, paths.images_dir, paths.dumps_dir)
     console.info("next step: forensic-lab setup --distro ubuntu-22.04")

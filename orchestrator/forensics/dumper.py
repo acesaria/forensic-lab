@@ -24,6 +24,11 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from orchestrator.core import console
+from orchestrator.core.paths import ProjectPaths
+
+# tmpfs staging area for the intermediate raw image produced by
+# qemu-img convert. RAM-backed on every distro the project targets.
+_RAW_STAGING_DIR = Path("/dev/shm")
 
 # Canonical labels used in manifests and across orchestration boundaries.
 # Legacy aliases ("shutdown", "suspend") are accepted for normalization
@@ -68,8 +73,8 @@ def _format_bytes(size: int | None) -> str:
 
 @dataclass
 class ImageMetadata:
-    # path is relative to repo_root when possible, else absolute
-    # (re-anchored by orchestrator when reading manifest)
+    # Absolute path. The manifest is a per-machine artifact -- no point in
+    # carrying a relative form that would just need re-anchoring on every read.
     path: str
     tool: str
     sha256: str | None
@@ -83,6 +88,11 @@ class ImageMetadata:
 
 @dataclass
 class AcquisitionManifest:
+    # run_id is the unique per-run label "{distro}_{scenario}_{ts}" used as
+    # the directory name under dumps_dir / results_dir.
+    run_id: str
+    # scenario_id is the bare scenarios.yaml key (or "verify"); never has a
+    # timestamp baked in. Use this for semantic queries / grouping.
     scenario_id: str
     created_at: float
     memory_image: ImageMetadata
@@ -100,24 +110,15 @@ class AcquisitionManifest:
 
 
 class Dumper:
-    def __init__(self, repo_root: Path, dumps_dir: Path) -> None:
-        # repo_root anchors manifest paths so they stay portable within the project
-        # (fallback to absolute when dumps_dir lives outside repo_root).
-        self.repo_root = repo_root
-        self.dumps_root = dumps_dir
+    def __init__(self, paths: ProjectPaths) -> None:
+        self._paths = paths
+        self.dumps_root = paths.dumps_dir
         self.dumps_root.mkdir(parents=True, exist_ok=True)
-
-    def _rel_or_abs(self, p: Path) -> str:
-        """Render p relative to repo_root if possible, else absolute."""
-        try:
-            return str(p.relative_to(self.repo_root))
-        except ValueError:
-            return str(p)
 
     # --- directory layout ------------------------------------------------
 
-    def scenario_dir(self, scenario_id: str) -> Path:
-        d = self.dumps_root / scenario_id
+    def run_dir(self, run_id: str) -> Path:
+        d = self._paths.run_dumps_dir(run_id)
         (d / "memory").mkdir(parents=True, exist_ok=True)
         (d / "disk").mkdir(parents=True, exist_ok=True)
         return d
@@ -133,7 +134,7 @@ class Dumper:
             dest.unlink()
 
         started = time.time()
-        console.step(f"acquiring memory from '{domain}'...", indent=True)
+        console.step(f"acquiring memory from '{domain}'...")
         result = subprocess.run(
             ["virsh", "dump", domain, str(dest), "--memory-only"],
             check=False,
@@ -158,12 +159,10 @@ class Dumper:
             check=True,
         )
         console.ok(
-            f"memory dump done ({elapsed:.1f}s): "
-            f"{self._rel_or_abs(dest)}, {_format_bytes(size_bytes)}",
-            indent=True,
+            f"memory dump done ({elapsed:.1f}s): {dest}, {_format_bytes(size_bytes)}"
         )
         return ImageMetadata(
-            path=self._rel_or_abs(dest),
+            path=str(dest),
             tool="virsh dump --memory-only --live",
             sha256=self._sha256(dest),
             size_bytes=size_bytes,
@@ -181,19 +180,28 @@ class Dumper:
         VM lifecycle preparation is the caller's responsibility.
         """
         ewf_prefix = str(dest.with_suffix(""))
-        raw_path = dest.with_suffix(".raw")
+        # Stage the raw intermediate on tmpfs so we don't pay a full second
+        # write to spinning storage. /dev/shm is RAM-backed on systemd
+        # distros; ewfacquire reads it back compressed.
+        raw_path = _RAW_STAGING_DIR / f"{dest.stem}-{os.getpid()}.raw"
 
         self._clean_previous_output(ewf_prefix, raw_path)
 
         started = time.time()
         virtual_size = self._qemu_virtual_size(source_image_path)
         console.step(
-            f"acquiring disk from '{Path(source_image_path).stem}'...", indent=True
+            f"acquiring disk from '{Path(source_image_path).stem}'..."
         )
 
-        self._convert_to_raw(source_image_path, raw_path)
-        self._run_ewfacquire(raw_path, ewf_prefix)
-        # self._run_ewfacquire_from_qcow2(disk_source, ewf_prefix)
+        try:
+            self._convert_to_raw(source_image_path, raw_path)
+            self._run_ewfacquire(raw_path, ewf_prefix)
+        finally:
+            # Belt-and-braces: _run_ewfacquire already unlinks on its own
+            # finally, but a failure inside _convert_to_raw would otherwise
+            # leak a multi-GB file in tmpfs.
+            if raw_path.exists():
+                raw_path.unlink()
 
         ewf_segments = sorted(glob.glob(f"{ewf_prefix}.E??"))
         self._validate_ewf_segments(ewf_segments, ewf_prefix)
@@ -204,10 +212,8 @@ class Dumper:
         self._log_disk_result(elapsed, ewf_segments, virtual_size, ewf_total_size)
 
         return ImageMetadata(
-            # paths relative to repo_root when possible -- re-anchored by orchestrator
-            # when reading manifest; absolute fallback when dumps_dir is outside repo_root
-            path=self._rel_or_abs(Path(ewf_segments[0])),
-            segments=[self._rel_or_abs(Path(s)) for s in ewf_segments],
+            path=str(Path(ewf_segments[0])),
+            segments=[str(Path(s)) for s in ewf_segments],
             tool="qemu-img convert -O raw && ewfacquire -u -c fast",
             sha256=self._sha256(Path(ewf_segments[0])),
             size_bytes=Path(ewf_segments[0]).stat().st_size,
@@ -221,6 +227,7 @@ class Dumper:
 
     def write_manifest(
         self,
+        run_id: str,
         scenario_id: str,
         memory_meta: ImageMetadata,
         disk_meta: ImageMetadata,
@@ -237,6 +244,7 @@ class Dumper:
             else "powered_off"
         )
         manifest = AcquisitionManifest(
+            run_id=run_id,
             scenario_id=scenario_id,
             created_at=time.time(),
             memory_image=memory_meta,
@@ -244,10 +252,10 @@ class Dumper:
             disk_acquisition_mode=canonical_mode,
             disk_preparation=preparation,
         )
-        manifest_path = self.scenario_dir(scenario_id) / "manifest.json"
+        manifest_path = self.run_dir(run_id) / "manifest.json"
         with open(manifest_path, "w") as f:
             json.dump(asdict(manifest), f, indent=2)
-        console.ok(f"manifest written: {self._rel_or_abs(manifest_path)}")
+        console.ok(f"manifest written: {manifest_path}")
         return str(manifest_path)
 
     # --- private: disk acquisition steps ---------------------------------
@@ -259,8 +267,9 @@ class Dumper:
             raw_path.unlink()
 
     def _convert_to_raw(self, disk_source: Path, raw_path: Path) -> None:
-        # Write to /dev/shm (tmpfs) to avoid a second disk write.
-        # For a sparse qcow2 the written size is much smaller than virtual size.
+        # raw_path lives on tmpfs (see _RAW_STAGING_DIR) so this conversion
+        # doesn't burn a second pass of physical disk I/O. For sparse qcow2
+        # the actual bytes written are much smaller than the virtual size.
         _log.debug("converting to raw: %s -> %s", disk_source, raw_path)
         try:
             subprocess.run(
@@ -340,9 +349,8 @@ class Dumper:
             )
         console.ok(
             f"disk acquisition done ({elapsed:.1f}s): "
-            f"{self._rel_or_abs(Path(segments[0]))} "
-            f"(virtual {_format_bytes(virtual_size)}, {size_info})",
-            indent=True,
+            f"{segments[0]} "
+            f"(virtual {_format_bytes(virtual_size)}, {size_info})"
         )
 
     # --- private: generic helpers ----------------------------------------

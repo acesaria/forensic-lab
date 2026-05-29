@@ -51,13 +51,13 @@ VERIFY_SCENARIO = "verify"
 
 # Fields in config.yaml `host:` that are filesystem paths. Every entry here is
 # normalized to an absolute Path inside load_config(); add new path fields here.
+# Layout under shared_dir / state_dir is fixed by ProjectPaths -- users tune
+# the roots, not the leaves.
 _HOST_PATH_FIELDS = (
     "ssh_key",
     "ssh_pub_key",
-    "pool_path",
-    "images_path",
+    "state_dir",
     "shared_dir",
-    "atomics_path",
 )
 
 

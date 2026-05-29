@@ -11,6 +11,7 @@ from orchestrator.core import console
 from orchestrator.core.bootstrap import run_init
 from orchestrator.core.config import load_config, load_profile, load_scenarios
 from orchestrator.core.orchestrator import ForensicOrchestrator
+from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
 
@@ -88,8 +89,12 @@ def _check_prerequisites() -> None:
         "virsh": "libvirt-clients",
         "virt-install": "virtinst",
         "qemu-img": "qemu-utils",
+        "cloud-localds": "cloud-image-utils",
+        "ansible-playbook": "ansible",
         "ewfacquire": "libewf-dev",
         "vol3": "volatility3 (install manually)",
+        "log2timeline": "plaso (pip install plaso)",
+        "psort": "plaso (pip install plaso)",
     }
     missing = [
         f"  {cmd}  (apt: {pkg})"
@@ -112,10 +117,12 @@ def main() -> None:
     if args.debug:
         console.info("debug mode on")
 
-    # All host path fields are absolute Paths after load_config(); no further
-    # normalization is needed downstream. See orchestrator/core/config.py.
+    # All host path fields are absolute Paths after load_config(); ProjectPaths
+    # then derives every layout-specific subdirectory once. Downstream code
+    # only sees `paths`, never raw host_cfg path entries.
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
+    paths = ProjectPaths.from_config(repo_root, host_cfg)
     role_defaults = cfg.get("role_defaults") or {}
     nat_network = host_cfg.get("nat_network_name", "default")
     if isinstance(role_defaults.get("lab"), dict):
@@ -127,25 +134,14 @@ def main() -> None:
     provider = Provider(
         libvirt_uri=host_cfg["libvirt_uri"],
         pool_name=host_cfg["pool_name"],
-        pool_path=host_cfg["pool_path"],
+        pool_path=paths.pool_dir,
         network_name=host_cfg["isolated_network_name"],
     )
 
-    vm_manager = VMManager(
-        provider=provider,
-        images_path=host_cfg["images_path"],
-        ssh_key=host_cfg["ssh_key"],
-        ssh_pub_key=host_cfg["ssh_pub_key"],
-        repo_root=repo_root,
-    )
+    vm_manager = VMManager(provider=provider, paths=paths)
 
-    # shared_dir is the single root for all derived output locations.
-    shared_dir = host_cfg["shared_dir"]
-    dumps_dir = shared_dir / "dumps"
-    isf_dir = shared_dir / "isf"
-
-    dumper = Dumper(repo_root, dumps_dir)
-    vol_runner = VolatilityRunner.from_config(host_cfg, isf_dir)
+    dumper = Dumper(paths)
+    vol_runner = VolatilityRunner.from_config(host_cfg, paths.isf_dir)
     sleuth_runner = SleuthKitRunner.from_config(host_cfg)
 
     distro_id: str = getattr(args, "distro", "ubuntu-22.04")
@@ -156,14 +152,12 @@ def main() -> None:
             dumper=dumper,
             vol_runner=vol_runner,
             sleuth_runner=sleuth_runner,
-            repo_root=repo_root,
-            atomics_path=host_cfg["atomics_path"],
-            isf_dir=isf_dir,
+            paths=paths,
             role_defaults=role_defaults,
         ) as orchestrator:
 
             if args.command == "init":
-                run_init(repo_root, host_cfg)
+                run_init(paths)
                 orchestrator.setup_infra()
 
             elif args.command == "setup":
@@ -193,9 +187,7 @@ def main() -> None:
                     ) from exc
 
                 if not orchestrator.lab_exists(distro_id):
-                    console.warn(
-                        f"lab '{distro_id}' not found; run 'setup' first"
-                    )
+                    console.warn(f"lab '{distro_id}' not found; run 'setup' first")
                     raise SystemExit(1)
                 scenario_id = args.scenario
                 scenario_cfg = scenarios.get(args.scenario)

@@ -49,6 +49,7 @@ from orchestrator.core.config import (
     load_profile,
 )
 from orchestrator.core import console
+from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.attacks import ArtRunner
@@ -74,19 +75,24 @@ class ForensicOrchestrator:
         dumper: Dumper,
         vol_runner: VolatilityRunner,
         sleuth_runner: SleuthKitRunner,
-        repo_root: Path,
-        atomics_path: Path,
-        isf_dir: Path,
+        paths: ProjectPaths,
         role_defaults: dict[str, Any],
     ) -> None:
         self.vm_manager = vm_manager
         self.dumper = dumper
         self._vol_runner = vol_runner
         self._sleuth_runner = sleuth_runner
-        self.repo_root = repo_root
-        self.atomics_path = atomics_path
-        self._isf_dir = isf_dir
+        self._paths = paths
         self._role_defaults = role_defaults
+
+    # Convenience accessors keep the call sites readable.
+    @property
+    def repo_root(self) -> Path:
+        return self._paths.repo_root
+
+    @property
+    def atomics_path(self) -> Path:
+        return self._paths.atomics_dir
 
     # --- one-time setup --------------------------------------------------
 
@@ -111,7 +117,7 @@ class ForensicOrchestrator:
             self.vm_manager.prepare_lab(distro_id, profile, role_cfg)
             console.ok(f"'{distro_id}' ready for experiments")
         else:
-            console.ok(f"'{distro_id}' already present. Skipping setup")
+            console.info(f"'{distro_id}' already present; skipping")
 
     def build_isf(self, distro_id: str) -> Path:
         """
@@ -126,8 +132,8 @@ class ForensicOrchestrator:
         kernel_release = self._detect_kernel_release(lab_vm_name)
 
         isf_name = _isf_filename(distro_id, kernel_release)
-        self._isf_dir.mkdir(parents=True, exist_ok=True)
-        isf_path = self._isf_dir / isf_name
+        self._paths.isf_dir.mkdir(parents=True, exist_ok=True)
+        isf_path = self._paths.isf_dir / isf_name
 
         if isf_path.exists():
             console.info(f"symbol file already present: {isf_path.absolute()}")
@@ -176,20 +182,26 @@ class ForensicOrchestrator:
         """
         console.section(f"experiment: {scenario_id} on {distro_id}")
         vm_name = self._reset_lab(distro_id)
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        scenario_ts = f"{distro_id}_{scenario_id}_{ts}"
+        run_id = _make_run_id(distro_id, scenario_id)
+        # ground_truth is owned here and mutated in place by the scenario so
+        # whatever steps ran before an exception are still on disk afterwards.
+        ground_truth: dict[str, Any] = {"scenario_id": scenario_id, "steps": []}
 
-        with self.vm_manager.open_ssh(vm_name) as ssh:
-            ground_truth = self._dispatch_scenario(
-                vm_name, ssh, scenario_id, scenario_cfg
-            )
-
-        console.section_end()
-        self._persist_ground_truth(scenario_ts, ground_truth)
+        try:
+            with self.vm_manager.open_ssh(vm_name) as ssh:
+                self._dispatch_scenario(
+                    vm_name, ssh, scenario_id, scenario_cfg, ground_truth
+                )
+        finally:
+            console.section_end()
+            self._persist_ground_truth(run_id, ground_truth)
 
         if acquire:
             return self._run_acquisition(
-                vm_name, scenario_ts, disk_acquisition_mode="external_snapshot"
+                vm_name,
+                run_id,
+                scenario_id,
+                disk_acquisition_mode="external_snapshot",
             )
         return None
 
@@ -199,11 +211,13 @@ class ForensicOrchestrator:
         ssh: SSHClient,
         scenario_id: str,
         scenario_cfg: dict[str, Any],
-    ) -> dict[str, Any]:
+        ground_truth: dict[str, Any],
+    ) -> None:
         """
-        Import the scenario module named in scenario_cfg["module"], call its
-        run() with ssh/runner/host_ip + internet_on/off plus any remaining
-        cfg keys as kwargs, and stamp scenario_id onto the returned dict.
+        Import the scenario module named in scenario_cfg["module"] and call
+        its run() with ssh/runner/host_ip + internet_on/off + ground_truth
+        plus any remaining cfg keys as kwargs. The scenario appends to
+        ground_truth["steps"] in place; nothing is returned.
 
         Ensures the NAT NIC link is down before returning so the memory dump
         doesn't capture stray network state.
@@ -227,32 +241,27 @@ class ForensicOrchestrator:
         internet_on = functools.partial(self.vm_manager.internet_on, vm_name)
         internet_off = functools.partial(self.vm_manager.internet_off, vm_name)
         try:
-            ground_truth = run_fn(
+            run_fn(
                 ssh=ssh,
                 runner=runner,
                 host_ip=ISOLATED_NETWORK_GATEWAY,
                 internet_on=internet_on,
                 internet_off=internet_off,
+                ground_truth=ground_truth,
                 **extras,
             )
         finally:
             self.vm_manager.internet_off(vm_name, quiet=True)
-        if not isinstance(ground_truth, dict):
-            raise RuntimeError(
-                f"scenario '{scenario_id}' returned {type(ground_truth).__name__}, expected dict"
-            )
-        ground_truth["scenario_id"] = scenario_id
-        return ground_truth
 
     def _persist_ground_truth(
         self,
-        scenario_ts: str,
+        run_id: str,
         ground_truth: dict[str, Any],
     ) -> Path:
         """Write ground_truth.json beside the acquisition outputs."""
-        scenario_dir = self.dumper.scenario_dir(scenario_ts)
-        scenario_dir.mkdir(parents=True, exist_ok=True)
-        out = scenario_dir / "ground_truth.json"
+        run_dir = self.dumper.run_dir(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        out = run_dir / "ground_truth.json"
         out.write_text(json.dumps(ground_truth, indent=2, default=str))
         console.ok(f"ground truth written: {out}")
         return out
@@ -318,7 +327,7 @@ class ForensicOrchestrator:
                     extra_vars={
                         "kernel_version": kernel_release,
                         "isf_filename": isf_name,
-                        "shared_isf_dir": str(self._isf_dir),
+                        "shared_isf_dir": str(self._paths.isf_dir),
                     },
                     reason="isf build",
                 )
@@ -341,33 +350,32 @@ class ForensicOrchestrator:
         VM ends OFF.
         """
         vm_name = self._reset_lab(distro_id)
-        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-        scenario_id = f"{distro_id}_{VERIFY_SCENARIO}_{ts}"
+        # Compute run_id ONCE so dumps/ and results/ share the same timestamp.
+        run_id = _make_run_id(distro_id, VERIFY_SCENARIO)
 
-        manifest_path = self._run_acquisition(vm_name, scenario_id)
+        manifest_path = self._run_acquisition(vm_name, run_id, VERIFY_SCENARIO)
 
         manifest = json.loads(Path(manifest_path).read_text())
-        # Manifest paths are relative to repo_root when possible; Path() leaves
-        # absolute paths untouched, so `repo_root / abs_path` correctly yields abs_path.
-        memory_path = self.repo_root / manifest["memory_image"]["path"]
-        disk_path = self.repo_root / manifest["disk_image"]["path"]
+        memory_path = Path(manifest["memory_image"]["path"])
+        disk_path = Path(manifest["disk_image"]["path"])
 
         console.step(f"probing acquired images for {distro_id}...")
         self._vol_runner.probe(memory_path, distro_id)
         self._sleuth_runner.probe(disk_path)
-        self._verify_plaso(distro_id, disk_path)
+        self._verify_plaso(run_id, disk_path)
         console.ok(f"pipeline verified for '{distro_id}'")
 
-    def _verify_plaso(self, distro_id: str, disk_path: Path) -> None:
+    def _verify_plaso(self, run_id: str, disk_path: Path) -> None:
         # Shallow sanity check: confirm the host's Plaso toolchain can ingest
         # the disk and emit at least one JSON event. Artifacts land under
-        # results/<distro>_verify_<ts>/ so they survive for inspection and
-        # don't sit inside the dumps tree (acquisition outputs) or the repo
-        # root. The default Linux filter keeps this fast and
-        # verify_plaso_inputs() catches missing binaries / YAML up front.
+        # results/<run_id>/ so they survive for inspection and don't sit
+        # inside the dumps tree (acquisition outputs) or the repo root. The
+        # default Linux filter keeps this fast and verify_plaso_inputs()
+        # catches missing binaries / YAML up front.
         file_filter = default_linux_filter()
         verify_plaso_inputs(file_filter=file_filter)
-        verify_dir = _make_verify_output_dir(self.repo_root, distro_id)
+
+        verify_dir = self._paths.run_results_dir(run_id)
         storage_path = verify_dir / "verify.plaso"
         timeline_path = verify_dir / "verify.jsonl"
         run_log2timeline(
@@ -397,6 +405,7 @@ class ForensicOrchestrator:
     def _run_acquisition(
         self,
         vm_name: str,
+        run_id: str,
         scenario_id: str,
         disk_acquisition_mode: str = "offline",
     ) -> str:
@@ -413,9 +422,9 @@ class ForensicOrchestrator:
         mode = normalize_disk_acquisition_mode(disk_acquisition_mode)
         vm_disk_path = self.vm_manager.get_disk_path(vm_name)
 
-        scenario_dir = self.dumper.scenario_dir(scenario_id)
-        memory_dump_path = scenario_dir / "memory" / BASELINE_MEMORY_FILENAME
-        disk_dump_path = scenario_dir / "disk" / BASELINE_DISK_FILENAME
+        run_dir = self.dumper.run_dir(run_id)
+        memory_dump_path = run_dir / "memory" / BASELINE_MEMORY_FILENAME
+        disk_dump_path = run_dir / "disk" / BASELINE_DISK_FILENAME
 
         console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)
@@ -426,6 +435,7 @@ class ForensicOrchestrator:
         console.section_end()
 
         return self.dumper.write_manifest(
+            run_id,
             scenario_id,
             memory_meta,
             disk_meta,
@@ -442,7 +452,7 @@ class ForensicOrchestrator:
         # Mode dispatch lives here, not in the dumper: VM lifecycle and
         # snapshot prepare/finalize are orchestration concerns, while the
         # dumper is pure host-side I/O.
-        console.step(f"acquiring disk from '{vm_name} (mode={mode})'...", indent=True)
+        console.step(f"acquiring disk from '{vm_name} (mode={mode})'...")
 
         if mode == "offline":
             # qemu-img convert needs the qcow2 not held by QEMU; a clean
@@ -505,12 +515,12 @@ def _isf_filename(distro_id: str, kernel_release: str) -> str:
     return f"{family}_{safe_kernel}.json"
 
 
-def _make_verify_output_dir(base_dir: Path, distro_id: str) -> Path:
-    # Minimal sanitization: distro_id is expected to be like "ubuntu-22.04",
-    # but a stray '/' would punch a hole in the directory layout, so collapse
-    # it. Dots/dashes are fine on every supported filesystem.
-    safe_distro = distro_id.replace("/", "-")
-    ts = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    verify_dir = base_dir / "results" / f"{safe_distro}_verify_{ts}"
-    verify_dir.mkdir(parents=True, exist_ok=False)
-    return verify_dir
+def _make_run_id(distro_id: str, scenario_id: str) -> str:
+    """
+    Build the canonical per-run identifier:
+        "{distro_id}_{scenario_id}_{YYYYMMDD-HHMMSS}"
+    Used as the directory name under both dumps_dir and results_dir so the
+    two trees stay in lockstep for a given run.
+    """
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"{distro_id}_{scenario_id}_{ts}"

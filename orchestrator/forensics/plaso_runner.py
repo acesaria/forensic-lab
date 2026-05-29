@@ -14,6 +14,7 @@ import json
 import logging
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 _log = logging.getLogger(__name__)
@@ -61,9 +62,22 @@ def run_log2timeline(
 ) -> dict:
     binary = resolve_binary(log2timeline_bin)
     storage_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path = storage_path.parent / "log2timeline.log"
+
+    # Plaso opens a file handler at <logdir>/Worker_NN_<logbase> for every
+    # multiprocess worker, regardless of whether that worker ever logs --
+    # so a clean run drops a fan of zero-byte siblings next to --logfile.
+    # There is no plaso flag to suppress that, so stage the whole log
+    # family in a tempdir and move only the main log into the run dir.
+    # Worker stubs are born in tmpfs and die with the tempdir; the run
+    # dir only ever sees the file the caller asked for.
+    log_stage = Path(tempfile.mkdtemp(prefix="plaso-log-"))
+    staged_log = log_stage / "log2timeline.log"
 
     cmd = [
         binary,
+        "--logfile",
+        str(staged_log),
         "--parsers",
         parsers,
         "--hashers",
@@ -78,12 +92,20 @@ def run_log2timeline(
     cmd += ["--storage-file", str(storage_path), str(disk_path)]
 
     _log.debug("log2timeline: %s", " ".join(cmd))
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"log2timeline failed for {disk_path.name}:\n"
-            f"{result.stderr.strip() or '(no output)'}"
-        )
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        # Move the main log out before raising on failure so the run dir
+        # always retains it as a diagnostic.
+        if staged_log.exists():
+            shutil.move(str(staged_log), log_path)
+        if result.returncode != 0:
+            raise RuntimeError(
+                f"log2timeline failed for {disk_path.name} "
+                f"(see {log_path}):\n"
+                f"{result.stderr.strip() or '(no output)'}"
+            )
+    finally:
+        shutil.rmtree(log_stage, ignore_errors=True)
 
     return {
         "command": cmd,

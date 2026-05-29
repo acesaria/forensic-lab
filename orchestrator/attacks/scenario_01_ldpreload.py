@@ -35,8 +35,10 @@ Memory:
 
 Ground-truth shape
 ------------------
-run() returns {"steps": [...]}.
-The orchestrator stamps "scenario_id" on top.
+The orchestrator pre-builds `ground_truth = {"scenario_id": ..., "steps": []}`
+and passes it in. run() appends per-step dicts to ground_truth["steps"]; the
+orchestrator persists the dict in a finally clause so partial runs survive a
+mid-scenario exception.
 """
 
 from __future__ import annotations
@@ -86,13 +88,14 @@ def run(
     host_ip: str,
     internet_on,
     internet_off,
+    ground_truth: dict[str, Any],
     *,
     run_cleanup: bool = False,
-) -> dict[str, Any]:
+) -> None:
     _step = partial(
         run_art_step, runner, internet_on=internet_on, internet_off=internet_off
     )
-    steps: list[dict[str, Any]] = []
+    steps = ground_truth["steps"]
 
     console.step_header("[1/4] discovery")
     steps.append(_step(_DISCOVERY))
@@ -115,8 +118,6 @@ def run(
         console.step_header("cleanup (skipped: artifacts preserved)")
         steps.append({"step": "cleanup", "run": False})
 
-    return {"steps": steps}
-
 
 # --- scenario-local helpers ---------------------------------------------
 
@@ -126,10 +127,10 @@ def _trigger_hook(ssh: SSHClient) -> dict[str, Any]:
     # Constructor banner confirms the dynamic linker loaded the library.
     loaded = "Loaded Atomic Red Team Library" in out
     if loaded:
-        console.ok("LD_PRELOAD .so confirmed loaded (constructor ran)", indent=True)
+        console.ok("LD_PRELOAD .so confirmed loaded (constructor ran)")
     else:
         console.warn(
-            f"LD_PRELOAD .so constructor not observed: {out.strip()!r}", indent=True
+            f"LD_PRELOAD .so constructor not observed: {out.strip()!r}"
         )
     return {
         "step": "ldpreload_trigger",
