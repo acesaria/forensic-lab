@@ -66,6 +66,9 @@ from orchestrator.forensics.plaso_runner import (
     run_psort,
     verify_plaso_inputs,
 )
+from orchestrator.forensics.artifact_specs import get_specs_for_scenario
+from orchestrator.forensics.ioc_detector import detect_iocs_for_run
+from orchestrator.forensics.evaluator import evaluate_run
 
 
 class ForensicOrchestrator:
@@ -168,16 +171,19 @@ class ForensicOrchestrator:
         scenario_id: str,
         scenario_cfg: dict[str, Any],
         acquire: bool = True,
+        evaluate: bool = True,
     ) -> str | None:
         """
         Full experiment cycle:
         1. Revert VM to baseline and start it
         2. Dispatch the scenario module, persist ground truth
         3. Acquire RAM + disk (unless acquire=False)
+        4. Detect IOCs + score per-step metrics (unless evaluate=False)
 
         End VM state mirrors the acquisition mode: "offline" leaves the
         VM OFF, "external_snapshot" leaves it ON. When acquire=False the
-        VM is left ON.
+        VM is left ON. Evaluation needs the acquired images, so it only
+        runs when acquire is True.
         Returns manifest path if acquired, else None.
         """
         console.section(f"experiment: {scenario_id} on {distro_id}")
@@ -197,12 +203,17 @@ class ForensicOrchestrator:
             self._persist_ground_truth(run_id, ground_truth)
 
         if acquire:
-            return self._run_acquisition(
+            manifest_path = self._run_acquisition(
                 vm_name,
                 run_id,
                 scenario_id,
                 disk_acquisition_mode="external_snapshot",
             )
+            if evaluate:
+                self._evaluate_run_iocs(
+                    run_id, scenario_id, distro_id, ground_truth, manifest_path
+                )
+            return manifest_path
         return None
 
     def _dispatch_scenario(
@@ -265,6 +276,88 @@ class ForensicOrchestrator:
         out.write_text(json.dumps(ground_truth, indent=2, default=str))
         console.ok(f"ground truth written: {out}")
         return out
+
+    def _evaluate_run_iocs(
+        self,
+        run_id: str,
+        scenario_id: str,
+        distro_id: str,
+        ground_truth: dict[str, Any],
+        manifest_path: str,
+    ) -> None:
+        """
+        First-pass IOC detection + per-step scoring on the acquired images.
+
+        Best-effort: the acquisition (the expensive, VM-dependent part) has
+        already succeeded and is on disk by the time we get here, so a failure
+        in detection or scoring is logged and swallowed rather than discarding
+        a good run. Writes results/<run_id>/forensics_report.json.
+        """
+        specs = get_specs_for_scenario(scenario_id)
+        if not specs:
+            console.info(
+                f"no IOC specs for scenario '{scenario_id}'; skipping evaluation"
+            )
+            return
+
+        manifest = json.loads(Path(manifest_path).read_text())
+        memory_path = Path(manifest["memory_image"]["path"])
+        disk_path = Path(manifest["disk_image"]["path"])
+
+        console.step_header("ioc detection + evaluation")
+        try:
+            timeline_events = self._build_timeline(run_id, disk_path)
+            detection_report = detect_iocs_for_run(
+                run_id=run_id,
+                ground_truth=ground_truth,
+                specs=specs,
+                sleuth=self._sleuth_runner,
+                vol=self._vol_runner,
+                disk_path=disk_path,
+                memory_path=memory_path,
+                distro_id=distro_id,
+                timeline_events=timeline_events,
+            )
+            report = evaluate_run(
+                run_id=run_id,
+                scenario_id=scenario_id,
+                ground_truth=ground_truth,
+                detection_report=detection_report,
+                specs=specs,
+                acquisitions_dir=self._paths.run_results_dir(run_id),
+            )
+        except Exception as exc:
+            console.warn(f"IOC evaluation failed (acquisition is intact): {exc}")
+            console.section_end()
+            return
+
+        recovered = sum(1 for s in report["steps"].values() if s["recovered"])
+        total = len(report["steps"])
+        console.ok(
+            f"forensics report written: {recovered}/{total} step(s) recovered "
+            f"({self._paths.run_results_dir(run_id) / 'forensics_report.json'})"
+        )
+        console.section_end()
+
+    def _build_timeline(self, run_id: str, disk_path: Path) -> list[dict]:
+        """
+        Run the Plaso pipeline over the acquired disk and return the events.
+        Mirrors _verify_plaso but keeps the timeline as a named run artifact
+        (results/<run_id>/timeline.jsonl) for the timeline-based IOC specs.
+        """
+        file_filter = default_linux_filter()
+        verify_plaso_inputs(file_filter=file_filter)
+
+        results_dir = self._paths.run_results_dir(run_id)
+        storage_path = results_dir / "timeline.plaso"
+        timeline_path = results_dir / "timeline.jsonl"
+        run_log2timeline(
+            disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
+        )
+        run_psort(storage_path=storage_path, output_path=timeline_path)
+        events = read_timeline(timeline_path)
+        console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
+        return events
 
     # --- teardown --------------------------------------------------------
 

@@ -535,9 +535,9 @@ class Provider:
         root = ET.fromstring(dom.XMLDesc())
         mac = next(
             (
-                iface.find("mac").attrib["address"]
+                iface.find("mac").attrib["address"] # type: ignore
                 for iface in root.findall(".//devices/interface[@type='network']")
-                if iface.find("source").attrib.get("network") != self._network_name
+                if iface.find("source").attrib.get("network") != self._network_name # type: ignore
             ),
             None,
         )
