@@ -54,3 +54,4 @@ shared/dumps
 *.plaso
 results/*/verify.jsonl
 .claudeignore
+shared/results/*/*.jsonl

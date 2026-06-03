@@ -13,7 +13,6 @@ from pathlib import Path
 
 from orchestrator.core import console
 
-
 _log = logging.getLogger(__name__)
 
 
@@ -67,7 +66,7 @@ class SleuthKitRunner:
         )
 
     def probe(self, disk_path: Path) -> None:
-        cmd = [self._mmls_bin, "-i", "ewf", str(disk_path)]
+        cmd = [self._mmls_bin, *_image_type_flag(disk_path), str(disk_path)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(
@@ -77,7 +76,7 @@ class SleuthKitRunner:
         console.ok(f"disk probe passed: filesystem readable ({disk_path.name})")
 
     def partition_offset(self, disk_path: Path) -> int:
-        cmd = [self._mmls_bin, "-i", "ewf", str(disk_path)]
+        cmd = [self._mmls_bin, *_image_type_flag(disk_path), str(disk_path)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(
@@ -148,6 +147,14 @@ class SleuthKitRunner:
                 f"{result.stderr.strip() or '(no output)'}"
             )
         return result.stdout
+
+
+def _image_type_flag(disk_path: Path) -> list[str]:
+    suffix = disk_path.suffix.lower()
+    if suffix in (".e01", ".ewf", ".E01"):
+        return ["-i", "ewf"]
+    # raw dd images need no -i flag; mmls auto-detects
+    return []
 
 
 def parse_fls_line(line: str) -> dict | None:

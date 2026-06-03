@@ -207,7 +207,7 @@ class ForensicOrchestrator:
                 vm_name,
                 run_id,
                 scenario_id,
-                disk_acquisition_mode="external_snapshot",
+                disk_acquisition_mode="offline",
             )
             if evaluate:
                 self._evaluate_run_iocs(

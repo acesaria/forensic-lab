@@ -14,12 +14,19 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
+import logging
 
 from orchestrator.forensics.sleuth_runner import (
     SleuthKitRunner,
     parse_fls_line,
 )
 from orchestrator.forensics.vol_runner import VolatilityRunner, first_present
+
+_log = logging.getLogger(__name__)
+
+import re as _re
+
+_ADDR_RE = _re.compile(r"[\d.:a-f]+:\d+$", _re.IGNORECASE)
 
 
 def detect_iocs_for_run(
@@ -36,8 +43,8 @@ def detect_iocs_for_run(
     # Caches keep each expensive runner call (fls listing, a vol3 plugin) to one
     # invocation per run, no matter how many specs consult it.
     cache: dict[str, Any] = {
-        "fls": None,          # parsed fls rows for the disk image
-        "plugins": {},        # plugin name -> rows
+        "fls": None,  # parsed fls rows for the disk image
+        "plugins": {},  # plugin name -> rows
     }
 
     specs_by_step: dict[str, list[dict[str, Any]]] = {}
@@ -165,7 +172,8 @@ def _detect_disk_artifact(
                 continue
             try:
                 blob = sleuth.icat(disk_path, offset, r["inode"])
-            except RuntimeError:
+            except RuntimeError as exc:
+                _log.warning("icat failed for inode %s: %s", r["inode"], exc)
                 continue
             text = blob.decode("utf-8", errors="replace")
             if content_contains in text:
@@ -256,7 +264,7 @@ def _netstat_port_match(row: dict[str, Any], port: int | None) -> bool:
             continue
     # Some vol3 builds fold the port into an address string ("0.0.0.0:4444").
     for text in _row_string_values(row):
-        if f":{port}" in text:
+        if _ADDR_RE.match(text) and f":{port}" in text:
             return True
     return False
 

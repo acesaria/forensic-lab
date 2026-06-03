@@ -533,26 +533,31 @@ class Provider:
         """
         dom = self._connect().lookupByName(vm_name)
         root = ET.fromstring(dom.XMLDesc())
-        mac = next(
-            (
-                iface.find("mac").attrib["address"] # type: ignore
-                for iface in root.findall(".//devices/interface[@type='network']")
-                if iface.find("source").attrib.get("network") != self._network_name # type: ignore
-            ),
-            None,
-        )
-        if mac is None:
+        nat_iface = None
+        for iface in root.findall(".//devices/interface[@type='network']"):
+            src = iface.find("source")
+            mac = iface.find("mac")
+            if src is None or mac is None:
+                continue
+            if src.attrib.get("network") != self._network_name:
+                nat_iface = iface
+                break
+        if nat_iface is None:
             raise RuntimeError(f"VM '{vm_name}' has no secondary (NAT) NIC")
         state = "up" if up else "down"
-        # MAC is the only attribute libvirt needs to match the existing iface;
-        # the link element is the actual update payload.
-        iface_xml = (
-            f"<interface type='network'>"
-            f"<mac address='{mac}'/>"
-            f"<link state='{state}'/>"
-            f"</interface>"
+        # updateDeviceFlags replaces the whole device definition: any field we
+        # omit (model, driver, ...) gets defaulted and libvirt rejects the
+        # mismatch. So mutate the live interface element in place -- only the
+        # link state changes -- and send it back verbatim.
+        link = nat_iface.find("link")
+        if link is None:
+            link = ET.SubElement(nat_iface, "link")
+        link.set("state", state)
+        dom.updateDeviceFlags(
+            ET.tostring(nat_iface, encoding="unicode"),
+            libvirt.VIR_DOMAIN_AFFECT_LIVE,
         )
-        dom.updateDeviceFlags(iface_xml, libvirt.VIR_DOMAIN_AFFECT_LIVE)
+        mac = nat_iface.find("mac").attrib["address"]  # type: ignore
         _log.debug("NAT NIC link %s on '%s' (mac=%s)", state, vm_name, mac)
 
     # --- snapshots -------------------------------------------------------
