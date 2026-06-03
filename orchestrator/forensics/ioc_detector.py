@@ -24,6 +24,22 @@ from orchestrator.forensics.vol_runner import VolatilityRunner, first_present
 
 _log = logging.getLogger(__name__)
 
+# Disk artifact recovery states. Defined once here (the producer) and imported
+# by evaluator.py (the consumer) so the two never drift. Ordered weakest ->
+# strongest; _STATUS_RANK uses that order to pick the best of several candidates.
+DISK_STATUS_NOT_FOUND = "not_found"
+DISK_STATUS_DELETED_ENTRY_ONLY = "deleted_entry_only"
+DISK_STATUS_DELETED_RECOVERED = "deleted_recovered"
+DISK_STATUS_PRESENT = "present"
+
+DISK_STATUSES = (
+    DISK_STATUS_NOT_FOUND,
+    DISK_STATUS_DELETED_ENTRY_ONLY,
+    DISK_STATUS_DELETED_RECOVERED,
+    DISK_STATUS_PRESENT,
+)
+_STATUS_RANK = {name: i for i, name in enumerate(DISK_STATUSES)}
+
 import re as _re
 
 _ADDR_RE = _re.compile(r"[\d.:a-f]+:\d+$", _re.IGNORECASE)
@@ -126,6 +142,70 @@ def _load_fls_rows(
     return rows
 
 
+def _read_inode(
+    sleuth: SleuthKitRunner, disk_path: Path, offset: int, inode: str
+) -> bytes | None:
+    # None means "content gone": icat raised or there were no blocks to read.
+    # That is exactly what separates deleted_entry_only from deleted_recovered.
+    try:
+        return sleuth.icat(disk_path, offset, inode)
+    except RuntimeError as exc:
+        _log.warning("icat failed for inode %s: %s", inode, exc)
+        return None
+
+
+def _classify_candidate(
+    sleuth: SleuthKitRunner,
+    disk_path: Path,
+    offset: int,
+    row: dict[str, Any],
+    content_contains: str | None,
+) -> tuple[str, bool | None, int | None]:
+    # Returns (status, content_match, recovered_bytes). content_match is None
+    # when the spec has no content_contains; recovered_bytes is None when there
+    # was no body to measure (directory entry).
+    deleted = row["deleted"]
+    if row["is_dir"]:
+        status = (
+            DISK_STATUS_DELETED_ENTRY_ONLY if deleted else DISK_STATUS_PRESENT
+        )
+        return status, None, None
+
+    blob = _read_inode(sleuth, disk_path, offset, row["inode"])
+    has_body = bool(blob)
+    content_match: bool | None = None
+    if content_contains is not None:
+        text = blob.decode("utf-8", errors="replace") if has_body else ""
+        content_match = content_contains in text
+
+    if not has_body:
+        if not deleted:
+            # Live entry we cannot read: the ambiguous case worth flagging.
+            _log.warning(
+                "icat returned no content for live inode %s (%s)",
+                row["inode"],
+                row["path"],
+            )
+            return DISK_STATUS_PRESENT, content_match, 0
+        return DISK_STATUS_DELETED_ENTRY_ONLY, content_match, 0
+
+    status = DISK_STATUS_DELETED_RECOVERED if deleted else DISK_STATUS_PRESENT
+    return status, content_match, len(blob)
+
+
+def _found_from_status(status: str, query: dict[str, Any]) -> bool:
+    # Default: present and deleted_recovered are found; a bare tombstone is not.
+    # Specs override via query flags, so future scenarios change policy with data
+    # rather than new branches in the detector.
+    if status == DISK_STATUS_PRESENT:
+        return True
+    if status == DISK_STATUS_DELETED_RECOVERED:
+        return query.get("treat_deleted_recovered_as_found", True)
+    if status == DISK_STATUS_DELETED_ENTRY_ONLY:
+        return query.get("treat_deleted_entry_as_found", False)
+    return False
+
+
 def _detect_disk_artifact(
     spec: dict[str, Any],
     sleuth: SleuthKitRunner,
@@ -137,7 +217,6 @@ def _detect_disk_artifact(
 
     path_equals = query.get("path_equals")
     path_suffix = query.get("path_suffix")
-
     if path_equals is not None:
         candidates = [r for r in rows if r["path"] == path_equals]
     elif path_suffix is not None:
@@ -145,45 +224,53 @@ def _detect_disk_artifact(
     else:
         candidates = []
 
-    matches = [
-        {
+    if not candidates:
+        return {
+            "found": False,
+            "status": DISK_STATUS_NOT_FOUND,
+            "tool_hits": {"sleuth": False},
+            "matches": [],
+        }
+
+    offset = cache["offset"]
+    content_contains = query.get("content_contains")
+
+    matches: list[dict[str, Any]] = []
+    best_status = DISK_STATUS_NOT_FOUND
+    content_match_any = False
+    for r in candidates:
+        status, content_match, nbytes = _classify_candidate(
+            sleuth, disk_path, offset, r, content_contains
+        )
+        if _STATUS_RANK[status] > _STATUS_RANK[best_status]:
+            best_status = status
+        if content_match:
+            content_match_any = True
+        match: dict[str, Any] = {
             "path": r["path"],
             "inode": r["inode"],
             "deleted": r["deleted"],
             "is_dir": r["is_dir"],
+            "status": status,
         }
-        for r in candidates
-    ]
-    # TODO: disk "found" warning -- found is currently bool(matches) and counts
-    # deleted entries. fls -r still lists files unlinked by cleanup (marked
-    # deleted=True), so a "present"-style spec like bash_history_present reports
-    # found even after the file was removed. The deleted flag is recorded per
-    # match; a later pass should let specs opt into present-only matching.
-    found = bool(matches)
+        if content_match is not None:
+            match["content_match"] = content_match
+        if nbytes is not None:
+            match["recovered_bytes"] = nbytes
+        matches.append(match)
 
-    # content_contains only applies on top of an exact-path hit: extract the
-    # file via icat and confirm the marker string is present.
-    content_contains = query.get("content_contains")
-    if found and content_contains is not None and path_equals is not None:
-        offset = cache["offset"]
-        content_ok = False
-        for r in candidates:
-            if r["deleted"] or r["is_dir"]:
-                continue
-            try:
-                blob = sleuth.icat(disk_path, offset, r["inode"])
-            except RuntimeError as exc:
-                _log.warning("icat failed for inode %s: %s", r["inode"], exc)
-                continue
-            text = blob.decode("utf-8", errors="replace")
-            if content_contains in text:
-                content_ok = True
-                break
-        for m in matches:
-            m["content_match"] = content_ok
-        found = content_ok
+    found = _found_from_status(best_status, query)
+    if content_contains is not None:
+        # Content specs need the marker in a readable body, on top of the
+        # path/status gate above.
+        found = found and content_match_any
 
-    return {"found": found, "tool_hits": {"sleuth": found}, "matches": matches}
+    return {
+        "found": found,
+        "status": best_status,
+        "tool_hits": {"sleuth": found},
+        "matches": matches,
+    }
 
 
 def _row_string_values(row: dict[str, Any]) -> list[str]:

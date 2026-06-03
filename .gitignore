@@ -55,3 +55,4 @@ shared/dumps
 results/*/verify.jsonl
 .claudeignore
 shared/results/*/*.jsonl
+shared/results/ubuntu-22.04_scenario_01_ldpreload_20260603-154033/forensics_report.json

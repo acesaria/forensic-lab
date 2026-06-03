@@ -39,11 +39,13 @@ class SleuthKitRunner:
         mmls_bin: str,
         fls_bin: str,
         icat_bin: str,
+        fsstat_bin: str,
         istat_bin: str,
     ) -> None:
         self._mmls_bin = self._resolve(mmls_bin)
         self._fls_bin = self._resolve(fls_bin)
         self._icat_bin = self._resolve(icat_bin)
+        self._fsstat_bin = self._resolve(fsstat_bin)
         self._istat_bin = self._resolve(istat_bin)
 
     @staticmethod
@@ -62,6 +64,7 @@ class SleuthKitRunner:
             mmls_bin=host_cfg.get("mmls_bin", "mmls"),
             fls_bin=host_cfg.get("fls_bin", "fls"),
             icat_bin=host_cfg.get("icat_bin", "icat"),
+            fsstat_bin=host_cfg.get("fsstat_bin", "fsstat"),
             istat_bin=host_cfg.get("istat_bin", "istat"),
         )
 
@@ -84,32 +87,41 @@ class SleuthKitRunner:
                 f"{result.stderr.strip() or '(no output)'}"
             )
 
-        # Prefer an explicit "Linux" partition; fall back to the first real
-        # slot entry (slot column contains ':', which excludes Meta/unallocated).
-        first_sector: int | None = None
-        linux_sector: int | None = None
+        best_start: int | None = None
+        best_length: int = -1
         for line in result.stdout.splitlines():
             parts = line.split()
-            if len(parts) < 5:
+            # mmls output rows: Slot Start End Length Description
+            # Skip header lines and meta/unallocated rows.
+            if len(parts) < 4:
                 continue
             slot = parts[1]
-            if ":" not in slot:
+            # Unallocated rows have "---" in slot; meta rows have "Meta".
+            # Real partition slots are numeric (DOS: "00", GPT: "000", "013"...).
+            if not slot.replace("-", "").isdigit():
                 continue
             try:
                 start = int(parts[2])
-            except ValueError:
+                length = int(parts[4])
+            except (ValueError, IndexError):
                 continue
-            if first_sector is None:
-                first_sector = start
-            if "Linux" in line and linux_sector is None:
-                linux_sector = start
+            # Pick the partition with the largest sector count -- that is the root fs.
+            if length > best_length:
+                best_length = length
+                best_start = start
 
-        chosen = linux_sector if linux_sector is not None else first_sector
-        if chosen is None:
+        if best_start is None:
             raise RuntimeError(
                 f"no usable partition found in mmls output for {disk_path.name}"
             )
-        return chosen * 512
+
+        offset = best_start * 512
+        if not self._verify_partition(disk_path, offset):
+            raise RuntimeError(
+                f"selected partition at sector {best_start} does not appear to be "
+                f"ext2/3/4 (fsstat check failed) for {disk_path.name}"
+            )
+        return offset
 
     def fls(self, disk_path: Path, offset: int, flags: str = "-r -l") -> list[str]:
         # fls expects -o in sectors, while callers carry offsets in bytes.
@@ -147,6 +159,21 @@ class SleuthKitRunner:
                 f"{result.stderr.strip() or '(no output)'}"
             )
         return result.stdout
+
+    def _verify_partition(self, disk_path: Path, offset_bytes: int) -> bool:
+        # fsstat confirms the selected offset is actually an ext filesystem before
+        # we commit to it. Avoids silently running fls against a swap or EFI partition.
+        offset_sectors = offset_bytes // 512
+        cmd = [
+            self._fsstat_bin,
+            "-o",
+            str(offset_sectors),
+            str(disk_path),
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return False
+        return "File System Type: Ext" in result.stdout
 
 
 def _image_type_flag(disk_path: Path) -> list[str]:

@@ -13,6 +13,10 @@
 #   primary: bool           primary artifacts drive step "recovered" + confidence
 #   base_weight: float      contribution to confidence when found (0.0 - 1.0)
 #   query: dict[str, Any]   tool-specific match criteria (see ioc_detector)
+#
+#   Optional disk-query flags (default behavior in parentheses):
+#     treat_deleted_recovered_as_found  (True)  recovered deleted file counts as found
+#     treat_deleted_entry_as_found      (False) a bare deleted tombstone counts as found
 
 from __future__ import annotations
 
@@ -55,7 +59,7 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "primary": True,
         "base_weight": 1.0,
         "query": {
-            "plugin": "linux.proc_maps",
+            "plugin": "linux.proc.Maps",
             "path_substring": "T1574006.so",
         },
     },
@@ -68,7 +72,7 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "primary": True,
         "base_weight": 0.9,
         "query": {
-            "plugin": "linux.netstat",
+            "plugin": "linux.sockstat",
             "port": 4444,
             "process_names": ["nc", "/bin/sh"],
         },

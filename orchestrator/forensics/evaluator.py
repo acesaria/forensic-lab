@@ -14,7 +14,24 @@ import json
 from pathlib import Path
 from typing import Any
 
+from orchestrator.forensics.ioc_detector import (
+    DISK_STATUS_PRESENT,
+    DISK_STATUS_DELETED_RECOVERED,
+    DISK_STATUS_DELETED_ENTRY_ONLY,
+)
+
 _TOOLS = ("sleuth", "vol3", "plaso")
+
+# Disk recovery state scales a found primary's base_weight: an intact file is
+# worth its full weight, a recovered deletion less, a tombstone-as-evidence
+# (only reachable when a spec opts deleted_entry_only in as found) least.
+# Memory/timeline detections have no status and fall through to factor 1.0,
+# so their scoring is unchanged.
+_STATUS_CONFIDENCE_FACTOR = {
+    DISK_STATUS_PRESENT: 1.0,
+    DISK_STATUS_DELETED_RECOVERED: 0.7,
+    DISK_STATUS_DELETED_ENTRY_ONLY: 0.3,
+}
 
 
 def evaluate_run(
@@ -67,7 +84,8 @@ def _evaluate_step(
         detection = artifacts.get(spec["id"], {})
         if detection.get("found"):
             found_primary.append(spec["id"])
-            found_weights.append(float(spec["base_weight"]))
+            factor = _STATUS_CONFIDENCE_FACTOR.get(detection.get("status"), 1.0)
+            found_weights.append(float(spec["base_weight"]) * factor)
         else:
             missing_primary.append(spec["id"])
 
