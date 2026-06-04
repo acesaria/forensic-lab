@@ -27,6 +27,8 @@ _log = logging.getLogger(__name__)
 # Disk artifact recovery states. Defined once here (the producer) and imported
 # by evaluator.py (the consumer) so the two never drift. Ordered weakest ->
 # strongest; _STATUS_RANK uses that order to pick the best of several candidates.
+# Memory/timeline detections have no deletion semantics, so they reuse only
+# present / not_found from this same set.
 DISK_STATUS_NOT_FOUND = "not_found"
 DISK_STATUS_DELETED_ENTRY_ONLY = "deleted_entry_only"
 DISK_STATUS_DELETED_RECOVERED = "deleted_recovered"
@@ -106,11 +108,16 @@ def _detect_artifact(
         return _detect_memory_artifact(spec, vol, memory_path, distro_id, cache)
     if artifact_type == "timeline":
         return _detect_timeline_artifact(spec, timeline_events)
-    return _empty_detection(spec["tool"])
+    return _empty_detection()
 
 
-def _empty_detection(tool: str) -> dict[str, Any]:
-    return {"found": False, "tool_hits": {tool: False}, "matches": []}
+def _empty_detection() -> dict[str, Any]:
+    return {
+        "found": False,
+        "status": DISK_STATUS_NOT_FOUND,
+        "matched_by": None,
+        "matches": [],
+    }
 
 
 def _normalize_fls_path(name: str) -> str:
@@ -228,7 +235,7 @@ def _detect_disk_artifact(
         return {
             "found": False,
             "status": DISK_STATUS_NOT_FOUND,
-            "tool_hits": {"sleuth": False},
+            "matched_by": None,
             "matches": [],
         }
 
@@ -268,13 +275,38 @@ def _detect_disk_artifact(
     return {
         "found": found,
         "status": best_status,
-        "tool_hits": {"sleuth": found},
+        "matched_by": "sleuth" if found else None,
         "matches": matches,
     }
 
 
 def _row_string_values(row: dict[str, Any]) -> list[str]:
     return [v for v in row.values() if isinstance(v, str)]
+
+
+# Memory artifact categories resolve to an ordered list of vol3 plugins. The
+# detector walks them in priority order and stops at the first that yields a
+# match, so a spec says "shared_library" instead of pinning a plugin name that
+# drifts between vol3 releases. Scenario 02 categories are listed now so adding
+# a spec stays data-only.
+MEMORY_CATEGORY_PLUGINS: dict[str, tuple[str, ...]] = {
+    "shared_library": ("linux.proc.Maps",),
+    "network_socket": ("linux.sockstat",),
+    "process": ("linux.pslist", "linux.psscan"),
+    "kernel_module": ("linux.lsmod", "linux.hidden_modules", "linux.check_modules"),
+    "syscall_hook": ("linux.check_syscall",),
+    "credential_artifact": ("linux.bash", "linux.envars"),
+    "ebpf_program": ("linux.bpf", "linux.ebpf"),
+}
+
+
+def _resolve_memory_plugins(spec: dict[str, Any]) -> tuple[str, ...]:
+    # Explicit query["plugin"] wins for backward compatibility; otherwise the
+    # candidate list comes from artifact_category.
+    explicit = spec.get("query", {}).get("plugin")
+    if explicit:
+        return (explicit,)
+    return MEMORY_CATEGORY_PLUGINS.get(spec.get("artifact_category", ""), ())
 
 
 def _get_plugin_rows(
@@ -286,61 +318,40 @@ def _get_plugin_rows(
 ) -> list[dict[str, Any]]:
     rows = cache["plugins"].get(plugin)
     if rows is None:
-        rows = vol.run_plugin(memory_path, distro_id, plugin)
+        try:
+            rows = vol.run_plugin(memory_path, distro_id, plugin)
+        except RuntimeError as exc:
+            # A candidate plugin may not exist for this kernel/build; skip it so
+            # the next plugin in the category's priority list still gets a turn.
+            _log.warning("vol3 plugin %s failed: %s", plugin, exc)
+            rows = []
         cache["plugins"][plugin] = rows
     return rows
 
 
-def _detect_memory_artifact(
-    spec: dict[str, Any],
-    vol: VolatilityRunner,
-    memory_path: Path,
-    distro_id: str,
-    cache: dict[str, Any],
-) -> dict[str, Any]:
-    query = spec["query"]
-    plugin = query["plugin"]
-    rows = _get_plugin_rows(vol, memory_path, distro_id, plugin, cache)
-    matches: list[dict[str, Any]] = []
-
-    if plugin == "linux.proc_maps":
-        needle = query["path_substring"]
-        for row in rows:
-            mapped = first_present(row, "File Path", "Path", "FilePath", "File")
-            haystacks = [mapped] if isinstance(mapped, str) else _row_string_values(row)
-            if any(needle in h for h in haystacks):
-                matches.append(
-                    {
-                        "pid": first_present(row, "PID", "Pid", "pid"),
-                        "path": mapped if isinstance(mapped, str) else None,
-                    }
-                )
-
-    elif plugin == "linux.netstat":
-        port = query.get("port")
-        names = query.get("process_names")
-        for row in rows:
-            if not _netstat_port_match(row, port):
-                continue
-            if names is not None and not _netstat_name_match(row, names):
-                continue
-            matches.append(
-                {
-                    "pid": first_present(row, "PID", "Pid", "pid"),
-                    "process": first_present(row, "Process Name", "Comm", "Process"),
-                    "local_port": first_present(row, "LocalPort", "Local Port"),
-                    "foreign_port": first_present(row, "ForeignPort", "Foreign Port"),
-                    "state": first_present(row, "State"),
-                }
-            )
-
-    found = bool(matches)
-    return {"found": found, "tool_hits": {"vol3": found}, "matches": matches}
+def _row_contains(row: dict[str, Any], needle: str) -> bool:
+    # Prefer a path/name-like column, fall back to every string value: vol3
+    # column names drift, so scanning all strings keeps substring matching robust.
+    mapped = first_present(row, "File Path", "Path", "FilePath", "File", "Name", "Module")
+    haystacks = [mapped] if isinstance(mapped, str) else _row_string_values(row)
+    return any(needle in h for h in haystacks)
 
 
-def _netstat_port_match(row: dict[str, Any], port: int | None) -> bool:
-    if port is None:
-        return True
+def _summarize_row(row: dict[str, Any]) -> dict[str, Any]:
+    # Tolerant projection of the columns a reviewer cares about; absent ones are
+    # dropped so the match record stays readable across different plugins.
+    fields = {
+        "pid": first_present(row, "PID", "Pid", "pid"),
+        "process": first_present(row, "Process Name", "Comm", "Process", "Name"),
+        "path": first_present(row, "File Path", "Path", "FilePath", "File"),
+        "local_port": first_present(row, "LocalPort", "Local Port"),
+        "foreign_port": first_present(row, "ForeignPort", "Foreign Port"),
+        "state": first_present(row, "State"),
+    }
+    return {k: v for k, v in fields.items() if v is not None}
+
+
+def _socket_port_match(row: dict[str, Any], port: int) -> bool:
     local = first_present(row, "LocalPort", "Local Port", "LocalAddr Port")
     foreign = first_present(row, "ForeignPort", "Foreign Port")
     for value in (local, foreign):
@@ -356,11 +367,64 @@ def _netstat_port_match(row: dict[str, Any], port: int | None) -> bool:
     return False
 
 
-def _netstat_name_match(row: dict[str, Any], names: list[str]) -> bool:
+def _socket_name_match(row: dict[str, Any], names: list[str]) -> bool:
     proc = first_present(row, "Process Name", "Comm", "Process")
-    if isinstance(proc, str) and any(n in proc for n in names):
-        return True
-    return False
+    return isinstance(proc, str) and any(n in proc for n in names)
+
+
+def _match_memory_rows(
+    rows: list[dict[str, Any]], query: dict[str, Any]
+) -> list[dict[str, Any]]:
+    # Match strategy is inferred from which query keys are present, so one matcher
+    # serves every category: a path/name substring and/or a socket port with
+    # optional process names. Every present criterion must hold.
+    path_needle = query.get("path_substring")
+    name_needle = query.get("name_substring")
+    port = query.get("port")
+    names = query.get("process_names")
+    if path_needle is None and name_needle is None and port is None and names is None:
+        return []
+
+    matches: list[dict[str, Any]] = []
+    for row in rows:
+        if path_needle is not None and not _row_contains(row, path_needle):
+            continue
+        if name_needle is not None and not _row_contains(row, name_needle):
+            continue
+        if port is not None and not _socket_port_match(row, port):
+            continue
+        if names is not None and not _socket_name_match(row, names):
+            continue
+        matches.append(_summarize_row(row))
+    return matches
+
+
+def _detect_memory_artifact(
+    spec: dict[str, Any],
+    vol: VolatilityRunner,
+    memory_path: Path,
+    distro_id: str,
+    cache: dict[str, Any],
+) -> dict[str, Any]:
+    query = spec["query"]
+    # Walk candidate plugins in priority order; the first non-empty match wins and
+    # is recorded in matched_by so the report shows which plugin produced the hit.
+    for plugin in _resolve_memory_plugins(spec):
+        rows = _get_plugin_rows(vol, memory_path, distro_id, plugin, cache)
+        matches = _match_memory_rows(rows, query)
+        if matches:
+            return {
+                "found": True,
+                "status": DISK_STATUS_PRESENT,
+                "matched_by": plugin,
+                "matches": matches,
+            }
+    return {
+        "found": False,
+        "status": DISK_STATUS_NOT_FOUND,
+        "matched_by": None,
+        "matches": [],
+    }
 
 
 def _detect_timeline_artifact(
@@ -368,7 +432,12 @@ def _detect_timeline_artifact(
     events: list[dict[str, Any]] | None,
 ) -> dict[str, Any]:
     if events is None:
-        return {"found": False, "tool_hits": {"plaso": False}, "matches": []}
+        return {
+            "found": False,
+            "status": DISK_STATUS_NOT_FOUND,
+            "matched_by": None,
+            "matches": [],
+        }
 
     query = spec["query"]
     needles = query.get("message_contains_any", [])
@@ -386,4 +455,9 @@ def _detect_timeline_artifact(
             )
 
     found = bool(matches)
-    return {"found": found, "tool_hits": {"plaso": found}, "matches": matches}
+    return {
+        "found": found,
+        "status": DISK_STATUS_PRESENT if found else DISK_STATUS_NOT_FOUND,
+        "matched_by": "plaso" if found else None,
+        "matches": matches,
+    }

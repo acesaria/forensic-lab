@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,8 @@ from orchestrator.forensics.ioc_detector import (
     DISK_STATUS_DELETED_RECOVERED,
     DISK_STATUS_DELETED_ENTRY_ONLY,
 )
+
+_log = logging.getLogger(__name__)
 
 _TOOLS = ("sleuth", "vol3", "plaso")
 
@@ -66,6 +69,14 @@ def evaluate_run(
         artifacts = detection_steps.get(step_name, {}).get("artifacts", {})
         report["steps"][step_name] = _evaluate_step(step, step_specs, artifacts)
 
+    # Specs whose step never appears in ground truth are silently skipped above.
+    # Surface them so a step-name typo reads as a coverage gap, not a clean zero.
+    gt_steps = {s.get("step") for s in ground_truth.get("steps", [])}
+    unmatched = sorted(s["id"] for s in specs if s["step"] not in gt_steps)
+    if unmatched:
+        _log.warning("specs bound to steps absent from ground truth: %s", unmatched)
+    report["unmatched_specs"] = unmatched
+
     _write_report(report, acquisitions_dir)
     return report
 
@@ -102,12 +113,28 @@ def _evaluate_step(
     confidence = _confidence(found_weights)
     notes = _notes(found_primary, missing_primary)
 
+    # Per-artifact breakdown so a zero confidence is explainable: an empty list
+    # means no specs cover this step, while found=False entries mean the detector
+    # ran and saw nothing. status carries the disk recovery state when present.
+    artifact_details = [
+        {
+            "id": spec["id"],
+            "primary": bool(spec.get("primary")),
+            "tool": spec["tool"],
+            "found": bool(artifacts.get(spec["id"], {}).get("found")),
+            "status": artifacts.get(spec["id"], {}).get("status"),
+            "matched_by": artifacts.get(spec["id"], {}).get("matched_by"),
+        }
+        for spec in step_specs
+    ]
+
     return {
         "technique": _step_technique(step, step_specs),
         "recovered": recovered,
         "tool_hits": tool_hits,
         "confidence": confidence,
         "notes": notes,
+        "artifacts": artifact_details,
     }
 
 

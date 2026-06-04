@@ -40,8 +40,9 @@ BUILD_VM_PREFIX = "build-isf"
 # host-side listener (e.g. reverse shells) reachable from the lab VM.
 ISOLATED_NETWORK_GATEWAY = "192.168.100.1"
 
-# Baseline acquisition filenames
-BASELINE_MEMORY_FILENAME = "baseline_memory.raw"
+# Acquisition output filenames. The run directory name already encodes which
+# scenario/run a dump belongs to, so the files themselves stay generic.
+MEMORY_DUMP_FILENAME = "mem.raw"
 BASELINE_DISK_FILENAME = "baseline_disk.E01"
 
 # Scenario identifiers

@@ -1,0 +1,159 @@
+{
+  "run_id": "ubuntu-22.04_scenario_01_ldpreload_20260604-001952",
+  "scenario_id": "scenario_01_ldpreload",
+  "steps": {
+    "discovery": {
+      "technique": "",
+      "recovered": false,
+      "tool_hits": {
+        "sleuth": false,
+        "vol3": false,
+        "plaso": false
+      },
+      "confidence": 0.0,
+      "notes": "No primary artifacts found",
+      "artifacts": []
+    },
+    "ldpreload": {
+      "technique": "T1574.006",
+      "recovered": false,
+      "tool_hits": {
+        "sleuth": false,
+        "vol3": false,
+        "plaso": false
+      },
+      "confidence": 0.0,
+      "notes": "No primary artifacts found; missing: ldpreload_file",
+      "artifacts": [
+        {
+          "id": "ldpreload_file",
+          "primary": true,
+          "tool": "sleuth",
+          "found": false,
+          "status": "not_found",
+          "matched_by": null
+        },
+        {
+          "id": "ldpreload_so_on_disk",
+          "primary": false,
+          "tool": "sleuth",
+          "found": false,
+          "status": "not_found",
+          "matched_by": null
+        }
+      ]
+    },
+    "ldpreload_trigger": {
+      "technique": "T1574.006",
+      "recovered": false,
+      "tool_hits": {
+        "sleuth": false,
+        "vol3": false,
+        "plaso": false
+      },
+      "confidence": 0.0,
+      "notes": "No primary artifacts found; missing: ldpreload_so_in_proc_maps",
+      "artifacts": [
+        {
+          "id": "ldpreload_so_in_proc_maps",
+          "primary": true,
+          "tool": "vol3",
+          "found": false,
+          "status": "not_found",
+          "matched_by": null
+        }
+      ]
+    },
+    "reverse_shell": {
+      "technique": "T1059.004",
+      "recovered": true,
+      "tool_hits": {
+        "sleuth": false,
+        "vol3": false,
+        "plaso": true
+      },
+      "confidence": 0.9,
+      "notes": "Found primary artifacts: reverse_shell_history; missing: reverse_shell_socket",
+      "artifacts": [
+        {
+          "id": "reverse_shell_socket",
+          "primary": true,
+          "tool": "vol3",
+          "found": false,
+          "status": "not_found",
+          "matched_by": null
+        },
+        {
+          "id": "reverse_shell_fifo",
+          "primary": false,
+          "tool": "sleuth",
+          "found": false,
+          "status": "not_found",
+          "matched_by": null
+        },
+        {
+          "id": "reverse_shell_history",
+          "primary": true,
+          "tool": "plaso",
+          "found": true,
+          "status": "present",
+          "matched_by": "plaso"
+        }
+      ]
+    },
+    "plant_history": {
+      "technique": "",
+      "recovered": false,
+      "tool_hits": {
+        "sleuth": false,
+        "vol3": false,
+        "plaso": false
+      },
+      "confidence": 0.0,
+      "notes": "No primary artifacts found",
+      "artifacts": []
+    },
+    "cleanup_history": {
+      "technique": "T1070.003",
+      "recovered": true,
+      "tool_hits": {
+        "sleuth": false,
+        "vol3": false,
+        "plaso": true
+      },
+      "confidence": 0.9,
+      "notes": "Found primary artifacts: bash_history_contains_reverse_shell; missing: bash_history_present",
+      "artifacts": [
+        {
+          "id": "bash_history_present",
+          "primary": true,
+          "tool": "sleuth",
+          "found": false,
+          "status": "not_found",
+          "matched_by": null
+        },
+        {
+          "id": "bash_history_contains_reverse_shell",
+          "primary": true,
+          "tool": "plaso",
+          "found": true,
+          "status": "present",
+          "matched_by": "plaso"
+        }
+      ]
+    },
+    "cleanup_ldpreload": {
+      "technique": "",
+      "recovered": false,
+      "tool_hits": {
+        "sleuth": false,
+        "vol3": false,
+        "plaso": false
+      },
+      "confidence": 0.0,
+      "notes": "No primary artifacts found",
+      "artifacts": []
+    }
+  },
+  "unmatched_specs": []
+}

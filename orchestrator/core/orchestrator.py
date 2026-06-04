@@ -40,7 +40,7 @@ from typing import Any, Callable
 
 from orchestrator.core.config import (
     BASELINE_DISK_FILENAME,
-    BASELINE_MEMORY_FILENAME,
+    MEMORY_DUMP_FILENAME,
     BUILD_VM_PREFIX,
     ISF_BUILD_PLAYBOOK,
     ISOLATED_NETWORK_GATEWAY,
@@ -516,7 +516,7 @@ class ForensicOrchestrator:
         vm_disk_path = self.vm_manager.get_disk_path(vm_name)
 
         run_dir = self.dumper.run_dir(run_id)
-        memory_dump_path = run_dir / "memory" / BASELINE_MEMORY_FILENAME
+        memory_dump_path = run_dir / "memory" / MEMORY_DUMP_FILENAME
         disk_dump_path = run_dir / "disk" / BASELINE_DISK_FILENAME
 
         console.step_header("acquisition")
