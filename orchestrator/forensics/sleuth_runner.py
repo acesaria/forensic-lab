@@ -16,10 +16,13 @@ from orchestrator.core import console
 _log = logging.getLogger(__name__)
 
 
-# fls -l line format:
-#   r/r 12345:        name.txt    <size> <mtime> ...
-#   d/d 12346:        dirname/
-#   r/r * 12347:      deleted.txt ...
+# fls fields are TAB-separated. The name is the first field after the inode;
+# with -l, per-file metadata (mtime, atime, ctime, crtime, size, gid, uid)
+# follows as further tab-delimited fields, so the name must stop at the first
+# tab -- it is not space-delimited.
+#   r/r 12345:\tname.txt\t<mtime>\t...\t<size>\t<gid>\t<uid>
+#   d/d 12346:\tdirname
+#   r/r * 12347:\tdeleted.txt\t...
 # Inode can be compound (e.g. "12345-128-1") on NTFS/ext attribute streams.
 _FLS_LINE_RE = re.compile(
     r"^"
@@ -28,8 +31,8 @@ _FLS_LINE_RE = re.compile(
     r"(?P<deleted>\*\s+)?"
     r"(?P<inode>[\d\-]+):"
     r"\s+"
-    r"(?P<name>.+?)"
-    r"(?:\s{2,}.*)?$"
+    r"(?P<name>[^\t]+?)"
+    r"(?:\t.*)?$"
 )
 
 

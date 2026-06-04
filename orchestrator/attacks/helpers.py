@@ -127,13 +127,15 @@ def run_reverse_shell(
     *,
     port: int = _REVSHELL_PORT,
     timeout: int = _REVSHELL_TIMEOUT,
+    keep_open: bool = False,
 ) -> None:
     """
     Bind a TCP listener on the host, trigger a mkfifo+nc reverse shell on the
-    VM, send `id` to confirm the connection, then close it.
+    VM, send `id` to confirm the connection, and optionally keep it open for
+    later forensic acquisition.
 
     Goal: leave a process with an open socket and any mapped .so in memory
-    for forensic recovery. The shell exits immediately after `id`.
+    for forensic recovery.
 
     host_ip: isolated-network gateway address as seen from the VM.
     Appends a step dict to `steps`.
@@ -150,6 +152,7 @@ def run_reverse_shell(
                 srv.settimeout(timeout)
                 conn, addr = srv.accept()
                 console.ok(f"reverse shell connected from {addr}")
+
                 conn.sendall(b"id\n")
                 time.sleep(0.8)
                 data = conn.recv(4096).decode(errors="replace")
@@ -161,12 +164,17 @@ def run_reverse_shell(
                     and not ln.strip().startswith(("$", "#"))
                 ]
                 received.append("\n".join(clean).strip())
-                conn.sendall(b"exit\n")
+
+                if keep_open:
+                    console.ok("reverse shell left open for acquisition window")
+                    time.sleep(timeout)
+                else:
+                    conn.sendall(b"exit\n")
+
                 conn.close()
         except Exception as exc:
             error.append(str(exc))
 
-    # Listener must be bound before nc fires on the VM side.
     listener = threading.Thread(target=_listen, daemon=True)
     listener.start()
     time.sleep(0.3)
@@ -194,5 +202,8 @@ def run_reverse_shell(
             "connected": bool(received),
             "id_output": received[0] if received else "",
             "error": error[0] if error else "",
+            "kept_open": keep_open,
+            "port": port,
+            "fifo": fifo,
         }
     )

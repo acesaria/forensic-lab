@@ -129,9 +129,7 @@ def _trigger_hook(ssh: SSHClient) -> dict[str, Any]:
     if loaded:
         console.ok("LD_PRELOAD .so confirmed loaded (constructor ran)")
     else:
-        console.warn(
-            f"LD_PRELOAD .so constructor not observed: {out.strip()!r}"
-        )
+        console.warn(f"LD_PRELOAD .so constructor not observed: {out.strip()!r}")
     return {
         "step": "ldpreload_trigger",
         "technique": "T1574.006",
