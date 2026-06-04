@@ -123,17 +123,16 @@ def run(
 
 
 def _trigger_hook(ssh: SSHClient) -> dict[str, Any]:
-    code, out, _ = ssh.run("sh -c 'id'", timeout=10)
-    # Constructor banner confirms the dynamic linker loaded the library.
-    loaded = "Loaded Atomic Red Team Library" in out
-    if loaded:
-        console.ok("LD_PRELOAD .so confirmed loaded (constructor ran)")
-    else:
-        console.warn(f"LD_PRELOAD .so constructor not observed: {out.strip()!r}")
+    cmd = "sh -c 'sleep 300 >/dev/null 2>&1 & echo $!'"
+    code, out, _ = ssh.run(cmd, timeout=10)
+    pid = out.strip()
+    code2, maps_out, _ = ssh.run(f"grep T1574006.so /proc/{pid}/maps", timeout=10)
+    loaded = code2 == 0 and "T1574006.so" in maps_out
     return {
         "step": "ldpreload_trigger",
         "technique": "T1574.006",
         "exit_code": code,
-        "id_output": out.strip(),
+        "trigger_pid": pid,
         "so_loaded": loaded,
+        "maps_excerpt": maps_out.strip(),
     }

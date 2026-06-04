@@ -187,34 +187,51 @@ class ForensicOrchestrator:
         Returns manifest path if acquired, else None.
         """
         console.section(f"experiment: {scenario_id} on {distro_id}")
-        vm_name = self._reset_lab(distro_id)
-        run_id = _make_run_id(distro_id, scenario_id)
-        # ground_truth is owned here and mutated in place by the scenario so
-        # whatever steps ran before an exception are still on disk afterwards.
-        ground_truth: dict[str, Any] = {"scenario_id": scenario_id, "steps": []}
+        # DEBUG: temporary shortcut to iterate on IOC detection without
+        # reverting/executing/acquiring. Loads an already-acquired run's
+        # ground_truth + manifest from shared/dumps/<run_id>/ and only re-runs
+        # evaluation. Set DEBUG=False to restore the real cycle.
+        DEBUG = False
 
-        try:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                self._dispatch_scenario(
-                    vm_name, ssh, scenario_id, scenario_cfg, ground_truth
-                )
-        finally:
-            console.section_end()
-            self._persist_ground_truth(run_id, ground_truth)
-
-        if acquire:
-            manifest_path = self._run_acquisition(
-                vm_name,
-                run_id,
-                scenario_id,
-                disk_acquisition_mode="offline",
+        if DEBUG:
+            run_id = "ubuntu-22.04_scenario_01_ldpreload_20260604-164317"
+            run_dir = self.dumper.run_dir(run_id)
+            ground_truth = json.loads((run_dir / "ground_truth.json").read_text())
+            manifest_path = str(run_dir / "manifest.json")
+            self._evaluate_run_iocs(
+                run_id, scenario_id, distro_id, ground_truth, manifest_path
             )
-            if evaluate:
-                self._evaluate_run_iocs(
-                    run_id, scenario_id, distro_id, ground_truth, manifest_path
-                )
             return manifest_path
-        return None
+
+        else:
+            vm_name = self._reset_lab(distro_id)
+            run_id = _make_run_id(distro_id, scenario_id)
+            # ground_truth is owned here and mutated in place by the scenario so
+            # whatever steps ran before an exception are still on disk afterwards.
+            ground_truth: dict[str, Any] = {"scenario_id": scenario_id, "steps": []}
+
+            try:
+                with self.vm_manager.open_ssh(vm_name) as ssh:
+                    self._dispatch_scenario(
+                        vm_name, ssh, scenario_id, scenario_cfg, ground_truth
+                    )
+            finally:
+                console.section_end()
+                self._persist_ground_truth(run_id, ground_truth)
+
+            if acquire:
+                manifest_path = self._run_acquisition(
+                    vm_name,
+                    run_id,
+                    scenario_id,
+                    disk_acquisition_mode="offline",
+                )
+                if evaluate:
+                    self._evaluate_run_iocs(
+                        run_id, scenario_id, distro_id, ground_truth, manifest_path
+                    )
+                return manifest_path
+            return None
 
     def _dispatch_scenario(
         self,
@@ -339,25 +356,35 @@ class ForensicOrchestrator:
         )
         console.section_end()
 
-    def _build_timeline(self, run_id: str, disk_path: Path) -> list[dict]:
+    def _build_timeline(
+        self, run_id: str, disk_path: Path, debug: bool = True
+    ) -> list[dict]:
         """
         Run the Plaso pipeline over the acquired disk and return the events.
         Mirrors _verify_plaso but keeps the timeline as a named run artifact
         (results/<run_id>/timeline.jsonl) for the timeline-based IOC specs.
         """
+
         file_filter = default_linux_filter()
         verify_plaso_inputs(file_filter=file_filter)
 
         results_dir = self._paths.run_results_dir(run_id)
         storage_path = results_dir / "timeline.plaso"
         timeline_path = results_dir / "timeline.jsonl"
-        run_log2timeline(
-            disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
-        )
-        run_psort(storage_path=storage_path, output_path=timeline_path)
-        events = read_timeline(timeline_path)
-        console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
-        return events
+        if not debug:
+
+            run_log2timeline(
+                disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
+            )
+            run_psort(storage_path=storage_path, output_path=timeline_path)
+            events = read_timeline(timeline_path)
+            console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
+            return events
+
+        else:
+            events = read_timeline(timeline_path)
+            console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
+            return events
 
     # --- teardown --------------------------------------------------------
 

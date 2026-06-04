@@ -16,23 +16,14 @@ from orchestrator.core import console
 _log = logging.getLogger(__name__)
 
 
-# fls fields are TAB-separated. The name is the first field after the inode;
-# with -l, per-file metadata (mtime, atime, ctime, crtime, size, gid, uid)
-# follows as further tab-delimited fields, so the name must stop at the first
-# tab -- it is not space-delimited.
-#   r/r 12345:\tname.txt\t<mtime>\t...\t<size>\t<gid>\t<uid>
-#   d/d 12346:\tdirname
+# fls lines are tab-separated: a "<type>/<type> [*] <inode>:" prefix, then the
+# name, then -l metadata (mtime, size, ...) in later fields. We split on tabs
+# and only regex-match the prefix; the name is just the next field.
+#   d/d 1541:\thome\t<mtime>\t...\t<size>\t<gid>\t<uid>
 #   r/r * 12347:\tdeleted.txt\t...
 # Inode can be compound (e.g. "12345-128-1") on NTFS/ext attribute streams.
-_FLS_LINE_RE = re.compile(
-    r"^"
-    r"(?P<t1>[a-zA-Z\-])/(?P<t2>[a-zA-Z\-])"
-    r"\s+"
-    r"(?P<deleted>\*\s+)?"
-    r"(?P<inode>[\d\-]+):"
-    r"\s+"
-    r"(?P<name>[^\t]+?)"
-    r"(?:\t.*)?$"
+_FLS_PREFIX_RE = re.compile(
+    r"^(?P<type>[a-zA-Z\-])/[a-zA-Z\-]\s+(?P<deleted>\*)?\s*(?P<inode>[\d\-]+):$"
 )
 
 
@@ -188,13 +179,19 @@ def _image_type_flag(disk_path: Path) -> list[str]:
 
 
 def parse_fls_line(line: str) -> dict | None:
-    match = _FLS_LINE_RE.match(line)
-    if not match:
+    # fields: prefix, name, then -l metadata. Only the prefix needs a regex;
+    # the name is just the first field after it.
+    fields = line.split("\t")
+    match = _FLS_PREFIX_RE.match(fields[0])
+    if not match or len(fields) < 2:
+        return None
+    name = fields[1].strip()
+    if not name:
         return None
     return {
         "inode": match.group("inode"),
-        "name": match.group("name").strip(),
+        "name": name,
         "deleted": match.group("deleted") is not None,
-        "is_dir": match.group("t1").lower() == "d",
+        "is_dir": match.group("type").lower() == "d",
         "raw": line,
     }
