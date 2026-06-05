@@ -30,7 +30,7 @@ forensic-lab/
 │   └── profiles/      # YAML distro profiles (metadata, not logic)
 └── shared/
     ├── isf/           # Volatility ISF files
-    └── dumps/         # Memory/Disk dumps
+    └── experiments/   # one dir per run_id: dumps/ (memory+disk) + analysis/
 
 
 Master Refactoring List

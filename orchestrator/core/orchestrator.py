@@ -189,8 +189,8 @@ class ForensicOrchestrator:
         console.section(f"experiment: {scenario_id} on {distro_id}")
         # DEBUG: temporary shortcut to iterate on IOC detection without
         # reverting/executing/acquiring. Loads an already-acquired run's
-        # ground_truth + manifest from shared/dumps/<run_id>/ and only re-runs
-        # evaluation. Set DEBUG=False to restore the real cycle.
+        # ground_truth + manifest from experiments/<run_id>/dumps/ and only
+        # re-runs evaluation. Set DEBUG=False to restore the real cycle.
         DEBUG = False
 
         if DEBUG:
@@ -308,7 +308,7 @@ class ForensicOrchestrator:
         Best-effort: the acquisition (the expensive, VM-dependent part) has
         already succeeded and is on disk by the time we get here, so a failure
         in detection or scoring is logged and swallowed rather than discarding
-        a good run. Writes results/<run_id>/forensics_report.json.
+        a good run. Writes analysis/<run_id>/forensics_report.json.
         """
         specs = get_specs_for_scenario(scenario_id)
         if not specs:
@@ -341,7 +341,7 @@ class ForensicOrchestrator:
                 ground_truth=ground_truth,
                 detection_report=detection_report,
                 specs=specs,
-                acquisitions_dir=self._paths.run_results_dir(run_id),
+                acquisitions_dir=self._paths.run_analysis_dir(run_id),
             )
         except Exception as exc:
             console.warn(f"IOC evaluation failed (acquisition is intact): {exc}")
@@ -352,25 +352,25 @@ class ForensicOrchestrator:
         total = len(report["steps"])
         console.ok(
             f"forensics report written: {recovered}/{total} step(s) recovered "
-            f"({self._paths.run_results_dir(run_id) / 'forensics_report.json'})"
+            f"({self._paths.run_analysis_dir(run_id) / 'forensics_report.json'})"
         )
         console.section_end()
 
     def _build_timeline(
-        self, run_id: str, disk_path: Path, debug: bool = True
+        self, run_id: str, disk_path: Path, debug: bool = False
     ) -> list[dict]:
         """
         Run the Plaso pipeline over the acquired disk and return the events.
         Mirrors _verify_plaso but keeps the timeline as a named run artifact
-        (results/<run_id>/timeline.jsonl) for the timeline-based IOC specs.
+        (analysis/<run_id>/timeline.jsonl) for the timeline-based IOC specs.
         """
 
         file_filter = default_linux_filter()
         verify_plaso_inputs(file_filter=file_filter)
 
-        results_dir = self._paths.run_results_dir(run_id)
-        storage_path = results_dir / "timeline.plaso"
-        timeline_path = results_dir / "timeline.jsonl"
+        analysis_dir = self._paths.run_analysis_dir(run_id)
+        storage_path = analysis_dir / "timeline.plaso"
+        timeline_path = analysis_dir / "timeline.jsonl"
         if not debug:
 
             run_log2timeline(
@@ -470,7 +470,7 @@ class ForensicOrchestrator:
         VM ends OFF.
         """
         vm_name = self._reset_lab(distro_id)
-        # Compute run_id ONCE so dumps/ and results/ share the same timestamp.
+        # Compute run_id ONCE so dumps/ and analysis/ share the same timestamp.
         run_id = _make_run_id(distro_id, VERIFY_SCENARIO)
 
         manifest_path = self._run_acquisition(vm_name, run_id, VERIFY_SCENARIO)
@@ -487,15 +487,15 @@ class ForensicOrchestrator:
 
     def _verify_plaso(self, run_id: str, disk_path: Path) -> None:
         # Shallow sanity check: confirm the host's Plaso toolchain can ingest
-        # the disk and emit at least one JSON event. Artifacts land under
-        # results/<run_id>/ so they survive for inspection and don't sit
-        # inside the dumps tree (acquisition outputs) or the repo root. The
+        # the disk and emit at least one JSON event. Artifacts land under the
+        # run's analysis/ subtree so they survive for inspection and don't sit
+        # inside the dumps/ subtree (acquisition outputs) or the repo root. The
         # default Linux filter keeps this fast and verify_plaso_inputs()
         # catches missing binaries / YAML up front.
         file_filter = default_linux_filter()
         verify_plaso_inputs(file_filter=file_filter)
 
-        verify_dir = self._paths.run_results_dir(run_id)
+        verify_dir = self._paths.run_analysis_dir(run_id)
         storage_path = verify_dir / "verify.plaso"
         timeline_path = verify_dir / "verify.jsonl"
         run_log2timeline(
@@ -639,8 +639,8 @@ def _make_run_id(distro_id: str, scenario_id: str) -> str:
     """
     Build the canonical per-run identifier:
         "{distro_id}_{scenario_id}_{YYYYMMDD-HHMMSS}"
-    Used as the directory name under both dumps_dir and results_dir so the
-    two trees stay in lockstep for a given run.
+    Used as the experiment directory name under experiments_dir; its dumps/
+    and analysis/ subtrees stay in lockstep for a given run.
     """
     ts = datetime.now().strftime("%Y%m%d-%H%M%S")
     return f"{distro_id}_{scenario_id}_{ts}"

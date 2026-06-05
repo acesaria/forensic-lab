@@ -7,9 +7,11 @@ User-tunable roots come from config.yaml (machine-local):
     repo_root, shared_dir, state_dir, ssh_key, ssh_pub_key
 
 Derived locations are computed as properties so callers never re-derive
-"shared_dir / 'dumps'" or "repo_root / 'vendor/...'" on their own. Per-run
-directories are built via run_dumps_dir() / run_results_dir() from a `run_id`
-("{distro}_{scenario}_{ts}") so the dumps and results trees stay in lockstep.
+"shared_dir / 'experiments'" or "repo_root / 'vendor/...'" on their own. Each
+experiment owns one directory under experiments_dir, named by its `run_id`
+("{distro}_{scenario}_{ts}"), holding both a dumps/ subtree (raw acquisition)
+and an analysis/ subtree (derived results), built via run_dumps_dir() /
+run_analysis_dir().
 """
 
 from dataclasses import dataclass
@@ -43,12 +45,8 @@ class ProjectPaths:
     # --- shared/ tree (experiment outputs) -------------------------------
 
     @property
-    def dumps_dir(self) -> Path:
-        return self.shared_dir / "dumps"
-
-    @property
-    def results_dir(self) -> Path:
-        return self.shared_dir / "results"
+    def experiments_dir(self) -> Path:
+        return self.shared_dir / "experiments"
 
     @property
     def isf_dir(self) -> Path:
@@ -71,9 +69,11 @@ class ProjectPaths:
         return self.repo_root / _ATOMICS_REL
 
     # --- per-run -------------------------------------------------------
+    # One directory per experiment (named by run_id), split into raw
+    # acquisition (dumps/) and derived analysis (analysis/) subtrees.
 
     def run_dumps_dir(self, run_id: str) -> Path:
-        return self.dumps_dir / run_id
+        return self.experiments_dir / run_id / "dumps"
 
-    def run_results_dir(self, run_id: str) -> Path:
-        return self.results_dir / run_id
+    def run_analysis_dir(self, run_id: str) -> Path:
+        return self.experiments_dir / run_id / "analysis"

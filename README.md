@@ -53,9 +53,11 @@ forensic-lab/
 │       └── ...
 │
 └── shared/                      # experiment outputs (gitignored)
-    ├── dumps/                   # acquired images + manifests
-    ├── isf/                     # generated Volatility3 ISF files
-    └── results/                 # ground truth and analysis results
+    ├── experiments/             # one dir per run_id, each holding:
+    │   └── <run_id>/
+    │       ├── dumps/           # acquired images + manifest + ground truth
+    │       └── analysis/        # timeline + forensics report
+    └── isf/                     # generated Volatility3 ISF files
 ```
 
 ---
@@ -162,7 +164,7 @@ Memory and disk are acquired separately:
 - **RAM** — `virsh dump --memory-only --live` while the VM is running. No VM pause required.
 - **Disk** — the VM is shut down cleanly, the qcow2 overlay is exposed via `qemu-nbd` in read-only mode, and `ewfacquire` produces a compressed EWF image. The VM is restarted immediately after.
 
-Both images land in `shared/dumps/<scenario_id>/` alongside a `manifest.json` with SHA256 hashes, sizes, timestamps, and acquisition timing.
+Both images land in `shared/experiments/<run_id>/dumps/` alongside a `manifest.json` with SHA256 hashes, sizes, timestamps, and acquisition timing.
 
 ---
 

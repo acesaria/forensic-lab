@@ -29,14 +29,16 @@ def _create_system_dirs(paths: ProjectPaths, uid: int, kvm_gid: int) -> None:
     console.ok("system directories ready")
 
 
-def _setup_dumps_dir(paths: ProjectPaths, uid: int, kvm_gid: int) -> None:
-    d = paths.dumps_dir
+def _setup_experiments_dir(paths: ProjectPaths, uid: int, kvm_gid: int) -> None:
+    # setgid (2775) propagates the kvm group + setgid bit to the per-run
+    # subdirs Python creates later, so virsh-written dumps land group-writable.
+    d = paths.experiments_dir
     d.mkdir(parents=True, exist_ok=True)
     subprocess.run(["sudo", "chown", f"{uid}:{kvm_gid}", str(d)], check=True)
     subprocess.run(["sudo", "chmod", "2775", str(d)], check=True)
 
 
-def _install_sudoers(username: str, images_dir: Path, dumps_dir: Path) -> None:
+def _install_sudoers(username: str, images_dir: Path, experiments_dir: Path) -> None:
     virsh_bin = shutil.which("virsh") or "/usr/bin/virsh"
     chown_bin = shutil.which("chown") or "/usr/bin/chown"
     chmod_bin = shutil.which("chmod") or "/usr/bin/chmod"
@@ -49,7 +51,7 @@ def _install_sudoers(username: str, images_dir: Path, dumps_dir: Path) -> None:
         "# Remove with: sudo rm /etc/sudoers.d/forensic-lab",
         "",
         f"{username} ALL=(ALL) NOPASSWD: {virsh_bin}",
-        f"{username} ALL=(ALL) NOPASSWD: {chown_bin} {uid}\\:{gid} {dumps_dir.absolute()}/*",
+        f"{username} ALL=(ALL) NOPASSWD: {chown_bin} {uid}\\:{gid} {experiments_dir.absolute()}/*",
         f"{username} ALL=(ALL) NOPASSWD: {chown_bin} root\\:root {images_dir.absolute()}/*",
         f"{username} ALL=(ALL) NOPASSWD: {chmod_bin} 0444 {images_dir.absolute()}/*",
         "",
@@ -89,6 +91,6 @@ def run_init(paths: ProjectPaths) -> None:
     kvm_gid = grp.getgrnam("kvm").gr_gid
 
     _create_system_dirs(paths, uid, kvm_gid)
-    _setup_dumps_dir(paths, uid, kvm_gid)
-    _install_sudoers(username, paths.images_dir, paths.dumps_dir)
+    _setup_experiments_dir(paths, uid, kvm_gid)
+    _install_sudoers(username, paths.images_dir, paths.experiments_dir)
     console.info("next step: forensic-lab setup --distro ubuntu-22.04")

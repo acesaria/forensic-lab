@@ -89,7 +89,8 @@ class ImageMetadata:
 @dataclass
 class AcquisitionManifest:
     # run_id is the unique per-run label "{distro}_{scenario}_{ts}" used as
-    # the directory name under dumps_dir / results_dir.
+    # the experiment directory name under experiments_dir (which holds the
+    # dumps/ and analysis/ subtrees).
     run_id: str
     # scenario_id is the bare scenarios.yaml key (or "verify"); never has a
     # timestamp baked in. Use this for semantic queries / grouping.
@@ -112,8 +113,8 @@ class AcquisitionManifest:
 class Dumper:
     def __init__(self, paths: ProjectPaths) -> None:
         self._paths = paths
-        self.dumps_root = paths.dumps_dir
-        self.dumps_root.mkdir(parents=True, exist_ok=True)
+        self.experiments_root = paths.experiments_dir
+        self.experiments_root.mkdir(parents=True, exist_ok=True)
 
     # --- directory layout ------------------------------------------------
 
@@ -128,7 +129,7 @@ class Dumper:
     def acquire_memory(self, domain: str, dest: Path) -> ImageMetadata:
         """
         Dump live RAM via virsh. Domain must be ON.
-        dest is owned by the calling user -- dumps dir is pre-chowned at init.
+        dest is owned by the calling user -- experiments dir is pre-chowned at init.
         """
         if dest.exists():
             dest.unlink()
