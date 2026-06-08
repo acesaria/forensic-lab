@@ -7,7 +7,6 @@ ArtStep     -- declarative descriptor for a single ART-backed step.
 run_art_step    -- run prereqs (if any) + test + log result.
 run_art_cleanup -- call ART cleanup_command + append to steps list.
 run_reverse_shell -- bind host listener, trigger mkfifo+nc on VM, verify.
-plant_history   -- force ~/.bash_history to exist so T1070.003 has something to remove.
 """
 
 from __future__ import annotations
@@ -112,18 +111,6 @@ def run_art_cleanup(
         input_arguments=step.input_arguments or None,
     )
     steps.append({"step": f"cleanup_{step.name}", "run": True})
-
-
-def plant_history(ssh: SSHClient, steps: list[dict[str, Any]]) -> None:
-    """
-    Force ~/.bash_history into existence so T1070.003 has something to remove.
-    Without this the file is absent (all commands ran non-interactively) and
-    the cleanup atomic exits 1 with "No such file or directory".
-    """
-    cmd = "bash -ic 'echo marker >> ~/.bash_history; history -w' 2>/dev/null; true"
-    code, _, _ = ssh.run(cmd, timeout=10)
-    console.ok("bash history planted")
-    steps.append({"step": "plant_history", "exit_code": code})
 
 
 def run_reverse_shell(

@@ -9,7 +9,7 @@ The attacker gains initial SSH access as an unprivileged user.  They perform
 system discovery, compile a malicious shared library that hooks getuid(3),
 write it to /etc/ld.so.preload, then trigger the hook by spawning a new
 process.  A reverse shell is established from inside that hooked process,
-leaving the .so mapped in memory.  Cleanup optionally clears bash history.
+leaving the .so mapped in memory.  Cleanup optionally reverts each ART test.
 
 Steps
 -----
@@ -17,21 +17,22 @@ Steps
 2. T1574.006    -- compile .so + write /etc/ld.so.preload
 3. custom       -- spawn process, verify hook active in /proc/<pid>/maps
 4. T1059.004    -- mkfifo+nc reverse shell (leaves socket + .so in memory)
-5. cleanup only when run_cleanup=True:
-   - plant bash history so T1070.003 has a file to remove
-   - T1070.003  -- rm ~/.bash_history
-   - T1574.006 ART cleanup -- remove /etc/ld.so.preload + .so
+5. cleanup only when run_cleanup=True: run each executed ART test's
+   cleanup_command (T1082 removes /tmp/T1082.txt; T1574.006 unhooks
+   /etc/ld.so.preload via sed). The custom steps (trigger, reverse shell) have
+   no ART cleanup. Recorded as a single "cleanup" step.
 
 Forensic artifacts
 ------------------
 Disk:
-  /etc/ld.so.preload   written by step 2; removed by cleanup
-  /tmp/T1574006.so     compiled .so;      removed by cleanup
-  ~/.bash_history      present if cleanup NOT run; absent if cleanup IS run
+  /etc/ld.so.preload   written by step 2; unhooked (emptied) by cleanup
+  /tmp/T1574006.so     compiled .so; NOT removed by cleanup -- persists
+  /tmp/T1082.txt       discovery output; deleted by cleanup (T1070.004 tombstone)
 
 Memory:
   any process spawned after step 2 has /tmp/T1574006.so mapped
   reverse shell process: open TCP socket + /tmp/T1574006.so in maps
+  (memory mappings outlive the disk cleanup)
 
 Ground-truth shape
 ------------------
@@ -49,8 +50,6 @@ from typing import Any
 from orchestrator.attacks.art_runner import ArtRunner
 from orchestrator.attacks.helpers import (
     ArtStep,
-    plant_history,
-    run_art_cleanup,
     run_art_step,
     run_reverse_shell,
 )
@@ -72,12 +71,6 @@ _LDPRELOAD = ArtStep(
     has_prereq=True,
 )
 
-_CLEANUP_HISTORY = ArtStep(
-    name="cleanup_history",
-    technique="T1070.003",
-    guid="a934276e-2be5-4a36-93fd-98adbb5bd4fc",  # rm ~/.bash_history
-)
-
 
 # --- public entry point -------------------------------------------------
 
@@ -96,6 +89,10 @@ def run(
         run_art_step, runner, internet_on=internet_on, internet_off=internet_off
     )
     steps = ground_truth["steps"]
+    # ART tests executed this run, in order. Cleanup reverts each one's
+    # cleanup_command (if any); custom steps (trigger, reverse shell) are not
+    # ART and have no cleanup.
+    art_tests: list[ArtStep] = []
 
     # Discovery (T1082) leaves no disk/memory artifact, so no spec in
     # artifact_specs.py covers it. Run it for narrative fidelity but keep it out
@@ -103,9 +100,11 @@ def run(
     # step, so ground_truth must mirror the spec step names exactly.
     console.step_header("[1/4] discovery")
     _step(_DISCOVERY)
+    art_tests.append(_DISCOVERY)
 
     console.step_header("[2/4] LD_PRELOAD infection")
     steps.append(_step(_LDPRELOAD, raise_on_error=True))
+    art_tests.append(_LDPRELOAD)
 
     console.step_header("[3/4] LD_PRELOAD hook trigger")
     steps.append(_trigger_hook(ssh))
@@ -118,9 +117,7 @@ def run(
 
     if run_cleanup:
         console.step_header("cleanup")
-        plant_history(ssh, steps)
-        steps.append(run_art_step(runner, _CLEANUP_HISTORY))
-        run_art_cleanup(runner, _LDPRELOAD, steps)
+        _run_cleanups(runner, art_tests, steps)
     else:
         # No cleanup step recorded: with run_cleanup=False the cleanup-phase
         # specs have nothing to match, so ground_truth carries only the attack
@@ -129,6 +126,32 @@ def run(
 
 
 # --- scenario-local helpers ---------------------------------------------
+
+
+def _run_cleanups(
+    runner: ArtRunner,
+    art_tests: list[ArtStep],
+    steps: list[dict[str, Any]],
+) -> None:
+    # Run each executed ART test's cleanup_command (ArtRunner.run_cleanup no-ops
+    # when none is defined) and record the techniques actually reverted as one
+    # analytic "cleanup" step the cleanup-phase specs bind to. Technique label is
+    # T1070.004 (Indicator Removal: File Deletion): cleanup's net forensic effect
+    # here is deleting the discovery output and unhooking the preload config.
+    reverted: list[str] = []
+    for test in art_tests:
+        if runner.run_cleanup(
+            test.technique, test.guid, input_arguments=test.input_arguments or None
+        ):
+            reverted.append(test.technique)
+    steps.append(
+        {
+            "step": "cleanup",
+            "technique": "T1070.004",
+            "reverted": reverted,
+            "run": True,
+        }
+    )
 
 
 def _trigger_hook(ssh: SSHClient) -> dict[str, Any]:

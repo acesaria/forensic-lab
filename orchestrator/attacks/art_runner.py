@@ -89,13 +89,18 @@ class ArtRunner:
         test_guid: str,
         input_arguments: dict[str, str] | None = None,
         timeout: int = 60,
-    ) -> None:
-        """Run executor.cleanup_command if present. Failure is logged, not raised."""
+    ) -> bool:
+        """Run executor.cleanup_command if present. Failure is logged, not raised.
+
+        Returns True when a cleanup_command existed and was executed, False when
+        the test defines no cleanup. Callers iterating over several tests use the
+        return to record which techniques were actually reverted.
+        """
         test = self._load_test(technique_id, test_guid)
         cleanup_cmd = test.get("executor", {}).get("cleanup_command")
         if not cleanup_cmd:
             _log.debug("no cleanup defined for %s/%s", technique_id, test_guid)
-            return
+            return False
         self._ensure_assets(technique_id)
         cmd = self._build_command(cleanup_cmd, test, input_arguments)
         code, out, err = self._ssh.run(cmd, timeout=timeout)
@@ -103,6 +108,7 @@ class ArtRunner:
             console.warn(
                 f"cleanup exited {code} for {technique_id}: {err.strip()}"
             )
+        return True
 
     def run_prerequisites(
         self,
