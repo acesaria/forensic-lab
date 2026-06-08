@@ -69,6 +69,7 @@ from orchestrator.forensics.plaso_runner import (
 from orchestrator.forensics.artifact_specs import get_specs_for_scenario
 from orchestrator.forensics.ioc_detector import detect_iocs_for_run
 from orchestrator.forensics.evaluator import evaluate_run
+from orchestrator.forensics.metrics import write_run_metrics, refresh_combined
 
 
 class ForensicOrchestrator:
@@ -364,7 +365,30 @@ class ForensicOrchestrator:
             f"forensics report written: {recovered}/{total} step(s) recovered "
             f"({self._paths.run_analysis_dir(run_id) / 'forensics_report.json'})"
         )
+        self._write_metrics(run_id, report)
         console.section_end()
+
+    def _write_metrics(self, run_id: str, report: dict[str, Any]) -> None:
+        # Per-run metrics beside the report, plus a best-effort refresh of the
+        # combined no-cleanup vs cleanup view. Metrics are a convenience layer:
+        # a failure here must never discard an otherwise-good run.
+        try:
+            run_csv = write_run_metrics(
+                report, self._paths.run_analysis_dir(run_id) / "metrics.csv"
+            )
+            combined = refresh_combined(
+                self._paths.experiments_dir,
+                self._paths.shared_dir / "report_metrics.csv",
+            )
+            if combined is not None:
+                console.ok(f"metrics: {run_csv} (combined refreshed: {combined})")
+            else:
+                console.ok(
+                    f"metrics: {run_csv} "
+                    "(combined pending the other cleanup variant)"
+                )
+        except Exception as exc:
+            console.warn(f"metrics generation failed (report is intact): {exc}")
 
     def _build_timeline(
         self, run_id: str, disk_path: Path, debug: bool = False
