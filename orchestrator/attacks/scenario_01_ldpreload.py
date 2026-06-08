@@ -13,7 +13,7 @@ leaving the .so mapped in memory.  Cleanup optionally clears bash history.
 
 Steps
 -----
-1. T1082        -- system info collection          (best-effort)
+1. T1082        -- system info collection          (best-effort, not recorded)
 2. T1574.006    -- compile .so + write /etc/ld.so.preload
 3. custom       -- spawn process, verify hook active in /proc/<pid>/maps
 4. T1059.004    -- mkfifo+nc reverse shell (leaves socket + .so in memory)
@@ -97,8 +97,12 @@ def run(
     )
     steps = ground_truth["steps"]
 
+    # Discovery (T1082) leaves no disk/memory artifact, so no spec in
+    # artifact_specs.py covers it. Run it for narrative fidelity but keep it out
+    # of ground_truth: the evaluator scores one report step per ground_truth
+    # step, so ground_truth must mirror the spec step names exactly.
     console.step_header("[1/4] discovery")
-    steps.append(_step(_DISCOVERY))
+    _step(_DISCOVERY)
 
     console.step_header("[2/4] LD_PRELOAD infection")
     steps.append(_step(_LDPRELOAD, raise_on_error=True))
@@ -107,7 +111,10 @@ def run(
     steps.append(_trigger_hook(ssh))
 
     console.step_header("[4/4] reverse shell")
-    run_reverse_shell(ssh, host_ip, steps)
+    # keep_open=True leaves the socket ESTABLISHED with nc resident through
+    # memory acquisition, so linux.sockstat recovers it (sockscan still backs
+    # up the post-mortem CLOSE case when run with keep_open=False).
+    run_reverse_shell(ssh, host_ip, steps, keep_open=True)
 
     if run_cleanup:
         console.step_header("cleanup")
@@ -115,8 +122,10 @@ def run(
         steps.append(run_art_step(runner, _CLEANUP_HISTORY))
         run_art_cleanup(runner, _LDPRELOAD, steps)
     else:
+        # No cleanup step recorded: with run_cleanup=False the cleanup-phase
+        # specs have nothing to match, so ground_truth carries only the attack
+        # steps (ldpreload, ldpreload_trigger, reverse_shell).
         console.step_header("cleanup (skipped: artifacts preserved)")
-        steps.append({"step": "cleanup", "run": False})
 
 
 # --- scenario-local helpers ---------------------------------------------

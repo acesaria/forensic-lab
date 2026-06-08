@@ -54,3 +54,5 @@ shared/experiments/
 .claudeignore
 forensics_report.json
 TODO.md
+
+*.bak

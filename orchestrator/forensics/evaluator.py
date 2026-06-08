@@ -25,6 +25,15 @@ _log = logging.getLogger(__name__)
 
 _TOOLS = ("sleuth", "vol3", "plaso")
 
+# Tool is inferred from artifact_type, not declared in specs.
+# The detector already routes on artifact_type; this mapping keeps the
+# evaluator consistent with that decision without re-reading spec["tool"].
+_ARTIFACT_TYPE_TO_TOOL: dict[str, str] = {
+    "disk": "sleuth",
+    "memory": "vol3",
+    "timeline": "plaso",
+}
+
 # Disk recovery state scales a found primary's base_weight: an intact file is
 # worth its full weight, a recovered deletion less, a tombstone-as-evidence
 # (only reachable when a spec opts deleted_entry_only in as found) least.
@@ -102,13 +111,15 @@ def _evaluate_step(
 
     recovered = bool(found_primary)
 
+    # Infer which tool would have produced each detection from artifact_type.
+    # The spec no longer carries a "tool" field; artifact_type is the single
+    # source of truth for routing (matching how ioc_detector._detect_artifact
+    # already dispatches on artifact_type, never on spec["tool"]).
     tool_hits = {tool: False for tool in _TOOLS}
     for spec in step_specs:
-        tool = spec["tool"]
-        if tool not in tool_hits:
-            continue
-        if artifacts.get(spec["id"], {}).get("found"):
-            tool_hits[tool] = True
+        inferred_tool = _ARTIFACT_TYPE_TO_TOOL.get(spec.get("artifact_type", ""))
+        if inferred_tool and artifacts.get(spec["id"], {}).get("found"):
+            tool_hits[inferred_tool] = True
 
     confidence = _confidence(found_weights)
     notes = _notes(found_primary, missing_primary)
@@ -119,8 +130,12 @@ def _evaluate_step(
     artifact_details = [
         {
             "id": spec["id"],
+            "phase": spec.get("phase", "attack"),
             "primary": bool(spec.get("primary")),
-            "tool": spec["tool"],
+            "artifact_type": spec.get("artifact_type"),
+            "tool": _ARTIFACT_TYPE_TO_TOOL.get(
+                spec.get("artifact_type", ""), "unknown"
+            ),
             "found": bool(artifacts.get(spec["id"], {}).get("found")),
             "status": artifacts.get(spec["id"], {}).get("status"),
             "matched_by": artifacts.get(spec["id"], {}).get("matched_by"),
@@ -157,9 +172,7 @@ def _notes(found_primary: list[str], missing_primary: list[str]) -> str:
         if found_primary
         else "No primary artifacts found"
     )
-    missing_part = (
-        "; missing: " + ", ".join(missing_primary) if missing_primary else ""
-    )
+    missing_part = "; missing: " + ", ".join(missing_primary) if missing_primary else ""
     return found_part + missing_part
 
 

@@ -173,9 +173,7 @@ def _classify_candidate(
     # was no body to measure (directory entry).
     deleted = row["deleted"]
     if row["is_dir"]:
-        status = (
-            DISK_STATUS_DELETED_ENTRY_ONLY if deleted else DISK_STATUS_PRESENT
-        )
+        status = DISK_STATUS_DELETED_ENTRY_ONLY if deleted else DISK_STATUS_PRESENT
         return status, None, None
 
     blob = _read_inode(sleuth, disk_path, offset, row["inode"])
@@ -291,7 +289,11 @@ def _row_string_values(row: dict[str, Any]) -> list[str]:
 # a spec stays data-only.
 MEMORY_CATEGORY_PLUGINS: dict[str, tuple[str, ...]] = {
     "shared_library": ("linux.proc.Maps",),
-    "network_socket": ("linux.sockstat",),
+    # sockstat walks live process fd tables; sockscan pool-scans for socket
+    # structs and so recovers a connection whose owning process has already
+    # exited (e.g. a reverse shell left in CLOSE state). Try the richer
+    # sockstat first, fall back to sockscan for the orphaned case.
+    "network_socket": ("linux.sockstat", "linux.sockscan"),
     "process": ("linux.pslist", "linux.psscan"),
     "kernel_module": ("linux.lsmod", "linux.hidden_modules", "linux.check_modules"),
     "syscall_hook": ("linux.check_syscall",),
@@ -332,7 +334,9 @@ def _get_plugin_rows(
 def _row_contains(row: dict[str, Any], needle: str) -> bool:
     # Prefer a path/name-like column, fall back to every string value: vol3
     # column names drift, so scanning all strings keeps substring matching robust.
-    mapped = first_present(row, "File Path", "Path", "FilePath", "File", "Name", "Module")
+    mapped = first_present(
+        row, "File Path", "Path", "FilePath", "File", "Name", "Module"
+    )
     haystacks = [mapped] if isinstance(mapped, str) else _row_string_values(row)
     return any(needle in h for h in haystacks)
 
@@ -344,32 +348,47 @@ def _summarize_row(row: dict[str, Any]) -> dict[str, Any]:
         "pid": first_present(row, "PID", "Pid", "pid"),
         "process": first_present(row, "Process Name", "Comm", "Process", "Name"),
         "path": first_present(row, "File Path", "Path", "FilePath", "File"),
-        "local_port": first_present(row, "LocalPort", "Local Port"),
-        "foreign_port": first_present(row, "ForeignPort", "Foreign Port"),
+        "local_port": first_present(row, "LocalPort", "Local Port", "Source Port"),
+        "foreign_port": first_present(row, "ForeignPort", "Foreign Port", "Destination Port"),
         "state": first_present(row, "State"),
     }
     return {k: v for k, v in fields.items() if v is not None}
 
 
 def _socket_port_match(row: dict[str, Any], port: int) -> bool:
-    local = first_present(row, "LocalPort", "Local Port", "LocalAddr Port")
-    foreign = first_present(row, "ForeignPort", "Foreign Port")
+    # Column names drift between vol3 builds: sockstat/sockscan on recent
+    # builds emit "Source Port"/"Destination Port" rather than Local/Foreign.
+    local = first_present(row, "LocalPort", "Local Port", "LocalAddr Port", "Source Port")
+    foreign = first_present(row, "ForeignPort", "Foreign Port", "Destination Port")
+
     for value in (local, foreign):
-        try:
-            if value is not None and int(value) == int(port):
-                return True
-        except (TypeError, ValueError):
-            continue
+        if isinstance(value, (int, str)):
+            try:
+                if int(value) == port:
+                    return True
+            except ValueError:
+                continue
+
     # Some vol3 builds fold the port into an address string ("0.0.0.0:4444").
     for text in _row_string_values(row):
         if _ADDR_RE.match(text) and f":{port}" in text:
             return True
+
     return False
 
 
-def _socket_name_match(row: dict[str, Any], names: list[str]) -> bool:
+def _socket_name_ok(
+    row: dict[str, Any], names: list[str], has_other_criteria: bool
+) -> bool:
+    # A present process name must match. But sockscan recovers orphaned socket
+    # structs whose owning process has exited: those carry no process name, and
+    # rejecting them would discard exactly the post-mortem evidence we want.
+    # Accept a nameless row only when some other positive criterion (port/path)
+    # already qualified it, so a names-only query stays strict.
     proc = first_present(row, "Process Name", "Comm", "Process")
-    return isinstance(proc, str) and any(n in proc for n in names)
+    if isinstance(proc, str) and proc:
+        return any(n in proc for n in names)
+    return has_other_criteria
 
 
 def _match_memory_rows(
@@ -385,6 +404,10 @@ def _match_memory_rows(
     if path_needle is None and name_needle is None and port is None and names is None:
         return []
 
+    has_other_criteria = (
+        path_needle is not None or name_needle is not None or port is not None
+    )
+
     matches: list[dict[str, Any]] = []
     for row in rows:
         if path_needle is not None and not _row_contains(row, path_needle):
@@ -393,7 +416,7 @@ def _match_memory_rows(
             continue
         if port is not None and not _socket_port_match(row, port):
             continue
-        if names is not None and not _socket_name_match(row, names):
+        if names is not None and not _socket_name_ok(row, names, has_other_criteria):
             continue
         matches.append(_summarize_row(row))
     return matches
