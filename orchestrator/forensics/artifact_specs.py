@@ -8,22 +8,21 @@ from typing import Any
 #   memory   -> Volatility3 (_detect_memory_artifact, category -> plugin list)
 #   timeline -> Plaso       (_detect_timeline_artifact)
 #
-# phase: "attack" specs describe evidence planted by the attack itself.
-# phase: "cleanup" specs describe evidence left by the cleanup action — either
-# deletion records for the attack artifacts or new artifacts (bash history,
-# journal entries) created by the cleanup commands themselves.
+# artifact_category is a routing key for memory (it must be a key in
+# MEMORY_CATEGORY_PLUGINS or the spec routes to no plugin) but a free-text label
+# for disk and timeline.
 #
-# The evaluator processes all steps present in ground_truth regardless of phase.
-# When run_cleanup=False, the cleanup step will not appear in ground_truth, so
-# cleanup-phase specs are simply skipped. Both phases can coexist in this file.
+# phase: "attack" specs describe evidence planted by the attack itself.
+# phase: "cleanup" specs describe evidence left by the cleanup action. The
+# evaluator scores one report step per ground_truth step, so cleanup specs bind
+# to the "cleanup" step the scenario emits when run_cleanup=True; with
+# run_cleanup=False that step is absent and these specs are simply skipped.
 
 
 ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
-    # ── Attack phase: LD_PRELOAD hook ──────────────────────────────────────────
-    #
-    # ART T1574.006 drops /tmp/T1574006.so and registers it in
-    # /etc/ld.so.preload. The hook takes effect on the next process launch;
-    # the trigger step loads a test binary to prove the hook is live.
+    # ── Attack: LD_PRELOAD hook (step "ldpreload", T1574.006) ──────────────
+    # ART executor: sudo sh -c 'echo /tmp/T1574006.so > /etc/ld.so.preload'.
+    # The .so is gcc-compiled to /tmp/T1574006.so by the prereq.
     {
         "id": "ldpreload_config",
         "step": "ldpreload",
@@ -36,9 +35,8 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "query": {
             "path_equals": "/etc/ld.so.preload",
             "content_contains": "/tmp/T1574006.so",
-            # After cleanup the file may be present but emptied, or deleted.
-            # Treat a recovered deleted copy as found; a bare tombstone is not
-            # enough — we need to confirm the hook path was in there.
+            # Cleanup empties this line in place (sed -i 's#...##'); only the
+            # unlinked pre-edit inode still carries the path.
             "treat_deleted_recovered_as_found": True,
             "treat_deleted_entry_as_found": False,
         },
@@ -50,7 +48,9 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "technique": "T1574.006",
         "artifact_type": "disk",
         "artifact_category": "shared_library",
-        "primary": False,
+        # Promoted to primary: ART cleanup never rm's the .so, so this is the
+        # disk artifact most likely to survive fully intact (status=present).
+        "primary": True,
         "base_weight": 0.8,
         "query": {
             "path_equals": "/tmp/T1574006.so",
@@ -59,35 +59,47 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         },
     },
     {
+        "id": "ldpreload_so_timeline",
+        "step": "ldpreload",
+        "phase": "attack",
+        "technique": "T1574.006",
+        "artifact_type": "timeline",
+        "artifact_category": "filesystem_event",
+        # The reliable timeline anchor: Plaso filestat emits MACB rows for the
+        # dropped .so and modified config whether or not anything reached shell
+        # history (this scenario runs non-interactively). If your psort
+        # json_line message omits the path, switch to filename_substring.
+        "primary": True,
+        "base_weight": 0.7,
+        "query": {
+            "message_contains_any": ["T1574006.so", "ld.so.preload"],
+        },
+    },
+    # ── Attack: hook trigger (step "ldpreload_trigger") ────────────────────
+    {
         "id": "ldpreload_so_memory",
         "step": "ldpreload_trigger",
         "phase": "attack",
         "technique": "T1574.006",
         "artifact_type": "memory",
-        "artifact_category": "shared_library",
+        "artifact_category": "shared_library",  # -> linux.proc.Maps
+        # RQ2 keystone: memory recovers the injection after disk cleanup hides it.
         "primary": True,
         "base_weight": 1.0,
-        # Routes to linux.proc.Maps via MEMORY_CATEGORY_PLUGINS["shared_library"].
-        # Survives ART cleanup: the .so stays mapped in any process launched while
-        # the hook was live, until that process exits or is killed.
         "query": {
             "path_substring": "T1574006.so",
         },
     },
-    # ── Attack phase: reverse shell ────────────────────────────────────────────
-    #
-    # The scenario launches a netcat reverse shell over the LD_PRELOAD hook to
-    # show the hook produces a real execution primitive, not just a library load.
+    # ── Attack: reverse shell (step "reverse_shell", T1059.004) ────────────
     {
         "id": "reverse_shell_socket",
         "step": "reverse_shell",
         "phase": "attack",
         "technique": "T1059.004",
         "artifact_type": "memory",
-        "artifact_category": "network_socket",
+        "artifact_category": "network_socket",  # -> linux.sockstat/sockscan
         "primary": True,
         "base_weight": 0.9,
-        # Routes to linux.sockstat via MEMORY_CATEGORY_PLUGINS["network_socket"].
         "query": {
             "port": 4444,
             "process_names": ["nc", "sh"],
@@ -99,13 +111,15 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "phase": "attack",
         "technique": "T1059.004",
         "artifact_type": "disk",
-        "artifact_category": "pipe",
+        "artifact_category": "fifo",
         "primary": False,
         "base_weight": 0.7,
         "query": {
             "path_equals": "/tmp/.rs_fifo",
+            # A FIFO has no body, so icat recovers nothing: the directory entry
+            # is the whole artifact.
             "treat_deleted_recovered_as_found": True,
-            "treat_deleted_entry_as_found": False,
+            "treat_deleted_entry_as_found": True,
         },
     },
     {
@@ -114,36 +128,23 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "phase": "attack",
         "technique": "T1059.004",
         "artifact_type": "timeline",
-        "artifact_category": "shell_history",
-        "primary": True,
-        "base_weight": 0.9,
+        "artifact_category": "command_history",
+        # Demoted: nc runs non-interactively with no PTY, so it rarely reaches
+        # bash history. Best-effort corroborator only.
+        "primary": False,
+        "base_weight": 0.5,
         "query": {
-            "message_contains_any": [
-                "mkfifo /tmp/.rs_fifo",
-                "nc ",
-                "/tmp/.rs_fifo",
-            ],
+            "message_contains_any": ["/tmp/.rs_fifo", "mkfifo", " nc "],
         },
     },
-    # ── Cleanup phase: ART-style evasion ──────────────────────────────────────
-    #
-    # ART cleanup for T1574.006 runs:
-    #   sed -i '/T1574006.so/d' /etc/ld.so.preload
-    #   rm -f /tmp/T1574006.so
-    #
-    # This step is only present in ground_truth when run_cleanup=True.
-    # The specs below measure two things:
-    #   (a) Deletion records for the attack artifacts — evidence the attack
-    #       happened even after the attacker tried to erase it.
-    #   (b) New artifacts created by the cleanup commands themselves — the
-    #       cleanup action is itself an IoC.
-    #
-    # Note: the attack-phase disk specs (ldpreload_config, ldpreload_so_disk)
-    # still run in cleanup mode and will detect recovered/tombstone states via
-    # treat_deleted_recovered_as_found. The specs below add the cleanup-specific
-    # evidence on top.
+    # ── Cleanup (step "cleanup") ───────────────────────────────────────────
+    # Cleanup runs each executed ART test's cleanup_command:
+    #   T1082    -> rm /tmp/T1082.txt                              (deletes discovery output)
+    #   T1574.006 -> sed -i 's#/tmp/T1574006.so##' /etc/ld.so.preload (unhooks; no rm)
+    # The .so is NOT removed and the preload edit is largely recoverable, so the
+    # only clean NEW cleanup artifact is the deleted discovery output.
     {
-        "id": "cleanup_so_deletion_record",
+        "id": "cleanup_discovery_output_deleted",
         "step": "cleanup",
         "phase": "cleanup",
         "technique": "T1070.004",
@@ -151,66 +152,31 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "artifact_category": "deleted_file",
         "primary": True,
         "base_weight": 0.7,
-        # treat_deleted_entry_as_found: True — here the tombstone IS the point.
-        # Even if the content is gone, the directory entry proves the file existed
-        # and was removed. This is the most commonly recoverable cleanup artifact.
+        # The file demonstrably existed (discovery wrote it) and cleanup removed
+        # it, so a bare tombstone is sufficient evidence of file deletion.
         "query": {
-            "path_equals": "/tmp/T1574006.so",
+            "path_equals": "/tmp/T1082.txt",
             "treat_deleted_recovered_as_found": True,
             "treat_deleted_entry_as_found": True,
         },
     },
     {
-        "id": "cleanup_rm_history",
+        "id": "cleanup_payload_persists",
         "step": "cleanup",
         "phase": "cleanup",
-        "technique": "T1070.004",
-        "artifact_type": "timeline",
-        "artifact_category": "shell_history",
-        "primary": True,
-        "base_weight": 0.8,
-        # Bash history surviving in ~/.bash_history or recovered from ext4
-        # journal. This is the most reliable cleanup IoC: ART's rm command
-        # is executed as the lab user, so it lands in bash history unless the
-        # attacker ran 'history -c' or set HISTFILE=/dev/null first.
-        "query": {
-            "message_contains_any": [
-                "rm -f /tmp/T1574006.so",
-                "rm /tmp/T1574006.so",
-            ],
-        },
-    },
-    {
-        "id": "cleanup_sed_history",
-        "step": "cleanup",
-        "phase": "cleanup",
-        "technique": "T1070.004",
-        "artifact_type": "timeline",
-        "artifact_category": "shell_history",
+        "technique": "T1574.006",
+        "artifact_type": "disk",
+        "artifact_category": "shared_library",
+        # RQ3 contrast: ART cleanup only unhooks the config, never deletes the
+        # payload, so the .so persisting is the signature of an incomplete
+        # cleanup. Non-primary: it restates ldpreload_so_disk under the cleanup
+        # lens rather than detecting something new.
         "primary": False,
         "base_weight": 0.6,
         "query": {
-            "message_contains_any": [
-                "sed -i",
-                "ld.so.preload",
-            ],
-        },
-    },
-    {
-        "id": "cleanup_bash_memory",
-        "step": "cleanup",
-        "phase": "cleanup",
-        "technique": "T1070.004",
-        "artifact_type": "memory",
-        "artifact_category": "credential_artifact",
-        "primary": False,
-        "base_weight": 0.6,
-        # vol3 linux.bash reads bash history directly from the bash process's
-        # in-memory history buffer — survives even if ~/.bash_history was cleared
-        # on disk, as long as the bash session is still alive in the dump.
-        # Routes to linux.bash via MEMORY_CATEGORY_PLUGINS["credential_artifact"].
-        "query": {
-            "path_substring": "T1574006.so",
+            "path_equals": "/tmp/T1574006.so",
+            "treat_deleted_recovered_as_found": True,
+            "treat_deleted_entry_as_found": False,
         },
     },
 ]

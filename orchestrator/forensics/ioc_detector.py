@@ -477,6 +477,22 @@ def _detect_timeline_artifact(
                 }
             )
 
+    # filename_substring matches filesystem-metadata (filestat) events by path
+    # rather than command text. The scenario runs non-interactively, so shell
+    # history is thin; the path of a dropped/modified file is the reliable
+    # timeline signal. Plaso spells the path differently across parsers, so scan
+    # filename, display_name, then message.
+    name_needle = query.get("filename_substring")
+    if name_needle is not None:
+        for event in events:
+            for key in ("filename", "display_name", "message"):
+                val = event.get(key)
+                if isinstance(val, str) and name_needle in val:
+                    matches.append(
+                        {"datetime": event.get("datetime"), "message": val}
+                    )
+                    break
+
     found = bool(matches)
     return {
         "found": found,
