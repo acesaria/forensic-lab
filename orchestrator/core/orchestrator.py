@@ -172,6 +172,7 @@ class ForensicOrchestrator:
         scenario_cfg: dict[str, Any],
         acquire: bool = True,
         evaluate: bool = True,
+        run_cleanup: bool | None = None,
     ) -> str | None:
         """
         Full experiment cycle:
@@ -213,7 +214,12 @@ class ForensicOrchestrator:
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     self._dispatch_scenario(
-                        vm_name, ssh, scenario_id, scenario_cfg, ground_truth
+                        vm_name,
+                        ssh,
+                        scenario_id,
+                        scenario_cfg,
+                        ground_truth,
+                        run_cleanup_override=run_cleanup,
                     )
             finally:
                 console.section_end()
@@ -240,6 +246,7 @@ class ForensicOrchestrator:
         scenario_id: str,
         scenario_cfg: dict[str, Any],
         ground_truth: dict[str, Any],
+        run_cleanup_override: bool | None = None,
     ) -> None:
         """
         Import the scenario module named in scenario_cfg["module"] and call
@@ -265,6 +272,9 @@ class ForensicOrchestrator:
                 f"scenario module '{module_path}' has no top-level run() function"
             )
         extras = {k: v for k, v in scenario_cfg.items() if k != "module"}
+        # CLI --cleanup/--no-cleanup wins over the scenarios.yaml default when set.
+        if run_cleanup_override is not None:
+            extras["run_cleanup"] = run_cleanup_override
         runner = ArtRunner(ssh, self.atomics_path)
         internet_on = functools.partial(self.vm_manager.internet_on, vm_name)
         internet_off = functools.partial(self.vm_manager.internet_off, vm_name)

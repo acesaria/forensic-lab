@@ -60,6 +60,13 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         default=True,
         help="Acquire memory + disk after the scenario (default: enabled)",
     )
+    run.add_argument(
+        "--cleanup",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Override scenarios.yaml run_cleanup for this run "
+        "(--cleanup / --no-cleanup); unset means use the scenario default",
+    )
 
     # destroy: remove lab VM and storage
     destroy = sub.add_parser("destroy", help="Destroy lab VM and storage")
@@ -195,7 +202,11 @@ def main() -> None:
                     raise RuntimeError(f"Unknown scenario '{args.scenario}'")
                 if "module" in scenario_cfg:
                     orchestrator.run_experiment(
-                        distro_id, scenario_id, scenario_cfg, acquire=args.acquire
+                        distro_id,
+                        scenario_id,
+                        scenario_cfg,
+                        acquire=args.acquire,
+                        run_cleanup=args.cleanup,
                     )
                 else:
                     raise RuntimeError(f"Invalid scenario config for '{args.scenario}'")
