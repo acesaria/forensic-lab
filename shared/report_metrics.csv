@@ -1,0 +1,20 @@
+# Table 1: per-run summary
+Scenario,Cleanup,Distro,Found/Tot,DR%,QoR,Active tools
+scenario_01_ldpreload,No,ubuntu-22.04,7/7,100.0,High,"sleuth, vol3, plaso"
+scenario_01_ldpreload,Yes,ubuntu-22.04,7/9,77.8,High,"sleuth, vol3, plaso"
+
+# Table 2: per step x tool
+Run,Step,Phase,Tool,Found,Total,Key artifacts
+no-cleanup,ldpreload,attack,sleuth,2,2,sleuth
+no-cleanup,ldpreload,attack,plaso,1,1,plaso
+no-cleanup,ldpreload_trigger,attack,vol3,1,1,linux.proc.Maps
+no-cleanup,reverse_shell,attack,vol3,1,1,linux.sockstat
+no-cleanup,reverse_shell,attack,sleuth,1,1,sleuth
+no-cleanup,reverse_shell,attack,plaso,1,1,plaso
+cleanup,ldpreload,attack,sleuth,1,2,sleuth
+cleanup,ldpreload,attack,plaso,1,1,plaso
+cleanup,ldpreload_trigger,attack,vol3,1,1,linux.proc.Maps
+cleanup,reverse_shell,attack,vol3,1,1,linux.sockstat
+cleanup,reverse_shell,attack,sleuth,1,1,sleuth
+cleanup,reverse_shell,attack,plaso,1,1,plaso
+cleanup,cleanup,cleanup,sleuth,1,2,sleuth
