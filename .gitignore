@@ -43,7 +43,7 @@ Thumbs.db
 ## ADDITIONAL
 config.yaml
 manifest.json
-.github/instructions/*
+.github/instructions/
 CLAUDE.md
 orchestrator/attacks/attack_01_ptrace.py
 orchestrator/attacks/attack_05_metasploit.py
@@ -52,6 +52,7 @@ CLAUDE.local.md
 shared/experiments/
 *.plaso
 .claudeignore
+.claude/
 forensics_report.json
 TODO.md
 
