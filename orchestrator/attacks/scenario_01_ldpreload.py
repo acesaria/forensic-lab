@@ -13,7 +13,7 @@ leaving the .so mapped in memory.  Cleanup optionally reverts each ART test.
 
 Steps
 -----
-1. T1082        -- system info collection          (best-effort, not recorded)
+1. T1082        -- system info collection -> /tmp/T1082.txt (recorded)
 2. T1574.006    -- compile .so + write /etc/ld.so.preload
 3. custom       -- spawn process, verify hook active in /proc/<pid>/maps
 4. T1059.004    -- mkfifo+nc reverse shell (leaves socket + .so in memory)
@@ -94,12 +94,13 @@ def run(
     # ART and have no cleanup.
     art_tests: list[ArtStep] = []
 
-    # Discovery (T1082) leaves no disk/memory artifact, so no spec in
-    # artifact_specs.py covers it. Run it for narrative fidelity but keep it out
-    # of ground_truth: the evaluator scores one report step per ground_truth
-    # step, so ground_truth must mirror the spec step names exactly.
+    # Discovery (T1082) writes /tmp/T1082.txt (uname, os-release, uptime), which
+    # persists on disk in a no-cleanup run, so the discovery_output spec covers
+    # it. Record the step so the evaluator scores it: ground_truth must mirror
+    # the spec step names exactly. Best-effort (no raise_on_error): a discovery
+    # failure should not abort the attack.
     console.step_header("[1/4] discovery")
-    _step(_DISCOVERY)
+    steps.append(_step(_DISCOVERY))
     art_tests.append(_DISCOVERY)
 
     console.step_header("[2/4] LD_PRELOAD infection")
@@ -121,7 +122,7 @@ def run(
     else:
         # No cleanup step recorded: with run_cleanup=False the cleanup-phase
         # specs have nothing to match, so ground_truth carries only the attack
-        # steps (ldpreload, ldpreload_trigger, reverse_shell).
+        # steps (discovery, ldpreload, ldpreload_trigger, reverse_shell).
         console.step_header("cleanup (skipped: artifacts preserved)")
 
 

@@ -22,11 +22,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from orchestrator.forensics.metrics import (  # noqa: E402  (after sys.path tweak)
     TABLE1_COLS,
-    TABLE2_COLS_RUN,
     discover_latest,
     load_report,
     table1_row,
-    table2_rows,
     write_combined_metrics,
 )
 
@@ -91,12 +89,12 @@ def main() -> None:
     for r in t1:
         print(
             f"  {r['Scenario']} [{r['Cleanup']}]: DR {r['DR%']}%  "
-            f"QoR {r['QoR']} ({r['_qor_detail']} attack primaries)  "
+            f"QoR {r['QoR']} [{r['_qor_detail']} attack primaries]  "
+            f"Order {r['Order']}  "
             f"tools: {r['Active tools']}"
         )
-    t2 = [row for r in reports for row in table2_rows(r, include_run=True)]
-    print("\nTable 2: per step x tool")
-    _print_table(TABLE2_COLS_RUN, [[r[c] for c in TABLE2_COLS_RUN] for r in t2])
+    # Per-artifact Table 2 is per-run detail (see each run's analysis/metrics.csv);
+    # the cross-run comparison is the Table 1 summary only.
     print(f"\nwrote {out}")
 
 

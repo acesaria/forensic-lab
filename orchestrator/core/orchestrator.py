@@ -173,7 +173,7 @@ class ForensicOrchestrator:
         scenario_cfg: dict[str, Any],
         acquire: bool = True,
         evaluate: bool = True,
-        run_cleanup: bool | None = None,
+        run_cleanup: bool = True,
     ) -> str | None:
         """
         Full experiment cycle:
@@ -189,56 +189,79 @@ class ForensicOrchestrator:
         Returns manifest path if acquired, else None.
         """
         console.section(f"experiment: {scenario_id} on {distro_id}")
-        # DEBUG: temporary shortcut to iterate on IOC detection without
-        # reverting/executing/acquiring. Loads an already-acquired run's
-        # ground_truth + manifest from experiments/<run_id>/dumps/ and only
-        # re-runs evaluation. Set DEBUG=False to restore the real cycle.
-        DEBUG = False
+        vm_name = self._reset_lab(distro_id)
+        run_id = _make_run_id(distro_id, scenario_id)
+        # ground_truth is owned here and mutated in place by the scenario so
+        # whatever steps ran before an exception are still on disk afterwards.
+        ground_truth: dict[str, Any] = {"scenario_id": scenario_id, "steps": []}
 
-        if DEBUG:
-            run_id = "ubuntu-22.04_scenario_01_ldpreload_20260604-164317"
-            run_dir = self.dumper.run_dir(run_id)
-            ground_truth = json.loads((run_dir / "ground_truth.json").read_text())
-            manifest_path = str(run_dir / "manifest.json")
-            self._evaluate_run_iocs(
-                run_id, scenario_id, distro_id, ground_truth, manifest_path
-            )
-            return manifest_path
-
-        else:
-            vm_name = self._reset_lab(distro_id)
-            run_id = _make_run_id(distro_id, scenario_id)
-            # ground_truth is owned here and mutated in place by the scenario so
-            # whatever steps ran before an exception are still on disk afterwards.
-            ground_truth: dict[str, Any] = {"scenario_id": scenario_id, "steps": []}
-
-            try:
-                with self.vm_manager.open_ssh(vm_name) as ssh:
-                    self._dispatch_scenario(
-                        vm_name,
-                        ssh,
-                        scenario_id,
-                        scenario_cfg,
-                        ground_truth,
-                        run_cleanup_override=run_cleanup,
-                    )
-            finally:
-                console.section_end()
-                self._persist_ground_truth(run_id, ground_truth)
-
-            if acquire:
-                manifest_path = self._run_acquisition(
+        try:
+            with self.vm_manager.open_ssh(vm_name) as ssh:
+                self._dispatch_scenario(
                     vm_name,
-                    run_id,
+                    ssh,
                     scenario_id,
-                    disk_acquisition_mode="offline",
+                    scenario_cfg,
+                    ground_truth,
+                    run_cleanup=run_cleanup,
                 )
-                if evaluate:
-                    self._evaluate_run_iocs(
-                        run_id, scenario_id, distro_id, ground_truth, manifest_path
-                    )
-                return manifest_path
-            return None
+        finally:
+            console.section_end()
+            self._persist_ground_truth(run_id, ground_truth)
+
+        if acquire:
+            manifest_path = self._run_acquisition(
+                vm_name,
+                run_id,
+                scenario_id,
+                disk_acquisition_mode="offline",
+            )
+            if evaluate:
+                self._evaluate_run_iocs(
+                    run_id, scenario_id, distro_id, ground_truth, manifest_path
+                )
+            return manifest_path
+        return None
+
+    def analyze_run(
+        self, distro_id: str, scenario_id: str, run_id: str | None = None
+    ) -> Path:
+        """
+        Re-run IOC detection + scoring on an already-acquired run, reusing its
+        dumps and cached timeline (no VM, no Plaso re-run). Rewrites that run's
+        forensics_report.json + metrics.csv so specs/filters can be iterated fast.
+        """
+        if run_id is None:
+            run_id = self._latest_run_id(distro_id, scenario_id)
+        run_dir = self.dumper.run_dir(run_id)
+        ground_truth = json.loads((run_dir / "ground_truth.json").read_text())
+        manifest_path = str(run_dir / "manifest.json")
+        console.section(f"re-analyze: {run_id}")
+        self._evaluate_run_iocs(
+            run_id,
+            scenario_id,
+            distro_id,
+            ground_truth,
+            manifest_path,
+            reuse_cached_timeline=True,
+        )
+        return self._paths.run_analysis_dir(run_id) / "forensics_report.json"
+
+    def _latest_run_id(self, distro_id: str, scenario_id: str) -> str:
+        # run_id ends in a timestamp, so lexical sort over the matching run dirs
+        # is chronological; the last one is the most recent.
+        prefix = f"{distro_id}_{scenario_id}_"
+        runs = sorted(
+            p.name
+            for p in self._paths.experiments_dir.glob(f"{prefix}*")
+            if p.is_dir()
+        )
+        if not runs:
+            raise RuntimeError(
+                f"no acquired run found for {distro_id} / {scenario_id} "
+                f"under {self._paths.experiments_dir}"
+            )
+        return runs[-1]
 
     def _dispatch_scenario(
         self,
@@ -247,7 +270,7 @@ class ForensicOrchestrator:
         scenario_id: str,
         scenario_cfg: dict[str, Any],
         ground_truth: dict[str, Any],
-        run_cleanup_override: bool | None = None,
+        run_cleanup: bool = True,
     ) -> None:
         """
         Import the scenario module named in scenario_cfg["module"] and call
@@ -273,9 +296,8 @@ class ForensicOrchestrator:
                 f"scenario module '{module_path}' has no top-level run() function"
             )
         extras = {k: v for k, v in scenario_cfg.items() if k != "module"}
-        # CLI --cleanup/--no-cleanup wins over the scenarios.yaml default when set.
-        if run_cleanup_override is not None:
-            extras["run_cleanup"] = run_cleanup_override
+        # run_cleanup comes straight from the CLI --cleanup/--no-cleanup flag.
+        extras["run_cleanup"] = run_cleanup
         runner = ArtRunner(ssh, self.atomics_path)
         internet_on = functools.partial(self.vm_manager.internet_on, vm_name)
         internet_off = functools.partial(self.vm_manager.internet_off, vm_name)
@@ -312,6 +334,7 @@ class ForensicOrchestrator:
         distro_id: str,
         ground_truth: dict[str, Any],
         manifest_path: str,
+        reuse_cached_timeline: bool = False,
     ) -> None:
         """
         First-pass IOC detection + per-step scoring on the acquired images.
@@ -334,7 +357,9 @@ class ForensicOrchestrator:
 
         console.step_header("ioc detection + evaluation")
         try:
-            timeline_events = self._build_timeline(run_id, disk_path)
+            timeline_events = self._build_timeline(
+                run_id, disk_path, reuse_cached=reuse_cached_timeline
+            )
             detection_report = detect_iocs_for_run(
                 run_id=run_id,
                 ground_truth=ground_truth,
@@ -346,6 +371,11 @@ class ForensicOrchestrator:
                 distro_id=distro_id,
                 timeline_events=timeline_events,
             )
+            # Forensic record: the raw detector output (every match -- inode,
+            # recovered bytes, matched plugin rows / timeline events) is persisted
+            # alongside the scored report so how each result was produced is always
+            # documented, without bloating the report or the metrics table.
+            self._write_detection_log(run_id, detection_report)
             report = evaluate_run(
                 run_id=run_id,
                 scenario_id=scenario_id,
@@ -367,6 +397,20 @@ class ForensicOrchestrator:
         )
         self._write_metrics(run_id, report)
         console.section_end()
+
+    def _write_detection_log(self, run_id: str, detection_report: dict[str, Any]) -> None:
+        # The complete, unscored chain-of-custody record for the run: what each
+        # tool observed for every spec. Best-effort -- a write failure must not
+        # sink an otherwise-good evaluation.
+        try:
+            out = self._paths.run_analysis_dir(run_id) / "detection.json"
+            out.parent.mkdir(parents=True, exist_ok=True)
+            out.write_text(
+                json.dumps(detection_report, indent=2) + "\n", encoding="utf-8"
+            )
+            console.ok(f"detection log written: {out}")
+        except OSError as exc:
+            console.warn(f"detection log not written: {exc}")
 
     def _write_metrics(self, run_id: str, report: dict[str, Any]) -> None:
         # Per-run metrics beside the report, plus a best-effort refresh of the
@@ -391,34 +435,35 @@ class ForensicOrchestrator:
             console.warn(f"metrics generation failed (report is intact): {exc}")
 
     def _build_timeline(
-        self, run_id: str, disk_path: Path, debug: bool = False
+        self, run_id: str, disk_path: Path, reuse_cached: bool = False
     ) -> list[dict]:
         """
         Run the Plaso pipeline over the acquired disk and return the events.
         Mirrors _verify_plaso but keeps the timeline as a named run artifact
         (analysis/<run_id>/timeline.jsonl) for the timeline-based IOC specs.
-        """
 
-        file_filter = default_linux_filter()
-        verify_plaso_inputs(file_filter=file_filter)
+        reuse_cached skips the (expensive) Plaso run and reads the existing
+        timeline.jsonl instead -- used by analyze_run to iterate on specs.
+        """
 
         analysis_dir = self._paths.run_analysis_dir(run_id)
         storage_path = analysis_dir / "timeline.plaso"
         timeline_path = analysis_dir / "timeline.jsonl"
-        if not debug:
 
-            run_log2timeline(
-                disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
-            )
-            run_psort(storage_path=storage_path, output_path=timeline_path)
+        if reuse_cached:
             events = read_timeline(timeline_path)
-            console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
+            console.ok(f"timeline reused: {len(events)} event(s) ({timeline_path})")
             return events
 
-        else:
-            events = read_timeline(timeline_path)
-            console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
-            return events
+        file_filter = default_linux_filter()
+        verify_plaso_inputs(file_filter=file_filter)
+        run_log2timeline(
+            disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
+        )
+        run_psort(storage_path=storage_path, output_path=timeline_path)
+        events = read_timeline(timeline_path)
+        console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
+        return events
 
     # --- teardown --------------------------------------------------------
 

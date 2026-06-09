@@ -6,8 +6,12 @@
 #     forensics_report.json and refreshes the combined no-cleanup vs cleanup view;
 #   - scripts/report_metrics.py, the on-demand CLI.
 #
-# Table 1  one row per run: detection rate (DR) + quality-of-recovery (QoR).
-# Table 2  one row per (step, tool): found/total + the matched_by evidence.
+# Table 1  one row per run: detection rate (DR), quality-of-recovery (QoR),
+#          and temporal Order (do recovered artifacts respect the step order).
+#          This is the only aggregator written to the combined cross-run CSV.
+# Table 2  one row per declared artifact (per-run only): the tool:method that
+#          found it, the artifact locator, whether it was found, and details
+#          (the match criterion + timestamp, or room for manual notes).
 #
 # No false-positive metric: every count is "found vs declared", never an FP rate.
 
@@ -20,15 +24,16 @@ from typing import Any, Iterator
 
 # Tool display order; "unknown" covers artifacts whose type the evaluator could
 # not route. QoR bands: Low <50, Medium 50-74, High >=75.
-_TOOL_ORDER = {"sleuth": 0, "vol3": 1, "plaso": 2, "unknown": 3}
+_TOOL_ORDER = {"sleuthkit": 0, "vol3": 1, "plaso": 2, "unknown": 3}
 _QOR_HIGH = 75.0
 _QOR_MEDIUM = 50.0
 
-TABLE1_COLS = ["Scenario", "Cleanup", "Distro", "Found/Tot", "DR%", "QoR", "Active tools"]
-# Table 2 is per-experiment; the combined A/B view prepends a Run column so the
-# two runs' rows never collide.
-TABLE2_COLS = ["Step", "Phase", "Tool", "Found", "Total", "Key artifacts"]
-TABLE2_COLS_RUN = ["Run", *TABLE2_COLS]
+TABLE1_COLS = [
+    "Scenario", "Cleanup", "Distro", "Found/Tot", "DR%", "QoR", "Order", "Active tools"
+]
+# Table 2 is per-experiment and per-artifact: Tool carries tool:method, Key
+# artifact the locator, Details the match criterion + timestamp (or free notes).
+TABLE2_COLS = ["Step", "Phase", "Tool", "Key artifact", "Found", "Details"]
 
 
 def load_report(path: str | Path) -> dict[str, Any]:
@@ -72,14 +77,9 @@ def active_tools(report: dict[str, Any]) -> list[str]:
     return sorted(active, key=lambda t: _TOOL_ORDER.get(t, 99))
 
 
-def run_label(report: dict[str, Any]) -> str:
-    return "cleanup" if has_cleanup(report) else "no-cleanup"
-
-
-def qor_label(found: int, total: int) -> str:
-    if total == 0:
+def qor_band(pct: float | None) -> str:
+    if pct is None:
         return "n/a"
-    pct = found / total * 100
     if pct >= _QOR_HIGH:
         return "High"
     if pct >= _QOR_MEDIUM:
@@ -87,59 +87,99 @@ def qor_label(found: int, total: int) -> str:
     return "Low"
 
 
+def order_label(report: dict[str, Any]) -> str:
+    # Temporal consistency: OK when recovered artifacts respect step order,
+    # violated when they do not, n/a when fewer than two steps carry a timestamp.
+    consistent = (report.get("temporal_consistency") or {}).get("consistent")
+    if consistent is True:
+        return "OK"
+    if consistent is False:
+        return "violated"
+    return "n/a"
+
+
+def _epoch_us_to_iso(ts_us: int) -> str:
+    from datetime import datetime, timezone
+
+    return datetime.fromtimestamp(ts_us / 1_000_000, timezone.utc).isoformat()
+
+
+def _artifact_tool(art: dict[str, Any]) -> str:
+    # "tool:method" for a hit (e.g. sleuthkit:fls+icat); the inferred tool alone
+    # when nothing was found (no method ran to a hit).
+    ev = art.get("evidence") or {}
+    base = ev.get("tool") or art.get("tool") or "unknown"
+    method = ev.get("method")
+    return f"{base}:{method}" if method else base
+
+
+def _artifact_details(art: dict[str, Any]) -> str:
+    # The match criterion plus the artifact timestamp; a free-text column the
+    # thesis can also annotate by hand. Empty/"not_found" when nothing matched.
+    if not art.get("found"):
+        return art.get("status") or "not_found"
+    ev = art.get("evidence") or {}
+    parts: list[str] = []
+    if ev.get("match"):
+        parts.append(str(ev["match"]))
+    ts = art.get("timestamp")
+    if isinstance(ts, int) and ts > 0:
+        parts.append(_epoch_us_to_iso(ts))
+    return "; ".join(parts) or (art.get("status") or "")
+
+
 def table1_row(report: dict[str, Any]) -> dict[str, Any]:
     arts = [a for _, _, a in iter_artifacts(report)]
     total = len(arts)
     found = sum(1 for a in arts if a.get("found"))
     # QoR looks only at attack-phase primaries (phase defaults to "attack" for
-    # pre-phase reports): completeness of the core attack evidence.
+    # pre-phase reports): it is the mean recovery quality of the core attack
+    # evidence, where each primary scores its status->quality (0.0 when missing).
     primaries = [
         a for a in arts if a.get("primary") and a.get("phase", "attack") == "attack"
     ]
     p_total = len(primaries)
     p_found = sum(1 for a in primaries if a.get("found"))
+    qor_pct = (
+        sum(a.get("quality", 0.0) for a in primaries) / p_total * 100
+        if p_total
+        else None
+    )
     return {
         "Scenario": report.get("scenario_id", "unknown"),
         "Cleanup": "Yes" if has_cleanup(report) else "No",
         "Distro": distro_of(report),
         "Found/Tot": f"{found}/{total}",
         "DR%": round(found / total * 100, 1) if total else 0.0,
-        "QoR": qor_label(p_found, p_total),
+        "QoR": qor_band(qor_pct),
+        "Order": order_label(report),
         "Active tools": ", ".join(active_tools(report)) or "-",
-        "_qor_detail": f"{p_found}/{p_total}",  # text summaries only
+        # text summaries only:
+        "_qor_detail": f"{qor_pct:.0f}% ({p_found}/{p_total} found)"
+        if qor_pct is not None
+        else "n/a",
     }
 
 
-def table2_rows(
-    report: dict[str, Any], *, include_run: bool = False
-) -> list[dict[str, Any]]:
-    label = run_label(report)
-    groups: dict[tuple[str, str], dict[str, Any]] = {}
-    order: list[tuple[str, str]] = []
-    for step_name, _, art in iter_artifacts(report):
-        key = (step_name, art.get("tool") or "unknown")
-        if key not in groups:
-            groups[key] = {"phases": set(), "arts": []}
-            order.append(key)
-        groups[key]["arts"].append(art)
-        groups[key]["phases"].add(art.get("phase", "attack"))
-
+def table2_rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    # One row per declared artifact, in scenario order. Found artifacts name
+    # their locator and tool:method; missing ones still appear (coverage) with
+    # the inferred tool and a not_found detail.
     rows: list[dict[str, Any]] = []
-    for step_name, tool in order:
-        g = groups[(step_name, tool)]
-        found = [a for a in g["arts"] if a.get("found")]
-        keys = sorted({a.get("matched_by") for a in found if a.get("matched_by")})
-        row = {
-            "Step": step_name,
-            "Phase": "/".join(sorted(p for p in g["phases"] if p)) or "attack",
-            "Tool": tool,
-            "Found": len(found),
-            "Total": len(g["arts"]),
-            "Key artifacts": "; ".join(keys),
-        }
-        if include_run:
-            row = {"Run": label, **row}
-        rows.append(row)
+    for step_name, _, art in iter_artifacts(report):
+        found = bool(art.get("found"))
+        ev = art.get("evidence") or {}
+        locator = ev.get("locator") if found else None
+        rows.append(
+            {
+                "Step": step_name,
+                "Phase": art.get("phase", "attack"),
+                "Tool": _artifact_tool(art),
+                "Key artifact": locator or art.get("id") or "-",
+                "Found": "yes" if found else "no",
+                "Details": _artifact_details(art),
+            }
+        )
     return rows
 
 
@@ -159,29 +199,24 @@ def _write_sections(
 
 
 def write_run_metrics(report: dict[str, Any], out_path: Path) -> Path:
-    # Per-experiment: this run's summary row + its step x tool breakdown (no Run
+    # Per-experiment: this run's summary row + its per-artifact breakdown (no Run
     # column -- the file already belongs to one run).
     _write_sections(
         out_path,
         [
             ("Table 1: run summary", TABLE1_COLS, [table1_row(report)]),
-            ("Table 2: per step x tool", TABLE2_COLS, table2_rows(report)),
+            ("Table 2: per artifact", TABLE2_COLS, table2_rows(report)),
         ],
     )
     return out_path
 
 
 def write_combined_metrics(reports: list[dict[str, Any]], out_path: Path) -> Path:
-    # Cross-run A/B: one Table-1 row per run + a Run-tagged Table 2.
+    # Cross-run A/B: only the Table-1 summary (one row per run). The per-artifact
+    # Table 2 is per-run detail and is meaningless aggregated across runs, so it
+    # is intentionally omitted here.
     t1 = [table1_row(r) for r in reports]
-    t2 = [row for r in reports for row in table2_rows(r, include_run=True)]
-    _write_sections(
-        out_path,
-        [
-            ("Table 1: per-run summary", TABLE1_COLS, t1),
-            ("Table 2: per step x tool", TABLE2_COLS_RUN, t2),
-        ],
-    )
+    _write_sections(out_path, [("Table 1: per-run summary", TABLE1_COLS, t1)])
     return out_path
 
 

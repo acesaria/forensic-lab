@@ -2,15 +2,32 @@ from __future__ import annotations
 
 from typing import Any
 
-# Artifact specs declare WHAT to look for (type + category + query), not HOW
-# (tool). The detector resolves tools from artifact_type:
-#   disk     -> Sleuth Kit  (_detect_disk_artifact)
-#   memory   -> Volatility3 (_detect_memory_artifact, category -> plugin list)
-#   timeline -> Plaso       (_detect_timeline_artifact)
+# Artifact specs declare WHAT to look for, never HOW. Each spec has four parts:
+#
+#   identity   id, step, phase, technique
+#   routing    artifact_type -> the detector picks the tool:
+#                disk     -> Sleuth Kit  (_detect_disk_artifact)
+#                memory   -> Volatility3 (_detect_memory_artifact)
+#                timeline -> Plaso       (_detect_timeline_artifact)
+#   role       primary (counts toward step recovery + QoR) vs corroborator
+#   query      the locator: what to match (path, content, port, message, ...)
 #
 # artifact_category is a routing key for memory (it must be a key in
 # MEMORY_CATEGORY_PLUGINS or the spec routes to no plugin) but a free-text label
 # for disk and timeline.
+#
+# Deletion policy is uniform and lives in the detector/evaluator, not in specs:
+# an artifact is "found" when the detector sees any trace of it (status !=
+# not_found), including a bare directory entry of a deleted file. How well it
+# survived is graded by status, not by a per-spec flag:
+#
+#   present            1.0   live, or deleted-but-content-recovered
+#   deleted_recovered  1.0   "
+#   deleted_entry_only 0.5   tombstone only, body gone
+#   not_found          0.0
+#
+# That status -> quality scale is what QoR averages over the attack-phase
+# primaries; memory/timeline detections only ever yield present/not_found.
 #
 # phase: "attack" specs describe evidence planted by the attack itself.
 # phase: "cleanup" specs describe evidence left by the cleanup action. The
@@ -20,6 +37,23 @@ from typing import Any
 
 
 ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
+    # ── Attack: discovery (step "discovery", T1082) ────────────────────────
+    # ART "List OS Information" appends uname -a / os-release / uptime to
+    # /tmp/T1082.txt. It persists on disk in a no-cleanup run; cleanup rm's it,
+    # which the cleanup-phase cleanup_discovery_output_deleted spec then reads as
+    # a tombstone. The two are the attack vs cleanup lens on the same file.
+    {
+        "id": "discovery_output",
+        "step": "discovery",
+        "phase": "attack",
+        "technique": "T1082",
+        "artifact_type": "disk",
+        "artifact_category": "discovery_output",
+        "primary": True,
+        "query": {
+            "path_equals": "/tmp/T1082.txt",
+        },
+    },
     # ── Attack: LD_PRELOAD hook (step "ldpreload", T1574.006) ──────────────
     # ART executor: sudo sh -c 'echo /tmp/T1574006.so > /etc/ld.so.preload'.
     # The .so is gcc-compiled to /tmp/T1574006.so by the prereq.
@@ -31,14 +65,9 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "artifact_type": "disk",
         "artifact_category": "config_file",
         "primary": True,
-        "base_weight": 0.9,
         "query": {
             "path_equals": "/etc/ld.so.preload",
             "content_contains": "/tmp/T1574006.so",
-            # Cleanup empties this line in place (sed -i 's#...##'); only the
-            # unlinked pre-edit inode still carries the path.
-            "treat_deleted_recovered_as_found": True,
-            "treat_deleted_entry_as_found": False,
         },
     },
     {
@@ -51,11 +80,8 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         # Promoted to primary: ART cleanup never rm's the .so, so this is the
         # disk artifact most likely to survive fully intact (status=present).
         "primary": True,
-        "base_weight": 0.8,
         "query": {
             "path_equals": "/tmp/T1574006.so",
-            "treat_deleted_recovered_as_found": True,
-            "treat_deleted_entry_as_found": False,
         },
     },
     {
@@ -70,9 +96,27 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         # history (this scenario runs non-interactively). If your psort
         # json_line message omits the path, switch to filename_substring.
         "primary": True,
-        "base_weight": 0.7,
         "query": {
             "message_contains_any": ["T1574006.so", "ld.so.preload"],
+        },
+    },
+    {
+        "id": "ldpreload_sudo_authlog",
+        "step": "ldpreload",
+        "phase": "attack",
+        "technique": "T1574.006",
+        "artifact_type": "disk",
+        "artifact_category": "auth_log",
+        # Command-execution evidence: the ART executor writes the preload via
+        # `sudo sh -c '...'`, and sudo logs the full command line to
+        # /var/log/auth.log. Non-interactive SSH leaves no shell history, so this
+        # is the one place the *command* (not just its file artifacts) survives
+        # on disk. Corroborator -- it restates the ldpreload action, it does not
+        # find new evidence, so it stays out of the QoR primaries.
+        "primary": False,
+        "query": {
+            "path_equals": "/var/log/auth.log",
+            "content_contains": "ld.so.preload",
         },
     },
     # ── Attack: hook trigger (step "ldpreload_trigger") ────────────────────
@@ -85,7 +129,6 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "artifact_category": "shared_library",  # -> linux.proc.Maps
         # RQ2 keystone: memory recovers the injection after disk cleanup hides it.
         "primary": True,
-        "base_weight": 1.0,
         "query": {
             "path_substring": "T1574006.so",
         },
@@ -99,7 +142,6 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "artifact_type": "memory",
         "artifact_category": "network_socket",  # -> linux.sockstat/sockscan
         "primary": True,
-        "base_weight": 0.9,
         "query": {
             "port": 4444,
             "process_names": ["nc", "sh"],
@@ -112,14 +154,12 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "technique": "T1059.004",
         "artifact_type": "disk",
         "artifact_category": "fifo",
+        # A FIFO has no body, so icat recovers nothing: the directory entry is
+        # the whole artifact (a live entry reads as present; a deleted one as
+        # entry-only at 0.5).
         "primary": False,
-        "base_weight": 0.7,
         "query": {
             "path_equals": "/tmp/.rs_fifo",
-            # A FIFO has no body, so icat recovers nothing: the directory entry
-            # is the whole artifact.
-            "treat_deleted_recovered_as_found": True,
-            "treat_deleted_entry_as_found": True,
         },
     },
     {
@@ -132,7 +172,6 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         # Demoted: nc runs non-interactively with no PTY, so it rarely reaches
         # bash history. Best-effort corroborator only.
         "primary": False,
-        "base_weight": 0.5,
         "query": {
             "message_contains_any": ["/tmp/.rs_fifo", "mkfifo", " nc "],
         },
@@ -150,14 +189,14 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         "technique": "T1070.004",
         "artifact_type": "disk",
         "artifact_category": "deleted_file",
-        "primary": True,
-        "base_weight": 0.7,
         # The file demonstrably existed (discovery wrote it) and cleanup removed
-        # it, so a bare tombstone is sufficient evidence of file deletion.
+        # it, so even a bare tombstone (entry-only, 0.5) is evidence of deletion.
+        # This is the cleanup-lens counterpart of the attack-phase
+        # discovery_output spec on the same /tmp/T1082.txt: present in
+        # no-cleanup, tombstone here.
+        "primary": True,
         "query": {
             "path_equals": "/tmp/T1082.txt",
-            "treat_deleted_recovered_as_found": True,
-            "treat_deleted_entry_as_found": True,
         },
     },
     {
@@ -172,11 +211,8 @@ ARTIFACT_SPECS_SCENARIO_01: list[dict[str, Any]] = [
         # cleanup. Non-primary: it restates ldpreload_so_disk under the cleanup
         # lens rather than detecting something new.
         "primary": False,
-        "base_weight": 0.6,
         "query": {
             "path_equals": "/tmp/T1574006.so",
-            "treat_deleted_recovered_as_found": True,
-            "treat_deleted_entry_as_found": False,
         },
     },
 ]

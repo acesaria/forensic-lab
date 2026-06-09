@@ -4,14 +4,17 @@
 # per-step metrics for one run, then persists them as
 # acquisitions/<run_id>/forensics_report.json.
 #
-# This first version scores each attack step independently: did at least one
-# primary artifact survive, which tools saw it, and how confident are we. No
-# cross-step time-ordering checks yet.
+# Each step is scored from its primary artifacts: did at least one survive
+# (recovered), which tools saw it (tool_hits), and how well each survived
+# (status -> quality, which metrics.py averages into QoR). Across steps the
+# evaluator also checks temporal consistency: that the recovered artifacts'
+# timestamps respect the attack's step order.
 
 from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -23,26 +26,24 @@ from orchestrator.forensics.ioc_detector import (
 
 _log = logging.getLogger(__name__)
 
-_TOOLS = ("sleuth", "vol3", "plaso")
+_TOOLS = ("sleuthkit", "vol3", "plaso")
 
 # Tool is inferred from artifact_type, not declared in specs.
 # The detector already routes on artifact_type; this mapping keeps the
 # evaluator consistent with that decision without re-reading spec["tool"].
 _ARTIFACT_TYPE_TO_TOOL: dict[str, str] = {
-    "disk": "sleuth",
+    "disk": "sleuthkit",
     "memory": "vol3",
     "timeline": "plaso",
 }
 
-# Disk recovery state scales a found primary's base_weight: an intact file is
-# worth its full weight, a recovered deletion less, a tombstone-as-evidence
-# (only reachable when a spec opts deleted_entry_only in as found) least.
-# Memory/timeline detections have no status and fall through to factor 1.0,
-# so their scoring is unchanged.
-_STATUS_CONFIDENCE_FACTOR = {
+# The single deletion policy: status -> recovery quality, averaged into QoR.
+# Content present or fully recovered is worth 1.0; a bare tombstone (entry-only)
+# is a weaker trace at 0.5. Memory/timeline only ever yield present/not_found.
+STATUS_QUALITY: dict[str, float] = {
     DISK_STATUS_PRESENT: 1.0,
-    DISK_STATUS_DELETED_RECOVERED: 0.7,
-    DISK_STATUS_DELETED_ENTRY_ONLY: 0.3,
+    DISK_STATUS_DELETED_RECOVERED: 1.0,
+    DISK_STATUS_DELETED_ENTRY_ONLY: 0.5,
 }
 
 
@@ -78,13 +79,24 @@ def evaluate_run(
         artifacts = detection_steps.get(step_name, {}).get("artifacts", {})
         report["steps"][step_name] = _evaluate_step(step, step_specs, artifacts)
 
+    report["temporal_consistency"] = _temporal_consistency(ground_truth, report["steps"])
+
     # Specs whose step never appears in ground truth are silently skipped above.
     # Surface them so a step-name typo reads as a coverage gap, not a clean zero.
+    # A cleanup-phase spec with no cleanup step is the expected no-op of a
+    # run_cleanup=False run, not a gap, so it is excluded; the key is omitted
+    # entirely when nothing genuine is unmatched.
     gt_steps = {s.get("step") for s in ground_truth.get("steps", [])}
-    unmatched = sorted(s["id"] for s in specs if s["step"] not in gt_steps)
+    has_cleanup_step = "cleanup" in gt_steps
+    unmatched = sorted(
+        s["id"]
+        for s in specs
+        if s["step"] not in gt_steps
+        and not (s.get("phase") == "cleanup" and not has_cleanup_step)
+    )
     if unmatched:
         _log.warning("specs bound to steps absent from ground truth: %s", unmatched)
-    report["unmatched_specs"] = unmatched
+        report["unmatched_specs"] = unmatched
 
     _write_report(report, acquisitions_dir)
     return report
@@ -99,13 +111,9 @@ def _evaluate_step(
 
     found_primary: list[str] = []
     missing_primary: list[str] = []
-    found_weights: list[float] = []
     for spec in primary_specs:
-        detection = artifacts.get(spec["id"], {})
-        if detection.get("found"):
+        if artifacts.get(spec["id"], {}).get("found"):
             found_primary.append(spec["id"])
-            factor = _STATUS_CONFIDENCE_FACTOR.get(detection.get("status"), 1.0)
-            found_weights.append(float(spec["base_weight"]) * factor)
         else:
             missing_primary.append(spec["id"])
 
@@ -121,49 +129,81 @@ def _evaluate_step(
         if inferred_tool and artifacts.get(spec["id"], {}).get("found"):
             tool_hits[inferred_tool] = True
 
-    confidence = _confidence(found_weights)
     notes = _notes(found_primary, missing_primary)
 
-    # Per-artifact breakdown so a zero confidence is explainable: an empty list
-    # means no specs cover this step, while found=False entries mean the detector
-    # ran and saw nothing. status carries the disk recovery state when present.
-    artifact_details = [
-        {
-            "id": spec["id"],
-            "phase": spec.get("phase", "attack"),
-            "primary": bool(spec.get("primary")),
-            "artifact_type": spec.get("artifact_type"),
-            "tool": _ARTIFACT_TYPE_TO_TOOL.get(
-                spec.get("artifact_type", ""), "unknown"
-            ),
-            "found": bool(artifacts.get(spec["id"], {}).get("found")),
-            "status": artifacts.get(spec["id"], {}).get("status"),
-            "matched_by": artifacts.get(spec["id"], {}).get("matched_by"),
-        }
-        for spec in step_specs
-    ]
+    # Per-artifact breakdown: an empty list means no specs cover this step, while
+    # found=False entries mean the detector ran and saw nothing. status carries
+    # the disk recovery state; quality is the status-derived recovery quality
+    # (0.0 when not found); evidence is the structured provenance from the
+    # detector; timestamp (epoch us) feeds the temporal-order check.
+    artifact_details = []
+    for spec in step_specs:
+        detection = artifacts.get(spec["id"], {})
+        found = bool(detection.get("found"))
+        status = detection.get("status")
+        artifact_details.append(
+            {
+                "id": spec["id"],
+                "phase": spec.get("phase", "attack"),
+                "primary": bool(spec.get("primary")),
+                "artifact_type": spec.get("artifact_type"),
+                "tool": _ARTIFACT_TYPE_TO_TOOL.get(
+                    spec.get("artifact_type", ""), "unknown"
+                ),
+                "found": found,
+                "status": status,
+                "quality": STATUS_QUALITY.get(status, 0.0) if found else 0.0,
+                "evidence": detection.get("evidence"),
+                "timestamp": detection.get("timestamp"),
+            }
+        )
 
     return {
         "technique": _step_technique(step, step_specs),
         "recovered": recovered,
         "tool_hits": tool_hits,
-        "confidence": confidence,
         "notes": notes,
         "artifacts": artifact_details,
     }
 
 
-def _confidence(found_weights: list[float]) -> float:
-    # Confidence is the mean base_weight of the primary artifacts that were
-    # actually recovered. Recovering more than one primary artifact for a step
-    # is corroborating evidence, so add a small fixed boost, capped at 1.0.
-    # No found primaries means no confidence.
-    if not found_weights:
-        return 0.0
-    base = sum(found_weights) / len(found_weights)
-    if len(found_weights) > 1:
-        base += 0.1
-    return round(min(base, 1.0), 3)
+def _temporal_consistency(
+    ground_truth: dict[str, Any], report_steps: dict[str, Any]
+) -> dict[str, Any]:
+    # Each step's representative time is the earliest timestamp among its found
+    # artifacts (disk filesystem time or timeline event time; memory artifacts
+    # have none). The attack ran the steps in ground_truth order, so a faithful
+    # acquisition should show those representative times non-decreasing.
+    # Comparison uses <= because consecutive steps run seconds apart and can tie;
+    # steps with no timestamped artifact are skipped (they cannot order anything).
+    per_step: dict[str, str | None] = {}
+    ordered_us: list[int] = []
+    for step in ground_truth.get("steps", []):
+        step_name = step.get("step")
+        if step_name is None:
+            continue
+        artifacts = report_steps.get(step_name, {}).get("artifacts", [])
+        stamps = [
+            a["timestamp"]
+            for a in artifacts
+            if a.get("found") and isinstance(a.get("timestamp"), int)
+        ]
+        if stamps:
+            rep = min(stamps)
+            per_step[step_name] = _epoch_us_to_iso(rep)
+            ordered_us.append(rep)
+        else:
+            per_step[step_name] = None
+
+    if len(ordered_us) < 2:
+        consistent: bool | None = None  # not enough timestamped steps to judge
+    else:
+        consistent = all(a <= b for a, b in zip(ordered_us, ordered_us[1:]))
+    return {"consistent": consistent, "per_step": per_step}
+
+
+def _epoch_us_to_iso(ts_us: int) -> str:
+    return datetime.fromtimestamp(ts_us / 1_000_000, timezone.utc).isoformat()
 
 
 def _notes(found_primary: list[str], missing_primary: list[str]) -> str:

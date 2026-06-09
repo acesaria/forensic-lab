@@ -63,9 +63,28 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     run.add_argument(
         "--cleanup",
         action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Run the scenario's cleanup phase after the attack "
+        "(--cleanup / --no-cleanup); --no-cleanup preserves all artifacts",
+    )
+
+    # analyze: re-run IOC detection + scoring on an already-acquired run,
+    # reusing its dumps and cached timeline (no VM, no Plaso re-run)
+    analyze = sub.add_parser(
+        "analyze",
+        help="Re-evaluate an existing run's dumps (no VM): refresh report + metrics",
+    )
+    analyze.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
+    analyze.add_argument(
+        "--scenario",
+        required=True,
+        choices=scenario_keys,
+        help="Scenario whose specs to apply",
+    )
+    analyze.add_argument(
+        "--run-id",
         default=None,
-        help="Override scenarios.yaml run_cleanup for this run "
-        "(--cleanup / --no-cleanup); unset means use the scenario default",
+        help="Specific run_id to analyze (default: latest run for distro+scenario)",
     )
 
     # destroy: remove lab VM and storage
@@ -210,6 +229,12 @@ def main() -> None:
                     )
                 else:
                     raise RuntimeError(f"Invalid scenario config for '{args.scenario}'")
+
+            elif args.command == "analyze":
+                report_path = orchestrator.analyze_run(
+                    distro_id, args.scenario, run_id=args.run_id
+                )
+                console.ok(f"re-analysis complete: {report_path}")
 
             elif args.command == "destroy":
                 orchestrator.destroy_lab(distro_id)

@@ -1,5 +1,2 @@
 scenario_01_ldpreload:
   module: orchestrator.attacks.scenario_01_ldpreload
-  run_cleanup: true   # set false to preserve all artifacts after the run
-
-  
