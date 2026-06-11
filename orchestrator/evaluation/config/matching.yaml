@@ -1,0 +1,31 @@
+# framework/config/matching.yaml
+#
+# Pre-registered matching methodology (Phase 4). Every threshold lives here, not
+# inline in code, because these constants ARE the paper's method. This file is
+# hashed (matching_config_hash) into every matches.json and metrics row, so any
+# change is visible in the output.
+
+# Candidate pairing + assignment.
+tolerance_s: 60          # |delta_t| <= this for a time-bearing candidate pair
+dedup_bucket_s: 60       # findings within this bucket + same key collapse to 1 claim
+scope_margin_s: 1800     # 30 min: clusters outside [firstGT-margin, lastGT+margin]
+                         # are background_noise, excluded from precision
+
+# Entity matching.
+entity:
+  path_basename_fallback: false   # when true, basename equality may match paths
+  process_arg_prefix: true        # processes match on name + argument prefix
+
+# Event-class equivalence: GT event_class -> finding event_classes that may
+# satisfy it. A GT class always satisfies itself; persistence is the one class
+# that is realised on disk as a file_created/file_modified on a persistence path.
+equivalence:
+  file_created: [file_created]
+  file_deleted: [file_deleted]
+  file_modified: [file_modified, file_created]
+  process_exec: [process_exec]
+  persistence_installed: [persistence_installed, file_created, file_modified]
+  network_connection: [network_connection]
+  auth_login: [auth_login]
+  log_tampering: [log_tampering, file_modified, file_deleted]
+  history_cleared: [history_cleared, file_modified, file_deleted]

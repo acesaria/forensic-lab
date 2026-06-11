@@ -15,7 +15,13 @@ import logging
 import re
 import shlex
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+# An executor runs one resolved command and returns (exit_code, merged_output).
+# Scenarios inject SSHClient.run_shell here so the test command is typed into an
+# interactive shell (recorded in ~/.bash_history); the default routes through
+# SSHClient.run (one-shot exec, no history).
+Executor = Callable[[str, int], "tuple[int, str]"]
 
 import yaml
 
@@ -61,6 +67,7 @@ class ArtRunner:
         input_arguments: dict[str, str] | None = None,
         timeout: int = 60,
         raise_on_error: bool = True,
+        executor: Executor | None = None,
     ) -> dict[str, Any]:
         test = self._load_test(technique_id, test_guid)
         self._ensure_assets(technique_id)
@@ -68,7 +75,11 @@ class ArtRunner:
         short_guid = test_guid.split("-", 1)[0] if test_guid else ""
         label = f"{technique_id}/{short_guid}  {test.get('name', '')}".rstrip()
         console.step(label)
-        code, out, err = self._ssh.run(cmd, timeout=timeout)
+        if executor is not None:
+            code, out = executor(cmd, timeout)
+            err = ""
+        else:
+            code, out, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
             console.warn(f"exit {code}: {err.strip()}")
             if raise_on_error:
@@ -89,6 +100,7 @@ class ArtRunner:
         test_guid: str,
         input_arguments: dict[str, str] | None = None,
         timeout: int = 60,
+        executor: Executor | None = None,
     ) -> bool:
         """Run executor.cleanup_command if present. Failure is logged, not raised.
 
@@ -103,7 +115,10 @@ class ArtRunner:
             return False
         self._ensure_assets(technique_id)
         cmd = self._build_command(cleanup_cmd, test, input_arguments)
-        code, out, err = self._ssh.run(cmd, timeout=timeout)
+        if executor is not None:
+            code, err = executor(cmd, timeout)
+        else:
+            code, _, err = self._ssh.run(cmd, timeout=timeout)
         if code != 0:
             console.warn(
                 f"cleanup exited {code} for {technique_id}: {err.strip()}"

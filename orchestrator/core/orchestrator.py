@@ -66,10 +66,16 @@ from orchestrator.forensics.plaso_runner import (
     run_psort,
     verify_plaso_inputs,
 )
-from orchestrator.forensics.artifact_specs import get_specs_for_scenario
-from orchestrator.forensics.ioc_detector import detect_iocs_for_run
-from orchestrator.forensics.evaluator import evaluate_run
-from orchestrator.forensics.metrics import write_run_metrics, refresh_combined
+# Evaluation goes through the GT-blind framework pipeline (detect -> match ->
+# metrics). The old direct-GT-lookup path (artifact_specs.resolve_specs +
+# ioc_detector + evaluator) is no longer executed here; GT is read only inside
+# orchestrator.evaluation.match.
+from orchestrator.evaluation.scenario.manifest import GtManifestBuilder
+from orchestrator.evaluation.contracts.models import GtManifest
+from orchestrator.evaluation.contracts.validate import load_gt_manifest
+from orchestrator.evaluation.extract.vol3 import extract_plugins
+from orchestrator.evaluation.extract.tsk import extract_bodyfile
+from orchestrator.evaluation.pipeline import run_from_raw
 
 
 class ForensicOrchestrator:
@@ -174,6 +180,7 @@ class ForensicOrchestrator:
         acquire: bool = True,
         evaluate: bool = True,
         run_cleanup: bool = True,
+        seed: int = 0,
     ) -> str | None:
         """
         Full experiment cycle:
@@ -194,6 +201,12 @@ class ForensicOrchestrator:
         # ground_truth is owned here and mutated in place by the scenario so
         # whatever steps ran before an exception are still on disk afterwards.
         ground_truth: dict[str, Any] = {"scenario_id": scenario_id, "steps": []}
+        # The GT-blind pipeline's ground-truth manifest, emitted at execution time
+        # by the scenario (additive to ground_truth). Persisted in the finally so a
+        # partial run still yields a manifest of whatever actions completed.
+        gt_builder = GtManifestBuilder(
+            scenario_id, run_id, distro_id, seed=seed, cleanup=run_cleanup
+        )
 
         try:
             with self.vm_manager.open_ssh(vm_name) as ssh:
@@ -204,10 +217,12 @@ class ForensicOrchestrator:
                     scenario_cfg,
                     ground_truth,
                     run_cleanup=run_cleanup,
+                    gt_builder=gt_builder,
                 )
         finally:
             console.section_end()
             self._persist_ground_truth(run_id, ground_truth)
+            gt_manifest_path = self._persist_gt_manifest(run_id, gt_builder)
 
         if acquire:
             manifest_path = self._run_acquisition(
@@ -217,8 +232,8 @@ class ForensicOrchestrator:
                 disk_acquisition_mode="offline",
             )
             if evaluate:
-                self._evaluate_run_iocs(
-                    run_id, scenario_id, distro_id, ground_truth, manifest_path
+                self._evaluate_run_framework(
+                    run_id, scenario_id, distro_id, gt_manifest_path, manifest_path
                 )
             return manifest_path
         return None
@@ -234,18 +249,18 @@ class ForensicOrchestrator:
         if run_id is None:
             run_id = self._latest_run_id(distro_id, scenario_id)
         run_dir = self.dumper.run_dir(run_id)
-        ground_truth = json.loads((run_dir / "ground_truth.json").read_text())
+        gt_manifest_path = run_dir / "gt_manifest.json"
         manifest_path = str(run_dir / "manifest.json")
         console.section(f"re-analyze: {run_id}")
-        self._evaluate_run_iocs(
+        self._evaluate_run_framework(
             run_id,
             scenario_id,
             distro_id,
-            ground_truth,
+            gt_manifest_path,
             manifest_path,
             reuse_cached_timeline=True,
         )
-        return self._paths.run_analysis_dir(run_id) / "forensics_report.json"
+        return self._paths.run_analysis_dir(run_id) / "metrics.csv"
 
     def _latest_run_id(self, distro_id: str, scenario_id: str) -> str:
         # run_id ends in a timestamp, so lexical sort over the matching run dirs
@@ -271,6 +286,7 @@ class ForensicOrchestrator:
         scenario_cfg: dict[str, Any],
         ground_truth: dict[str, Any],
         run_cleanup: bool = True,
+        gt_builder=None,
     ) -> None:
         """
         Import the scenario module named in scenario_cfg["module"] and call
@@ -309,6 +325,7 @@ class ForensicOrchestrator:
                 internet_on=internet_on,
                 internet_off=internet_off,
                 ground_truth=ground_truth,
+                gt_builder=gt_builder,
                 **extras,
             )
         finally:
@@ -327,27 +344,38 @@ class ForensicOrchestrator:
         console.ok(f"ground truth written: {out}")
         return out
 
-    def _evaluate_run_iocs(
+    def _persist_gt_manifest(self, run_id: str, gt_builder) -> Path:
+        """Write gt_manifest.json beside the dumps. Best-effort: a manifest write
+        failure must not sink the run."""
+        run_dir = self.dumper.run_dir(run_id)
+        run_dir.mkdir(parents=True, exist_ok=True)
+        out = run_dir / "gt_manifest.json"
+        try:
+            gt_builder.write(out)
+            console.ok(f"gt manifest written: {out}")
+        except Exception as exc:
+            console.warn(f"gt manifest not written: {exc}")
+        return out
+
+    def _evaluate_run_framework(
         self,
         run_id: str,
         scenario_id: str,
         distro_id: str,
-        ground_truth: dict[str, Any],
+        gt_manifest_path: Path,
         manifest_path: str,
         reuse_cached_timeline: bool = False,
     ) -> None:
         """
-        First-pass IOC detection + per-step scoring on the acquired images.
+        GT-blind detection + GT-aware matching + metrics on the acquired images.
 
-        Best-effort: the acquisition (the expensive, VM-dependent part) has
-        already succeeded and is on disk by the time we get here, so a failure
-        in detection or scoring is logged and swallowed rather than discarding
-        a good run. Writes analysis/<run_id>/forensics_report.json.
+        Best-effort: the acquisition has already succeeded and is on disk, so a
+        failure here is logged and swallowed rather than discarding a good run.
+        Writes analysis/<run_id>/{findings.jsonl,matches.json,metrics.csv,report.md}.
         """
-        specs = get_specs_for_scenario(scenario_id)
-        if not specs:
+        if not Path(gt_manifest_path).is_file():
             console.info(
-                f"no IOC specs for scenario '{scenario_id}'; skipping evaluation"
+                f"no gt_manifest for '{scenario_id}'; skipping evaluation"
             )
             return
 
@@ -355,84 +383,61 @@ class ForensicOrchestrator:
         memory_path = Path(manifest["memory_image"]["path"])
         disk_path = Path(manifest["disk_image"]["path"])
 
-        console.step_header("ioc detection + evaluation")
+        console.step_header("detect -> match -> metrics")
         try:
+            gt = GtManifest.from_dict(load_gt_manifest(gt_manifest_path))
             timeline_events = self._build_timeline(
                 run_id, disk_path, reuse_cached=reuse_cached_timeline
             )
-            detection_report = detect_iocs_for_run(
-                run_id=run_id,
-                ground_truth=ground_truth,
-                specs=specs,
-                sleuth=self._sleuth_runner,
-                vol=self._vol_runner,
-                disk_path=disk_path,
-                memory_path=memory_path,
-                distro_id=distro_id,
-                timeline_events=timeline_events,
-            )
-            # Forensic record: the raw detector output (every match -- inode,
-            # recovered bytes, matched plugin rows / timeline events) is persisted
-            # alongside the scored report so how each result was produced is always
-            # documented, without bloating the report or the metrics table.
-            self._write_detection_log(run_id, detection_report)
-            report = evaluate_run(
-                run_id=run_id,
-                scenario_id=scenario_id,
-                ground_truth=ground_truth,
-                detection_report=detection_report,
-                specs=specs,
-                acquisitions_dir=self._paths.run_analysis_dir(run_id),
+            raw_outputs: dict[str, Any] = {"plaso": timeline_events}
+            try:
+                raw_outputs["vol3"] = extract_plugins(
+                    self._vol_runner, memory_path, distro_id
+                )
+            except Exception as exc:
+                console.warn(f"vol3 extraction degraded: {exc}")
+            try:
+                raw_outputs["tsk"] = extract_bodyfile(self._sleuth_runner, disk_path)
+            except Exception as exc:
+                console.warn(f"tsk extraction degraded: {exc}")
+
+            case_window = self._case_window(gt)
+            row = run_from_raw(
+                gt,
+                raw_outputs,
+                self._paths.run_analysis_dir(run_id),
+                case_window=case_window,
+                legacy=True,
             )
         except Exception as exc:
-            console.warn(f"IOC evaluation failed (acquisition is intact): {exc}")
+            console.warn(f"evaluation failed (acquisition is intact): {exc}")
             console.section_end()
             return
 
-        recovered = sum(1 for s in report["steps"].values() if s["recovered"])
-        total = len(report["steps"])
+        v = row.values
         console.ok(
-            f"forensics report written: {recovered}/{total} step(s) recovered "
-            f"({self._paths.run_analysis_dir(run_id) / 'forensics_report.json'})"
+            f"metrics written: recall={v['recall']} precision={v['precision']} "
+            f"tp={v['tp']} fp={v['fp']} fn={v['fn']} "
+            f"({self._paths.run_analysis_dir(run_id) / 'metrics.csv'})"
         )
-        self._write_metrics(run_id, report)
         console.section_end()
 
-    def _write_detection_log(self, run_id: str, detection_report: dict[str, Any]) -> None:
-        # The complete, unscored chain-of-custody record for the run: what each
-        # tool observed for every spec. Best-effort -- a write failure must not
-        # sink an otherwise-good evaluation.
-        try:
-            out = self._paths.run_analysis_dir(run_id) / "detection.json"
-            out.parent.mkdir(parents=True, exist_ok=True)
-            out.write_text(
-                json.dumps(detection_report, indent=2) + "\n", encoding="utf-8"
-            )
-            console.ok(f"detection log written: {out}")
-        except OSError as exc:
-            console.warn(f"detection log not written: {exc}")
+    @staticmethod
+    def _case_window(gt: GtManifest) -> dict[str, str] | None:
+        # The case window bounds which on-disk creations the tsk heuristic
+        # considers, from the seeded action span padded by a margin. Derived from
+        # the manifest's own event times (acquisition metadata), never from a
+        # planted entity value.
+        from orchestrator.forensics.timeutil import parse_iso_utc, iso_utc_ms
+        from datetime import datetime, timezone
 
-    def _write_metrics(self, run_id: str, report: dict[str, Any]) -> None:
-        # Per-run metrics beside the report, plus a best-effort refresh of the
-        # combined no-cleanup vs cleanup view. Metrics are a convenience layer:
-        # a failure here must never discard an otherwise-good run.
-        try:
-            run_csv = write_run_metrics(
-                report, self._paths.run_analysis_dir(run_id) / "metrics.csv"
-            )
-            combined = refresh_combined(
-                self._paths.experiments_dir,
-                self._paths.shared_dir / "report_metrics.csv",
-            )
-            if combined is not None:
-                console.ok(f"metrics: {run_csv} (combined refreshed: {combined})")
-            else:
-                console.ok(
-                    f"metrics: {run_csv} "
-                    "(combined pending the other cleanup variant)"
-                )
-        except Exception as exc:
-            console.warn(f"metrics generation failed (report is intact): {exc}")
+        times = [parse_iso_utc(e.ts_utc) for e in gt.events]
+        if not times:
+            return None
+        margin = 1800.0
+        lo = datetime.fromtimestamp(min(times) - margin, timezone.utc)
+        hi = datetime.fromtimestamp(max(times) + margin, timezone.utc)
+        return {"start": iso_utc_ms(lo), "end": iso_utc_ms(hi)}
 
     def _build_timeline(
         self, run_id: str, disk_path: Path, reuse_cached: bool = False

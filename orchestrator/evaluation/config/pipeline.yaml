@@ -1,0 +1,57 @@
+# orchestrator/evaluation/config/pipeline.yaml
+#
+# Reproducibility manifest (Phase 6). Pins tool versions, parser/plugin lists,
+# rule-set git refs, and paths. The runner verifies installed versions match
+# these and aborts on mismatch (framework/acquire/provenance.py + cli.py).
+
+versions:
+  plaso: "20240826"          # log2timeline.py / psort.py
+  volatility3: "2.7.0"
+  sleuthkit: "4.12.1"        # fls/icat/istat
+  pysigma: "0.11.0"          # optional; dependency-light fallback otherwise
+  yara_python: "4.5.0"       # optional; YARA scanning of icat-extracted files
+
+# Whether a version mismatch aborts (strict) or only warns. Strict is the
+# pre-registered default for paper runs.
+version_policy: strict
+
+extract:
+  plaso:
+    parsers: "text/bash_history,text/syslog,text/syslog_traditional,systemd_journal,filestat"
+    psort_format: json_line
+  vol3:
+    plugins:
+      - linux.pslist
+      - linux.psscan
+      - linux.bash
+      - linux.sockstat
+      - linux.netstat
+      - linux.malfind
+      - linux.lsmod
+      - linux.proc.Maps
+  tsk:
+    fls_flags: "-r -m"
+
+rulesets:
+  sigma_ref: "r2024-09-01"   # SigmaHQ/sigma git tag the community rules pin to
+  sigma_rule_dirs:
+    - orchestrator/evaluation/config/rules/sigma
+    - orchestrator/evaluation/config/rules/custom
+  tagging_files:
+    - orchestrator/evaluation/config/rules/tagging/project_tags.txt
+  yara_rules_dir: orchestrator/evaluation/config/rules/yara
+
+# Detector tuning that is NOT a matching threshold (those live in matching.yaml).
+detect:
+  vol3:
+    # Extra private ranges treated as non-external for the socket heuristic.
+    private_ranges:
+      - 192.168.100.0/24      # the lab's host-only forensics-isolated network
+    # An outbound TCP connection (ephemeral local port) whose remote port is not
+    # one of these well-known services is suspicious even on a private/lab net:
+    # the classic reverse-shell pattern. Behavioral classes only, no instance port.
+    service_ports: [22, 53, 80, 123, 443, 853, 3128, 8080]
+    ephemeral_min_port: 32768   # Linux default ip_local_port_range floor
+
+paths:
+  matching_config: orchestrator/evaluation/config/matching.yaml

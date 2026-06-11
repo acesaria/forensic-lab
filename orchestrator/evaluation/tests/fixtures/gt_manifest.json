@@ -1,0 +1,58 @@
+{
+  "scenario_id": "fixture-basic",
+  "run_id": "2026-06-10T10-00-00Z_fix0",
+  "distro": "ubuntu-22.04",
+  "cleanup": false,
+  "random_seed": 42,
+  "timezone": "UTC",
+  "events": [
+    {
+      "gt_id": "G1",
+      "ts_utc": "2026-06-10T10:00:00.000Z",
+      "technique": "T1059.004",
+      "event_class": "file_created",
+      "entity": {"type": "path", "value": "/tmp/a.sh"},
+      "expected_sources": ["disk_fs"]
+    },
+    {
+      "gt_id": "G2",
+      "ts_utc": "2026-06-10T10:00:05.000Z",
+      "technique": "T1059.004",
+      "event_class": "process_exec",
+      "entity": {"type": "path", "value": "/tmp/a.sh"},
+      "expected_sources": ["memory", "disk_logs"]
+    },
+    {
+      "gt_id": "G3",
+      "ts_utc": "2026-06-10T10:00:10.000Z",
+      "technique": "T1053.003",
+      "event_class": "persistence_installed",
+      "entity": {"type": "path", "value": "/etc/cron.d/x"},
+      "expected_sources": ["disk_fs"]
+    },
+    {
+      "gt_id": "G4",
+      "ts_utc": "2026-06-10T10:00:15.000Z",
+      "technique": "T1071.001",
+      "event_class": "network_connection",
+      "entity": {"type": "socket", "value": "10.0.0.5:4444"},
+      "expected_sources": ["memory"]
+    },
+    {
+      "gt_id": "G5",
+      "ts_utc": "2026-06-10T10:00:20.000Z",
+      "technique": "T1070.004",
+      "event_class": "file_deleted",
+      "entity": {"type": "path", "value": "/tmp/b.log"},
+      "expected_sources": ["disk_fs"]
+    },
+    {
+      "gt_id": "G6",
+      "ts_utc": "2026-06-10T10:00:25.000Z",
+      "technique": "T1070.003",
+      "event_class": "history_cleared",
+      "entity": {"type": "user", "value": "user1"},
+      "expected_sources": ["disk_logs"]
+    }
+  ]
+}

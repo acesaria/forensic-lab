@@ -1,0 +1,54 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "matches.schema.json",
+  "title": "Matcher output",
+  "type": "object",
+  "required": ["matching_config_hash", "ruleset_hash", "tp", "fp", "fn"],
+  "additionalProperties": true,
+  "properties": {
+    "matching_config_hash": {"type": "string"},
+    "ruleset_hash": {"type": "string"},
+    "tp": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["gt_id", "finding_ids", "primary_finding", "tools"],
+        "additionalProperties": true,
+        "properties": {
+          "gt_id": {"type": "string"},
+          "finding_ids": {"type": "array", "items": {"type": "string"}},
+          "primary_finding": {"type": "string"},
+          "delta_t_s": {"type": ["number", "null"]},
+          "tools": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "fp": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cluster_id", "finding_ids", "representative"],
+        "additionalProperties": true,
+        "properties": {
+          "cluster_id": {"type": "string"},
+          "finding_ids": {"type": "array", "items": {"type": "string"}},
+          "representative": {"type": "string"}
+        }
+      }
+    },
+    "fn": {"type": "array", "items": {"type": "string"}},
+    "background_noise": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cluster_id", "finding_ids", "representative"],
+        "additionalProperties": true,
+        "properties": {
+          "cluster_id": {"type": "string"},
+          "finding_ids": {"type": "array", "items": {"type": "string"}},
+          "representative": {"type": "string"}
+        }
+      }
+    }
+  }
+}

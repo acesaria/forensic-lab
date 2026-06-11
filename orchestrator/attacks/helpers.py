@@ -43,10 +43,13 @@ class ScenarioProtocol(Protocol):
         ground_truth: dict[str, Any],
         *,
         run_cleanup: bool = False,
+        gt_builder=None,
     ) -> None:
         # Scenarios append per-step dicts to ground_truth["steps"]. The
         # caller (orchestrator) persists ground_truth in a finally clause,
-        # so partial state survives a mid-run exception.
+        # so partial state survives a mid-run exception. gt_builder, when
+        # passed, records each seeded action into the GT-blind pipeline's
+        # gt_manifest with the wall-clock time at execution (additive).
         ...
 
 
@@ -67,10 +70,15 @@ def run_art_step(
     internet_off: Callable[[], None] | None = None,
     raise_on_error: bool = False,
     timeout: int = 60,
+    executor: Callable[[str, int], tuple[int, str]] | None = None,
 ) -> dict[str, Any]:
     """
     Run prereqs (gated by internet_on/off) then run the ART test.
     Returns a step dict ready to append to ground_truth["steps"].
+
+    executor, when given, runs the test command (e.g. SSHClient.run_shell so it
+    is typed into an interactive shell and recorded in ~/.bash_history). Prereqs
+    stay on the default exec path: they are staging, not attacker-typed actions.
     """
     if step.has_prereq:
         if internet_on:
@@ -92,6 +100,7 @@ def run_art_step(
         input_arguments=step.input_arguments or None,
         raise_on_error=raise_on_error,
         timeout=timeout,
+        executor=executor,
     )
     return {"step": step.name, **result}
 
@@ -119,6 +128,7 @@ def run_reverse_shell(
     steps: list[dict[str, Any]],
     *,
     port: int = _REVSHELL_PORT,
+    fifo: str = "/tmp/.rs_fifo",
     timeout: int = _REVSHELL_TIMEOUT,
     keep_open: bool = False,
 ) -> None:
@@ -177,7 +187,6 @@ def run_reverse_shell(
     listener.start()
     time.sleep(0.3)
 
-    fifo = "/tmp/.rs_fifo"
     # Classic mkfifo reverse shell (PentestMonkey). Backgrounded with its stdio
     # detached to /dev/null so ssh.run's recv_exit_status() returns instead of
     # blocking until nc exits. paramiko allocates no PTY, so the job has no
@@ -206,7 +215,7 @@ def run_reverse_shell(
             "id_output": received[0] if received else "",
             "error": error[0] if error else "",
             "kept_open": keep_open,
-            "port": port,
-            "fifo": fifo,
+            # Planted values (intent), kept distinct from the observed facts above.
+            "locators": {"fifo": fifo, "port": port},
         }
     )

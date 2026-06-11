@@ -9,3 +9,11 @@ attrs>=23.0
 cryptography>=40.0
 
 libvirt-python
+
+# detector -> matcher -> metrics pipeline (orchestrator/evaluation/)
+jsonschema>=4.0          # contract validation at every stage boundary
+# Optional, feature-detected at runtime (dependency-light fallbacks exist):
+#   scipy        kendall tau-b (hand-rolled fallback in orchestrator/evaluation/metrics)
+#   pysigma      richer Sigma evaluation (subset evaluator otherwise)
+#   yara-python  YARA scanning of icat-extracted files
+pytest>=7.0              # orchestrator/evaluation/tests

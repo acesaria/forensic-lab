@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "gt_manifest.schema.json",
+  "title": "Ground-truth manifest",
+  "type": "object",
+  "required": ["scenario_id", "run_id", "distro", "events"],
+  "additionalProperties": true,
+  "properties": {
+    "scenario_id": {"type": "string"},
+    "run_id": {"type": "string"},
+    "distro": {"type": "string"},
+    "cleanup": {"type": "boolean"},
+    "random_seed": {"type": ["integer", "null"]},
+    "timezone": {"type": "string"},
+    "events": {
+      "type": "array",
+      "items": {"$ref": "#/definitions/event"}
+    }
+  },
+  "definitions": {
+    "event": {
+      "type": "object",
+      "required": ["gt_id", "ts_utc", "technique", "event_class", "entity"],
+      "additionalProperties": true,
+      "properties": {
+        "gt_id": {"type": "string"},
+        "ts_utc": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$"
+        },
+        "technique": {"type": "string", "pattern": "^T\\d{4}(\\.\\d{3})?$"},
+        "event_class": {
+          "type": "string",
+          "enum": [
+            "file_created",
+            "file_deleted",
+            "file_modified",
+            "process_exec",
+            "persistence_installed",
+            "network_connection",
+            "auth_login",
+            "log_tampering",
+            "history_cleared"
+          ]
+        },
+        "entity": {"$ref": "#/definitions/entity"},
+        "details": {"type": "object"},
+        "expected_sources": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "entity": {
+      "type": "object",
+      "required": ["type", "value"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {"type": "string", "enum": ["path", "process", "user", "socket"]},
+        "value": {"type": ["string", "integer"]}
+      }
+    }
+  }
+}
