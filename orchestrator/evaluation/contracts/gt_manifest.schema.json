@@ -48,6 +48,10 @@
         "expected_sources": {
           "type": "array",
           "items": {"type": "string"}
+        },
+        "observables": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/observable"}
         }
       }
     },
@@ -58,6 +62,35 @@
       "properties": {
         "type": {"type": "string", "enum": ["path", "process", "user", "socket"]},
         "value": {"type": ["string", "integer"]}
+      }
+    },
+    "observable": {
+      "type": "object",
+      "required": ["operation", "source_tool", "entity_type", "entity_value"],
+      "additionalProperties": true,
+      "properties": {
+        "operation": {
+          "type": "string",
+          "enum": ["timeline", "memory_analysis", "string_search", "deleted_file", "content_scan"]
+        },
+        "source_tool": {
+          "type": "string",
+          "enum": ["tsk", "plaso", "vol3", "plaso_sigma", "bulk_extractor", "yara"]
+        },
+        "entity_type": {
+          "type": "string",
+          "enum": ["path", "process", "socket", "mapping", "log_line", "string"]
+        },
+        "entity_value": {"type": "string"},
+        "time_hint": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "kind": {"type": "string", "enum": ["absolute", "window", "none"]},
+            "ts_utc": {"type": "string"},
+            "window_s": {"type": "integer"}
+          }
+        }
       }
     }
   }

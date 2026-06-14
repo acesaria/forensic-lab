@@ -23,7 +23,15 @@ from orchestrator.evaluation.contracts.validate import (
 )
 from orchestrator.evaluation.detect.run import run_detection, write_findings
 from orchestrator.evaluation.match.matcher import hash_matching_config, match, write_matches
-from orchestrator.evaluation.metrics.compute import MetricRow, compute_row, write_metrics_csv
+from orchestrator.evaluation.metrics.compute import (
+    MetricRow,
+    compute_breakdown,
+    compute_recovery_breakdown,
+    compute_row,
+    write_breakdown_csv,
+    write_metrics_csv,
+    write_recovery_csv,
+)
 from orchestrator.evaluation.metrics.legacy import write_legacy_csv
 from orchestrator.evaluation.metrics.report import render_report, write_report
 
@@ -47,8 +55,15 @@ def build_rules_config(
     sigma_dirs = [
         str((repo_root / d).resolve()) for d in rs.get("sigma_rule_dirs", [])
     ]
+    # Vendored SigmaHQ subset for the plaso_sigma detector (defaults applied by
+    # the runner when not listed here).
+    sigma_vendored = [
+        str((repo_root / d).resolve())
+        for d in rs.get("sigma_vendored_dirs", ["vendor/sigma/rules/linux"])
+    ]
     cfg: dict[str, Any] = {
         "sigma_rule_dirs": sigma_dirs,
+        "sigma_vendored_dirs": sigma_vendored,
         "vol3": detect_cfg.get("vol3", {}),
     }
     if case_window:
@@ -65,16 +80,25 @@ def ruleset_hash(pipeline_cfg: dict[str, Any], repo_root: Path = _REPO_ROOT) -> 
     h = hashlib.sha256()
     h.update(str(rs.get("sigma_ref", "")).encode())
     files: list[Path] = []
-    for d in rs.get("sigma_rule_dirs", []):
+    rule_dirs = list(rs.get("sigma_rule_dirs", [])) + list(rs.get("sigma_vendored_dirs", []))
+    yara_dir = rs.get("yara_rules_dir")
+    if yara_dir:
+        rule_dirs.append(yara_dir)
+    for d in rule_dirs:
         base = (repo_root / d)
         if base.is_dir():
             files.extend(sorted(base.rglob("*.yml")))
             files.extend(sorted(base.rglob("*.yaml")))
+            files.extend(sorted(base.rglob("*.yar")))
+            files.extend(sorted(base.rglob("*.yara")))
+            commit = base.parent / "COMMIT.txt"  # pin file for vendored trees
+            if commit.is_file():
+                files.append(commit)
     for f in rs.get("tagging_files", []):
         p = repo_root / f
         if p.is_file():
             files.append(p)
-    for f in sorted(files):
+    for f in sorted(set(files)):
         h.update(f.read_bytes())
     return "sha256:" + h.hexdigest()
 
@@ -92,6 +116,13 @@ def _write_outputs(
     write_matches(matches, out_dir / "matches.json")
     row = compute_row(manifest, matches)
     write_metrics_csv([row], out_dir / "metrics.csv")
+    write_breakdown_csv(
+        compute_breakdown(manifest, matches, findings),
+        out_dir / "metrics_by_operation.csv",
+    )
+    recovery_rows = compute_recovery_breakdown(findings)
+    if recovery_rows:
+        write_recovery_csv(recovery_rows, out_dir / "metrics_recovery.csv")
     report_text = render_report(
         manifest, matches, findings, row=row, config_path=matching_config_path
     )

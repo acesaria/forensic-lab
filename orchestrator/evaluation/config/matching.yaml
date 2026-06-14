@@ -10,6 +10,9 @@ tolerance_s: 60          # |delta_t| <= this for a time-bearing candidate pair
 dedup_bucket_s: 60       # findings within this bucket + same key collapse to 1 claim
 scope_margin_s: 1800     # 30 min: clusters outside [firstGT-margin, lastGT+margin]
                          # are background_noise, excluded from precision
+                         # TODO: replace this fixed window + the static known_good
+                         # allowlist below with baseline-driven noise classification
+                         # (subtract clusters seen in a clean-baseline run).
 
 # Corroboration: a leftover cluster folds into a matched GT (multi-tool TP) when
 # it observes the SAME action -- same technique, within this window -- through a
@@ -18,12 +21,13 @@ scope_margin_s: 1800     # 30 min: clusters outside [firstGT-margin, lastGT+marg
 # write; a different same-type instance (another socket) stays a separate claim.
 corroboration_window_s: 120
 
-# Precision is counted in CLAIM (cluster) units, not GT-event units:
-#   precision = true_claim_clusters / (true_claim_clusters + in_scope_fp_clusters)
-# true_claim_clusters = every cluster attached to a matched GT (primary +
-# corroborators); recall stays per-expected-event (matched_GT / N). Recorded
+# Precision uses the STANDARD event definition:
+#   precision = matched_GT_events / (matched_GT_events + in_scope_fp_clusters)
+#   recall    = matched_GT_events / N
+# Corroborating clusters folded into a matched GT are a secondary statistic
+# (n_supporting_clusters per TP), no longer a precision denominator. Recorded
 # because the unit choice is part of the pre-registered method.
-precision_definition: claim_clusters
+precision_definition: standard_events
 
 # Known-good baseline: documented benign activity that trips a GT-blind detector.
 # A leftover cluster matching one of these is scored as background noise, not a

@@ -6,10 +6,16 @@
 #
 # Algorithm (Phase 4.1):
 #   1. dedup findings into per-(family,class,entity,bucket) clusters = one claim
-#   2. candidate pairs cluster x GT by class equivalence + entity match + |dt|
+#   2. candidate pairs cluster x GT by class equivalence + observable match + |dt|
 #   3. greedy 1:1 assignment by smallest |dt| (timeless candidates last)
 #   4. corroborating clusters attach to a matched GT (multi-tool TP), the rest
 #      inside the scope window are FP, outside are background_noise.
+#
+# A cluster matches a GtEvent through one of the event's OBSERVABLES: a normalized
+# (operation, source_tool, entity, time window) descriptor of an acceptable
+# evidentiary locus. An event that declares no observables falls back to a single
+# implicit observable built from its canonical entity with no operation/source
+# constraint, so manifests authored before the observables layer match unchanged.
 
 from __future__ import annotations
 
@@ -63,6 +69,17 @@ class _Cluster:
     @property
     def tools(self) -> list[str]:
         return sorted({f.source_tool for f in self.findings})
+
+    @property
+    def source_tool(self) -> str:
+        # A cluster is single-tool by construction (dedup keys on family == tool).
+        return self.family
+
+    @property
+    def operation(self) -> str:
+        # The forensic operation this claim was produced by; the cluster's slice
+        # of the (operation, source_tool) descriptor used for observable matching.
+        return self.representative.forensic_operation
 
     @property
     def technique(self) -> str | None:
@@ -161,6 +178,63 @@ def _class_compatible(gt_class: str, finding_class: str, equivalence: dict) -> b
     return finding_class in allowed
 
 
+@dataclass(frozen=True)
+class _ObsSpec:
+    # Normalized observable: where the event may be observed. operation/source_tool
+    # None means "any" (the canonical-entity fallback for events without declared
+    # observables); time_hint is the raw {kind, ts_utc?, window_s?} dict or None.
+    operation: str | None
+    source_tool: str | None
+    entity: Entity
+    time_hint: dict[str, Any] | None
+
+
+def _event_observables(ev) -> list[_ObsSpec]:
+    if ev.observables:
+        return [
+            _ObsSpec(
+                operation=o.operation,
+                source_tool=o.source_tool,
+                entity=Entity(type=o.entity_type, value=o.entity_value),
+                time_hint=o.time_hint,
+            )
+            for o in ev.observables
+        ]
+    # No declared observables: match on the canonical entity with no operation or
+    # source_tool constraint and the default tolerance window (legacy behavior).
+    return [_ObsSpec(None, None, ev.entity, None)]
+
+
+def _spec_eligible(spec: _ObsSpec, cluster: _Cluster, cfg: dict[str, Any]) -> bool:
+    # An observable is eligible for a cluster when its operation and source_tool
+    # are unset or equal the cluster's, and the entities match.
+    if spec.operation is not None and spec.operation != cluster.operation:
+        return False
+    if spec.source_tool is not None and spec.source_tool != cluster.source_tool:
+        return False
+    return entities_match(spec.entity, cluster.entity, cfg)
+
+
+def _obs_window(time_hint: dict[str, Any] | None, gt_epoch: float, tol: float) -> tuple[float, float]:
+    # (center, half_width) the cluster time must fall within. A time_hint may pin
+    # an absolute instant or just widen/narrow the window around the GT event.
+    if not time_hint:
+        return gt_epoch, tol
+    window = tol
+    raw = time_hint.get("window_s")
+    if raw is not None:
+        try:
+            window = float(raw)
+        except (TypeError, ValueError):
+            window = tol
+    if time_hint.get("kind") == "absolute" and time_hint.get("ts_utc"):
+        try:
+            return parse_iso_utc(time_hint["ts_utc"]), window
+        except ValueError:
+            return gt_epoch, window
+    return gt_epoch, window
+
+
 def match(
     manifest: GtManifest,
     findings: list[Finding],
@@ -176,12 +250,21 @@ def match(
     known_good = cfg.get("known_good", []) or []
     equivalence = cfg.get("equivalence", {})
 
+    # Deleted-file recovery findings self-report a recovery_outcome and are scored
+    # by the dedicated recovery breakdown in metrics.compute, not by entity
+    # matching. Excluding them here keeps "not_found"/"not_applicable" diagnostic
+    # findings from ever being matched as positive detections.
+    findings = [f for f in findings if f.recovery_outcome is None]
+
     clusters = _dedup(findings, bucket_s)
 
     gt_epochs = {e.gt_id: parse_iso_utc(e.ts_utc) for e in manifest.events}
     events_by_id = {e.gt_id: e for e in manifest.events}
 
-    # Candidate pairs: (|dt| or +inf, timeless_flag, gt_id, cluster_id).
+    # Candidate pairs: (|dt| or +inf, timeless_flag, gt_id, cluster_id). A cluster
+    # is a candidate for an event when it satisfies any of the event's eligible
+    # observables (entity + operation/source) and, for time-bearing clusters,
+    # falls inside that observable's window.
     candidates: list[tuple[float, int, str, str]] = []
     compat: dict[tuple[str, str], bool] = {}
     for c in clusters:
@@ -189,15 +272,23 @@ def match(
         for ev in manifest.events:
             if not _class_compatible(ev.event_class, c.event_class, equivalence):
                 continue
-            if not entities_match(ev.entity, c.entity, cfg):
+            specs = [s for s in _event_observables(ev) if _spec_eligible(s, c, cfg)]
+            if not specs:
                 continue
+            # compat (used for corroboration attachment) is entity-compatibility
+            # regardless of time, as before.
             compat[(ev.gt_id, c.cluster_id)] = True
             if c_epoch is None:
                 candidates.append((float("inf"), 1, ev.gt_id, c.cluster_id))
-            else:
-                dt = abs(c_epoch - gt_epochs[ev.gt_id])
-                if dt <= tol:
-                    candidates.append((dt, 0, ev.gt_id, c.cluster_id))
+                continue
+            best_dt: float | None = None
+            for s in specs:
+                center, window = _obs_window(s.time_hint, gt_epochs[ev.gt_id], tol)
+                dt = abs(c_epoch - center)
+                if dt <= window and (best_dt is None or dt < best_dt):
+                    best_dt = dt
+            if best_dt is not None:
+                candidates.append((best_dt, 0, ev.gt_id, c.cluster_id))
 
     # Greedy 1:1 by smallest |dt|; timeless candidates (flag=1) assigned last.
     candidates.sort(key=lambda t: (t[1], t[0], t[2], t[3]))
@@ -249,14 +340,19 @@ def match(
                 "delta_t_s": delta,
                 "tools": tools,
                 # Count of claim-clusters folded into this TP (primary +
-                # corroborators). Precision is counted in these claim units.
+                # corroborators). Corroboration is a SECONDARY statistic now:
+                # precision counts matched events, not these claim clusters.
                 "n_clusters": len(attached),
+                "n_supporting_clusters": len(attached) - 1,
                 # Carried so metrics computes order/time over the TP subset
-                # without re-matching: GT time + the primary finding's time and
-                # quality (memory findings -> "none", excluded from ordering).
+                # without re-matching: GT time + the primary finding's time,
+                # quality, and operation. Order/time metrics are restricted to
+                # timeline-operation primaries; memory_analysis primaries (and any
+                # ts_quality "none") are excluded.
                 "gt_ts_utc": ev.ts_utc,
                 "primary_ts_utc": rep.ts_utc,
                 "primary_ts_quality": rep.ts_quality,
+                "primary_operation": rep.forensic_operation,
             }
         )
 
@@ -264,6 +360,10 @@ def match(
     fn = sorted(ev.gt_id for ev in manifest.events if ev.gt_id not in gt_to_cluster)
 
     # Scope window for FP eligibility.
+    # TODO: replace this [firstGT-margin, lastGT+margin] window plus the static
+    # known_good allowlist with baseline-driven noise classification (diff each
+    # cluster against a clean-baseline run so benign-but-flagged activity is
+    # subtracted empirically instead of by a hand-maintained list).
     if gt_epochs:
         lo = min(gt_epochs.values()) - margin
         hi = max(gt_epochs.values()) + margin

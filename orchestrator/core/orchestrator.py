@@ -75,6 +75,14 @@ from orchestrator.evaluation.contracts.models import GtManifest
 from orchestrator.evaluation.contracts.validate import load_gt_manifest
 from orchestrator.evaluation.extract.vol3 import extract_plugins
 from orchestrator.evaluation.extract.tsk import extract_bodyfile
+from orchestrator.evaluation.provenance import build_provenance, write_provenance
+from orchestrator.forensics import bulk_extractor_runner, deleted_file_runner, yara_runner
+
+# scenario_01 (Ubuntu 22.04) bulk_extractor token filter: surface only feature
+# strings around the LD_PRELOAD mechanism path and temp drops, keeping the
+# string_search finding set small. The mechanism path is intrinsic, not a seeded
+# instance value. Widen or drop this list to extend to other scenarios.
+_BE_TOKENS = ("/etc/ld.so.preload", "ld.so.preload", "/tmp/")
 from orchestrator.evaluation.pipeline import run_from_raw
 
 
@@ -401,14 +409,51 @@ class ForensicOrchestrator:
             except Exception as exc:
                 console.warn(f"tsk extraction degraded: {exc}")
 
+            # External-tool channels (best-effort, like vol3/tsk). bulk_extractor
+            # reads the image directly; YARA needs a mounted/extracted FS root,
+            # provided per-distro by self._fs_scan_root (None -> skipped). The
+            # plaso_sigma detector runs automatically over raw_outputs["plaso"].
+            try:
+                raw_outputs["bulk_extractor"] = bulk_extractor_runner.run(
+                    disk_path, tokens=_BE_TOKENS
+                )
+            except Exception as exc:
+                console.warn(f"bulk_extractor degraded: {exc}")
+            scan_root = self._fs_scan_root(distro_id)
+            if scan_root is not None:
+                try:
+                    raw_outputs["yara"] = yara_runner.run(scan_root)
+                except Exception as exc:
+                    console.warn(f"yara scan degraded: {exc}")
+
+            # Escalating deleted-file recovery. Targets are the GT deleted_file
+            # observables, passed as plain dicts so the runner stays GT-blind.
+            analysis_dir = self._paths.run_analysis_dir(run_id)
+            recovery_versions: dict[str, Any] = {}
+            targets = self._deleted_file_targets(gt)
+            if targets:
+                try:
+                    payload = deleted_file_runner.run(
+                        disk_path,
+                        self._partition_info(distro_id, disk_path),
+                        targets,
+                        analysis_dir / "deleted_file",
+                        run_id,
+                    )
+                    raw_outputs["deleted_file"] = payload
+                    recovery_versions = payload.get("tool_versions", {})
+                except Exception as exc:
+                    console.warn(f"deleted-file recovery degraded: {exc}")
+
             case_window = self._case_window(gt)
             row = run_from_raw(
                 gt,
                 raw_outputs,
-                self._paths.run_analysis_dir(run_id),
+                analysis_dir,
                 case_window=case_window,
                 legacy=True,
             )
+            self._write_recovery_provenance(run_id, analysis_dir, recovery_versions)
         except Exception as exc:
             console.warn(f"evaluation failed (acquisition is intact): {exc}")
             console.section_end()
@@ -438,6 +483,69 @@ class ForensicOrchestrator:
         lo = datetime.fromtimestamp(min(times) - margin, timezone.utc)
         hi = datetime.fromtimestamp(max(times) + margin, timezone.utc)
         return {"start": iso_utc_ms(lo), "end": iso_utc_ms(hi)}
+
+    def _fs_scan_root(self, distro_id: str) -> Path | None:
+        # Root of a mounted/extracted filesystem for YARA to walk (/tmp, /etc
+        # under it). The current acquisition flow does not mount the E01, so this
+        # is opt-in: set host.fs_scan_root (or role default) to a directory where
+        # the image is mounted/extracted, else YARA is skipped.
+        # TODO: mount the read-only E01 (ewfmount + loop) here so YARA runs
+        # automatically without an externally provided root.
+        root = self._role_defaults.get("fs_scan_root")
+        if not root:
+            return None
+        p = Path(root)
+        return p if p.is_dir() else None
+
+    @staticmethod
+    def _deleted_file_targets(gt: GtManifest) -> list[dict[str, Any]]:
+        # Artifacts to attempt recovery for: the GT observables whose operation is
+        # deleted_file, deduped by value. Read from GT here (orchestrator is
+        # GT-aware) and handed to the runner as plain dicts to keep it blind.
+        targets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for ev in gt.events:
+            for o in ev.observables:
+                if o.operation == "deleted_file" and o.entity_value not in seen:
+                    seen.add(o.entity_value)
+                    targets.append(
+                        {"entity_type": o.entity_type, "entity_value": o.entity_value}
+                    )
+        return targets
+
+    def _partition_info(self, distro_id: str, disk_path: Path) -> dict[str, Any]:
+        # Filesystem context for the recovery runner. fs_type gates ext4magic;
+        # tmpfs_mounts mark volatile paths (deletions there are unrecoverable).
+        # offset_sectors locates the partition for tsk_recover; best-effort.
+        try:
+            offset = self._sleuth_runner.partition_offset(disk_path)
+        except Exception:
+            offset = 0
+        return {
+            "fs_type": self._role_defaults.get("root_fs_type", "ext4"),
+            "offset_sectors": offset,
+            "is_tmpfs": False,
+            "tmpfs_mounts": self._role_defaults.get(
+                "tmpfs_mounts", ["/tmp", "/dev/shm", "/run"]
+            ),
+        }
+
+    def _write_recovery_provenance(
+        self, run_id: str, analysis_dir: Path, tool_versions: dict[str, Any]
+    ) -> None:
+        # Record the recovery tool versions actually used in provenance.json so the
+        # run is reproducible (which of tsk_recover/ext4magic/scalpel/photorec ran).
+        if not tool_versions:
+            return
+        try:
+            prov = build_provenance(
+                run_id,
+                artifacts={"findings": analysis_dir / "findings.jsonl"},
+                extra={"recovery_tool_versions": tool_versions},
+            )
+            write_provenance(prov, analysis_dir / "provenance.json")
+        except Exception as exc:
+            console.warn(f"provenance write degraded: {exc}")
 
     def _build_timeline(
         self, run_id: str, disk_path: Path, reuse_cached: bool = False

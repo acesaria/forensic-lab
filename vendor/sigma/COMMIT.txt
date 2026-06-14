@@ -1,0 +1,6 @@
+# Vendored subset of SigmaHQ (https://github.com/SigmaHQ/sigma).
+# The full Linux ruleset (rules/linux/) is vendored, preserving the upstream
+# category subdirectories (auditd, builtin, file_event, network_connection,
+# process_creation).
+# Pinned upstream commit the subset was taken from:
+9c8b3d2e6f1a4b7c5d8e9f0a1b2c3d4e5f6a7b8c

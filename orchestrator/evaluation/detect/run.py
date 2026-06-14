@@ -11,21 +11,31 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from orchestrator.evaluation.detect import (
+    bulk_extractor_strings,
+    deleted_file_recovery,
     plaso_sigma,
     plaso_tagging,
+    sigma_vendored,
     tsk_heuristics,
     vol3_heuristics,
+    yara_scan,
 )
 from orchestrator.evaluation.detect.base import assign_ids
 from orchestrator.evaluation.contracts.models import Finding
 
 # The registered detector plugins, each a detect(raw_outputs, rules_config)
-# callable. Adding a channel is one entry here plus its module.
+# callable. Adding a channel is one entry here plus its module. The external-tool
+# detectors no-op when their raw_outputs key is absent, so runs without those
+# tools are unaffected.
 DETECTORS: tuple[Callable[[dict[str, Any], dict[str, Any]], Iterable[Finding]], ...] = (
     plaso_sigma.detect,
     plaso_tagging.detect,
     vol3_heuristics.detect,
     tsk_heuristics.detect,
+    sigma_vendored.detect,
+    yara_scan.detect,
+    bulk_extractor_strings.detect,
+    deleted_file_recovery.detect,
 )
 
 

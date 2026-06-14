@@ -1,2 +1,11 @@
+# Scenario registry. Each key is a scenario_id; module is the attack module.
+# run_cleanup is the per-scenario cleanup DEFAULT; the CLI --cleanup/--no-cleanup
+# flag overrides it when passed. The two scenario_01 variants share one module
+# and differ only in whether the attacker's cleanup phase runs.
 scenario_01_ldpreload:
   module: orchestrator.attacks.scenario_01_ldpreload
+  run_cleanup: false
+
+scenario_01_ldpreload_cleanup:
+  module: orchestrator.attacks.scenario_01_ldpreload
+  run_cleanup: true

@@ -27,6 +27,25 @@ EVENT_CLASSES: tuple[str, ...] = (
     "history_cleared",
 )
 
+# Forensic operation that produced a finding (mirrored as a plain tuple, like
+# EVENT_CLASSES, so the detect layer pulls in nothing GT-aware). Every detector
+# tags its findings with one of these so metrics can be sliced per operation.
+FORENSIC_OPERATIONS: tuple[str, ...] = (
+    "timeline",
+    "memory_analysis",
+    "string_search",
+    "deleted_file",
+    "content_scan",
+)
+
+# Outcome of a single deleted-file recovery attempt (one level, one target).
+RECOVERY_OUTCOMES: tuple[str, ...] = (
+    "found",
+    "not_found",
+    "not_applicable",
+    "tool_error",
+)
+
 
 class Detector(Protocol):
     name: str
@@ -45,14 +64,23 @@ def make_finding(
     entity_type: str,
     entity_value: Any,
     ts_quality: str,
+    forensic_operation: str,
     rule_layer: str = "community",
     technique: str | None = None,
     ts_utc: str | None = None,
     raw_ref: str | None = None,
     confidence: str = "medium",
+    recovery_level: int | None = None,
+    recovery_outcome: str | None = None,
+    high_fp_risk: bool | None = None,
+    note: str | None = None,
 ) -> Finding:
     if event_class not in EVENT_CLASSES:
         raise ValueError(f"unknown event_class: {event_class}")
+    if forensic_operation not in FORENSIC_OPERATIONS:
+        raise ValueError(f"unknown forensic_operation: {forensic_operation}")
+    if recovery_outcome is not None and recovery_outcome not in RECOVERY_OUTCOMES:
+        raise ValueError(f"unknown recovery_outcome: {recovery_outcome}")
     return Finding(
         finding_id="",  # assigned by assign_ids after collection
         source_tool=source_tool,
@@ -65,6 +93,11 @@ def make_finding(
         ts_utc=ts_utc,
         raw_ref=raw_ref,
         confidence=confidence,
+        forensic_operation=forensic_operation,
+        recovery_level=recovery_level,
+        recovery_outcome=recovery_outcome,
+        high_fp_risk=high_fp_risk,
+        note=note,
     )
 
 

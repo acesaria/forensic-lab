@@ -37,9 +37,15 @@ rulesets:
   sigma_rule_dirs:
     - orchestrator/evaluation/config/rules/sigma
     - orchestrator/evaluation/config/rules/custom
+  # Vendored SigmaHQ Linux subset (pinned in vendor/sigma/COMMIT.txt), evaluated
+  # by the plaso_sigma detector.
+  sigma_vendored_dirs:
+    - vendor/sigma/rules/linux
   tagging_files:
     - orchestrator/evaluation/config/rules/tagging/project_tags.txt
-  yara_rules_dir: orchestrator/evaluation/config/rules/yara
+  # Vendored Neo23x0 signature-base subset (pinned in
+  # vendor/yara/signature-base/COMMIT.txt), compiled by the YARA runner.
+  yara_rules_dir: vendor/yara/signature-base
 
 # Detector tuning that is NOT a matching threshold (those live in matching.yaml).
 detect:

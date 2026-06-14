@@ -27,6 +27,16 @@ ENTITY_TYPES: tuple[str, ...] = ("path", "process", "user", "socket")
 
 TS_QUALITIES: tuple[str, ...] = ("wallclock", "relative", "none")
 
+# Forensic operation that produced a finding, so metrics can be sliced per
+# operation as well as per source_tool. A finding always carries exactly one.
+FORENSIC_OPERATIONS: tuple[str, ...] = (
+    "timeline",
+    "memory_analysis",
+    "string_search",
+    "deleted_file",
+    "content_scan",
+)
+
 
 @dataclass(frozen=True)
 class Entity:
@@ -42,6 +52,41 @@ class Entity:
 
 
 @dataclass
+class Observable:
+    """One acceptable evidentiary locus for a GT event: where and with which tool
+    the same event can legitimately be observed (a filesystem path, a log line, a
+    memory mapping...). An event may have several; an empty list means "no locus
+    declared yet" and keeps older scenarios working unchanged."""
+
+    operation: str  # one of FORENSIC_OPERATIONS
+    source_tool: str  # tsk | plaso | vol3 | bulk_extractor | yara
+    entity_type: str  # path | process | socket | mapping | log_line | string
+    entity_value: str
+    time_hint: dict[str, Any] | None = None  # {kind, ts_utc?, window_s?}
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> "Observable":
+        return cls(
+            operation=d["operation"],
+            source_tool=d["source_tool"],
+            entity_type=d["entity_type"],
+            entity_value=d["entity_value"],
+            time_hint=d.get("time_hint"),
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        out: dict[str, Any] = {
+            "operation": self.operation,
+            "source_tool": self.source_tool,
+            "entity_type": self.entity_type,
+            "entity_value": self.entity_value,
+        }
+        if self.time_hint is not None:
+            out["time_hint"] = self.time_hint
+        return out
+
+
+@dataclass
 class GtEvent:
     gt_id: str
     ts_utc: str
@@ -50,6 +95,7 @@ class GtEvent:
     entity: Entity
     details: dict[str, Any] = field(default_factory=dict)
     expected_sources: list[str] = field(default_factory=list)
+    observables: list[Observable] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "GtEvent":
@@ -61,6 +107,7 @@ class GtEvent:
             entity=Entity.from_dict(d["entity"]),
             details=d.get("details", {}) or {},
             expected_sources=list(d.get("expected_sources", []) or []),
+            observables=[Observable.from_dict(o) for o in d.get("observables", []) or []],
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -72,6 +119,7 @@ class GtEvent:
             "entity": self.entity.to_dict(),
             "details": self.details,
             "expected_sources": self.expected_sources,
+            "observables": [o.to_dict() for o in self.observables],
         }
 
 
@@ -122,6 +170,16 @@ class Finding:
     ts_utc: str | None = None
     raw_ref: str | None = None
     confidence: str = "medium"
+    # The forensic operation that produced this finding (FORENSIC_OPERATIONS).
+    # Defaults to "timeline" so older findings.jsonl deserialize unchanged.
+    forensic_operation: str = "timeline"
+    # Escalating deleted-file recovery metadata. All default None so non-recovery
+    # findings (the common case) serialize exactly as before; they are emitted
+    # only by the deleted_file recovery channel.
+    recovery_level: int | None = None  # 1 (tsk_recover) | 2 (ext4magic) | 3 (carving)
+    recovery_outcome: str | None = None  # found | not_found | not_applicable | tool_error
+    high_fp_risk: bool | None = None  # True only for Level 3 signature carving
+    note: str | None = None  # free-text caveat / gap explanation
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> "Finding":
@@ -137,10 +195,15 @@ class Finding:
             ts_utc=d.get("ts_utc"),
             raw_ref=d.get("raw_ref"),
             confidence=d.get("confidence", "medium"),
+            forensic_operation=d.get("forensic_operation", "timeline"),
+            recovery_level=d.get("recovery_level"),
+            recovery_outcome=d.get("recovery_outcome"),
+            high_fp_risk=d.get("high_fp_risk"),
+            note=d.get("note"),
         )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "finding_id": self.finding_id,
             "source_tool": self.source_tool,
             "detector": self.detector,
@@ -152,7 +215,15 @@ class Finding:
             "entity": self.entity.to_dict(),
             "raw_ref": self.raw_ref,
             "confidence": self.confidence,
+            "forensic_operation": self.forensic_operation,
         }
+        # Emit recovery fields only when set, so existing findings.jsonl is byte
+        # unchanged and only recovery findings carry the extra keys.
+        for key in ("recovery_level", "recovery_outcome", "high_fp_risk", "note"):
+            val = getattr(self, key)
+            if val is not None:
+                out[key] = val
+        return out
 
 
 @dataclass

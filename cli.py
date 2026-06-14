@@ -65,9 +65,11 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     run.add_argument(
         "--cleanup",
         action=argparse.BooleanOptionalAction,
-        default=True,
+        default=None,
         help="Run the scenario's cleanup phase after the attack "
-        "(--cleanup / --no-cleanup); --no-cleanup preserves all artifacts",
+        "(--cleanup / --no-cleanup); overrides the scenario's run_cleanup "
+        "default. Unset uses the scenario default (--no-cleanup preserves all "
+        "artifacts)",
     )
     run.add_argument(
         "--seed",
@@ -370,12 +372,19 @@ def main() -> None:
                 if not scenario_cfg:
                     raise RuntimeError(f"Unknown scenario '{args.scenario}'")
                 if "module" in scenario_cfg:
+                    # The --cleanup/--no-cleanup flag overrides the scenario's
+                    # run_cleanup default; unset falls back to the registry value.
+                    run_cleanup = (
+                        args.cleanup
+                        if args.cleanup is not None
+                        else bool(scenario_cfg.get("run_cleanup", False))
+                    )
                     orchestrator.run_experiment(
                         distro_id,
                         scenario_id,
                         scenario_cfg,
                         acquire=args.acquire,
-                        run_cleanup=args.cleanup,
+                        run_cleanup=run_cleanup,
                         seed=args.seed,
                     )
                 else:

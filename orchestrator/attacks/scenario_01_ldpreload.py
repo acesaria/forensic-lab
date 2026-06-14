@@ -64,6 +64,15 @@ from orchestrator.attacks.helpers import (
 )
 from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
+from orchestrator.evaluation.contracts.models import Observable
+from orchestrator.evaluation.scenario.scenario_01 import (
+    discovery_observables,
+    ldpreload_persistence_observables,
+    ldpreload_so_observables,
+    ldpreload_triggered_observables,
+    reverse_shell_fifo_observables,
+    reverse_shell_socket_observables,
+)
 
 # --- planted artifact locators (single source of truth) -----------------
 # What the attack plants on disk / in memory. Steps surface these under their
@@ -153,6 +162,7 @@ def run(
             entity_type="path",
             entity_value=DISCOVERY_OUTPUT,
             expected_sources=["disk_fs"],
+            observables=discovery_observables(DISCOVERY_OUTPUT, cleanup=run_cleanup),
         )
 
         console.step_header("[2/4] LD_PRELOAD infection")
@@ -166,6 +176,9 @@ def run(
             entity_type="path",
             entity_value=PRELOAD_PATH,
             expected_sources=["disk_fs", "disk_logs"],
+            observables=ldpreload_persistence_observables(
+                PRELOAD_PATH, SO_PATH, cleanup=run_cleanup
+            ),
         )
         _record(
             technique="T1574.006",
@@ -173,6 +186,7 @@ def run(
             entity_type="path",
             entity_value=SO_PATH,
             expected_sources=["disk_fs", "memory"],
+            observables=ldpreload_so_observables(SO_PATH, cleanup=run_cleanup),
         )
 
         console.step_header("[3/4] LD_PRELOAD hook trigger")
@@ -183,6 +197,7 @@ def run(
             entity_type="path",
             entity_value=SO_PATH,
             expected_sources=["memory"],
+            observables=ldpreload_triggered_observables(SO_PATH, cleanup=run_cleanup),
         )
 
         console.step_header("[4/4] reverse shell")
@@ -196,6 +211,9 @@ def run(
             entity_type="socket",
             entity_value=f"{host_ip}:{port}",
             expected_sources=["memory"],
+            observables=reverse_shell_socket_observables(
+                f"{host_ip}:{port}", cleanup=run_cleanup
+            ),
         )
         _record(
             technique="T1059.004",
@@ -203,6 +221,7 @@ def run(
             entity_type="path",
             entity_value=fifo,
             expected_sources=["disk_fs"],
+            observables=reverse_shell_fifo_observables(fifo, cleanup=run_cleanup),
         )
 
         if run_cleanup:
@@ -214,6 +233,16 @@ def run(
                 entity_type="path",
                 entity_value=DISCOVERY_OUTPUT,
                 expected_sources=["disk_fs"],
+                # The deletion itself is observable as a recoverable tombstone
+                # (deleted-inode recovery), a different locus than the live file.
+                observables=[
+                    Observable(
+                        operation="deleted_file",
+                        source_tool="tsk",
+                        entity_type="path",
+                        entity_value=DISCOVERY_OUTPUT,
+                    )
+                ],
             )
         else:
             # No cleanup step recorded: with run_cleanup=False the cleanup-phase

@@ -15,7 +15,12 @@ import string
 from pathlib import Path
 from typing import Any
 
-from orchestrator.evaluation.contracts.models import Entity, GtEvent, GtManifest
+from orchestrator.evaluation.contracts.models import (
+    Entity,
+    GtEvent,
+    GtManifest,
+    Observable,
+)
 from orchestrator.evaluation.contracts.validate import validate_gt_manifest
 from orchestrator.forensics.timeutil import now_utc_ms
 
@@ -81,6 +86,7 @@ class GtManifestBuilder:
         ts_utc: str | None = None,
         details: dict[str, Any] | None = None,
         expected_sources: list[str] | None = None,
+        observables: list[Observable | dict[str, Any]] | None = None,
     ) -> GtEvent:
         gt_id = f"G{len(self._events) + 1}"
         event = GtEvent(
@@ -91,6 +97,10 @@ class GtManifestBuilder:
             entity=Entity(type=entity_type, value=entity_value),
             details=details or {},
             expected_sources=expected_sources or [],
+            observables=[
+                o if isinstance(o, Observable) else Observable.from_dict(o)
+                for o in (observables or [])
+            ],
         )
         self._events.append(event)
         return event
