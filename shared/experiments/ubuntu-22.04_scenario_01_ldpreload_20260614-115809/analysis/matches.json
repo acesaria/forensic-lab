@@ -1,0 +1,160 @@
+{
+  "background_noise": [],
+  "fn": [],
+  "fp": [
+    {
+      "cluster_id": "c-001",
+      "finding_ids": [
+        "f-000001"
+      ],
+      "representative": "f-000001"
+    },
+    {
+      "cluster_id": "c-005",
+      "finding_ids": [
+        "f-000005"
+      ],
+      "representative": "f-000005"
+    },
+    {
+      "cluster_id": "c-007",
+      "finding_ids": [
+        "f-000009"
+      ],
+      "representative": "f-000009"
+    },
+    {
+      "cluster_id": "c-009",
+      "finding_ids": [
+        "f-000013"
+      ],
+      "representative": "f-000013"
+    }
+  ],
+  "matching_config_hash": "sha256:2b7ba2add5b12df1c9bce16457604d1e115a6b024251e86ae6a3d84a4558a6a6",
+  "ruleset_hash": "sha256:b5ea64992d4cd9f7c41d9060ed61066e5b688f5488856f4b946eaaaa6f844e31",
+  "tp": [
+    {
+      "delta_t_s": 1.486,
+      "finding_ids": [
+        "f-000000"
+      ],
+      "gt_id": "G1",
+      "gt_ts_utc": "2026-06-14T09:58:10.486Z",
+      "n_clusters": 1,
+      "primary_finding": "f-000000",
+      "primary_ts_quality": "wallclock",
+      "primary_ts_utc": "2026-06-14T09:58:09.000Z",
+      "tools": [
+        "tsk"
+      ]
+    },
+    {
+      "delta_t_s": 0.618,
+      "finding_ids": [
+        "f-000003",
+        "f-000006",
+        "f-000007",
+        "f-000008",
+        "f-000011"
+      ],
+      "gt_id": "G2",
+      "gt_ts_utc": "2026-06-14T09:58:16.418Z",
+      "n_clusters": 2,
+      "primary_finding": "f-000006",
+      "primary_ts_quality": "wallclock",
+      "primary_ts_utc": "2026-06-14T09:58:15.800Z",
+      "tools": [
+        "plaso",
+        "tsk"
+      ]
+    },
+    {
+      "delta_t_s": 1.418,
+      "finding_ids": [
+        "f-000004"
+      ],
+      "gt_id": "G3",
+      "gt_ts_utc": "2026-06-14T09:58:16.418Z",
+      "n_clusters": 1,
+      "primary_finding": "f-000004",
+      "primary_ts_quality": "wallclock",
+      "primary_ts_utc": "2026-06-14T09:58:15.000Z",
+      "tools": [
+        "tsk"
+      ]
+    },
+    {
+      "delta_t_s": null,
+      "finding_ids": [
+        "f-000015",
+        "f-000016",
+        "f-000017",
+        "f-000018",
+        "f-000019",
+        "f-000020",
+        "f-000021",
+        "f-000022",
+        "f-000023",
+        "f-000024",
+        "f-000025",
+        "f-000026",
+        "f-000027",
+        "f-000028",
+        "f-000029",
+        "f-000030",
+        "f-000031",
+        "f-000032",
+        "f-000033",
+        "f-000034",
+        "f-000035",
+        "f-000036",
+        "f-000037",
+        "f-000038",
+        "f-000039"
+      ],
+      "gt_id": "G4",
+      "gt_ts_utc": "2026-06-14T09:58:17.522Z",
+      "n_clusters": 1,
+      "primary_finding": "f-000015",
+      "primary_ts_quality": "none",
+      "primary_ts_utc": null,
+      "tools": [
+        "vol3"
+      ]
+    },
+    {
+      "delta_t_s": null,
+      "finding_ids": [
+        "f-000002",
+        "f-000010",
+        "f-000014"
+      ],
+      "gt_id": "G5",
+      "gt_ts_utc": "2026-06-14T09:58:18.647Z",
+      "n_clusters": 2,
+      "primary_finding": "f-000014",
+      "primary_ts_quality": "none",
+      "primary_ts_utc": null,
+      "tools": [
+        "plaso",
+        "vol3"
+      ]
+    },
+    {
+      "delta_t_s": 1.647,
+      "finding_ids": [
+        "f-000012"
+      ],
+      "gt_id": "G6",
+      "gt_ts_utc": "2026-06-14T09:58:18.647Z",
+      "n_clusters": 1,
+      "primary_finding": "f-000012",
+      "primary_ts_quality": "wallclock",
+      "primary_ts_utc": "2026-06-14T09:58:17.000Z",
+      "tools": [
+        "tsk"
+      ]
+    }
+  ]
+}

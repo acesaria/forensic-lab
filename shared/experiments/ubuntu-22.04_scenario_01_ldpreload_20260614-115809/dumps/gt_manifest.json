@@ -1,0 +1,96 @@
+{
+  "scenario_id": "scenario_01_ldpreload",
+  "run_id": "ubuntu-22.04_scenario_01_ldpreload_20260614-115809",
+  "distro": "ubuntu-22.04",
+  "cleanup": false,
+  "random_seed": 0,
+  "timezone": "UTC",
+  "events": [
+    {
+      "gt_id": "G1",
+      "ts_utc": "2026-06-14T09:58:10.486Z",
+      "technique": "T1082",
+      "event_class": "file_created",
+      "entity": {
+        "type": "path",
+        "value": "/tmp/T1082.txt"
+      },
+      "details": {},
+      "expected_sources": [
+        "disk_fs"
+      ]
+    },
+    {
+      "gt_id": "G2",
+      "ts_utc": "2026-06-14T09:58:16.418Z",
+      "technique": "T1574.006",
+      "event_class": "persistence_installed",
+      "entity": {
+        "type": "path",
+        "value": "/etc/ld.so.preload"
+      },
+      "details": {},
+      "expected_sources": [
+        "disk_fs",
+        "disk_logs"
+      ]
+    },
+    {
+      "gt_id": "G3",
+      "ts_utc": "2026-06-14T09:58:16.418Z",
+      "technique": "T1574.006",
+      "event_class": "file_created",
+      "entity": {
+        "type": "path",
+        "value": "/tmp/T1574006.so"
+      },
+      "details": {},
+      "expected_sources": [
+        "disk_fs",
+        "memory"
+      ]
+    },
+    {
+      "gt_id": "G4",
+      "ts_utc": "2026-06-14T09:58:17.522Z",
+      "technique": "T1574.006",
+      "event_class": "process_exec",
+      "entity": {
+        "type": "path",
+        "value": "/tmp/T1574006.so"
+      },
+      "details": {},
+      "expected_sources": [
+        "memory"
+      ]
+    },
+    {
+      "gt_id": "G5",
+      "ts_utc": "2026-06-14T09:58:18.647Z",
+      "technique": "T1059.004",
+      "event_class": "network_connection",
+      "entity": {
+        "type": "socket",
+        "value": "192.168.100.1:4444"
+      },
+      "details": {},
+      "expected_sources": [
+        "memory"
+      ]
+    },
+    {
+      "gt_id": "G6",
+      "ts_utc": "2026-06-14T09:58:18.647Z",
+      "technique": "T1059.004",
+      "event_class": "file_created",
+      "entity": {
+        "type": "path",
+        "value": "/tmp/.rs_fifo"
+      },
+      "details": {},
+      "expected_sources": [
+        "disk_fs"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,2 @@
+run_id,scenario,cleanup,distro,tools,ruleset_hash,gt_n,tp,fp,fn,recall,precision,f1,order_pairwise,kendall_tau,time_mae_s,uniq_tsk,uniq_plaso,uniq_vol3,notes
+ubuntu-22.04_scenario_01_ldpreload_20260614-115809,scenario_01_ldpreload,False,ubuntu-22.04,plaso|tsk|vol3,sha256:b5ea64992d4cd9f7c41d9060ed61066e5b688f5488856f4b946eaaaa6f844e31,6,6,4,0,1,0.666667,0.8,1,0.912871,1.29225,3,0,1,
