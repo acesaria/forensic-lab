@@ -27,6 +27,7 @@ _PERSIST_PREFIXES = (
     "/lib/systemd",
     "/etc/init.d",
     "/etc/rc.local",
+    "/etc/ld.so.preload",  # T1574.006 LD_PRELOAD persistence mechanism path
 )
 _RC_BASENAMES = (".bashrc", ".bash_profile", ".profile", ".zshrc")
 
@@ -107,6 +108,10 @@ def _is_regular_file(mode: str) -> bool:
     return t[:1] == "r"
 
 
+def _is_directory(mode: str) -> bool:
+    return (mode or "").strip()[:1] == "d"
+
+
 def _in_window(epoch: float | None, window: dict[str, Any] | None) -> bool:
     if not window:
         return True
@@ -161,22 +166,28 @@ def detect_temp_or_persistence_exec(raw, cfg) -> Iterable[Finding]:
         crtime = r["crtime"]
         if not _in_window(crtime, window):
             continue
+        ts = _epoch_to_iso(crtime or r["mtime"])
+        ref = f"bodyfile:inode={r['inode']}"
         temp = any(path.startswith(d) for d in _TEMP_DIRS)
-        persist = _persistence_path(path)
-        if temp and _is_regular_file(r["mode"]) and _is_executable(r["mode"]):
+        if temp and not _is_directory(r["mode"]):
+            # Any non-directory newly created in a world-writable temp dir is a
+            # staged-artifact signal. The exec bit raises confidence and sets the
+            # technique but is not a gate: a non-exec drop (discovery output) and a
+            # FIFO/socket (reverse-shell plumbing) are still created artifacts.
+            executable = _is_regular_file(r["mode"]) and _is_executable(r["mode"])
             yield make_finding(
                 source_tool=_TOOL,
-                detector="tsk:temp_exec_created",
+                detector="tsk:temp_exec_created" if executable else "tsk:temp_file_created",
                 event_class="file_created",
                 entity_type="path",
                 entity_value=path,
                 ts_quality="wallclock",
-                technique="T1059.004",
-                ts_utc=_epoch_to_iso(crtime or r["mtime"]),
-                raw_ref=f"bodyfile:inode={r['inode']}",
-                confidence="medium",
+                technique="T1059.004" if executable else "T1105",
+                ts_utc=ts,
+                raw_ref=ref,
+                confidence="high" if executable else "medium",
             )
-        elif persist:
+        elif _persistence_path(path):
             yield make_finding(
                 source_tool=_TOOL,
                 detector="tsk:persistence_path_created",
@@ -184,9 +195,9 @@ def detect_temp_or_persistence_exec(raw, cfg) -> Iterable[Finding]:
                 entity_type="path",
                 entity_value=path,
                 ts_quality="wallclock",
-                technique="T1053.003",
-                ts_utc=_epoch_to_iso(crtime or r["mtime"]),
-                raw_ref=f"bodyfile:inode={r['inode']}",
+                technique="T1574.006" if path.startswith("/etc/ld.so.preload") else "T1053.003",
+                ts_utc=ts,
+                raw_ref=ref,
                 confidence="medium",
             )
 

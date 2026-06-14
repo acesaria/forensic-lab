@@ -138,6 +138,38 @@ def test_tsk_deleted_and_persistence():
     assert deleted.ts_quality == "wallclock" and deleted.ts_utc is not None
 
 
+def test_tsk_temp_nonexec_and_fifo_created():
+    # No-cleanup coverage: a non-exec drop (discovery output) and a FIFO in /tmp
+    # are created artifacts even without the exec bit; a directory stays excluded.
+    body = "\n".join(
+        [
+            "0|/tmp/T1082.txt|11|r/rrw-r--r--|0|0|800|1700000000|1700000000|1700000000|1700000000",
+            "0|/tmp/.rs_fifo|12|p/prw-r--r--|0|0|0|1700000000|1700000000|1700000000|1700000000",
+            "0|/tmp/.X11-unix|13|d/drwxrwxrwt|0|0|4096|1700000000|1700000000|1700000000|1700000000",
+        ]
+    )
+    raw = {"tsk": {"bodyfile": body}}
+    created = [
+        f for f in tsk_heuristics.detect(raw, _RULE_CFG) if f.event_class == "file_created"
+    ]
+    assert {f.entity.value for f in created} == {"/tmp/T1082.txt", "/tmp/.rs_fifo"}
+    assert all(f.detector == "tsk:temp_file_created" for f in created)
+
+
+def test_tsk_ld_preload_persistence():
+    # /etc/ld.so.preload is the T1574.006 persistence mechanism path.
+    body = "0|/etc/ld.so.preload|22|r/rrw-r--r--|0|0|18|1700000000|1700000000|1700000000|1700000000"
+    raw = {"tsk": {"bodyfile": body}}
+    found = [
+        f for f in tsk_heuristics.detect(raw, _RULE_CFG)
+        if f.detector == "tsk:persistence_path_created"
+    ]
+    assert len(found) == 1
+    assert found[0].entity.value == "/etc/ld.so.preload"
+    assert found[0].event_class == "persistence_installed"
+    assert found[0].technique == "T1574.006"
+
+
 def test_tsk_timestamp_anomaly():
     body = "0|/tmp/x|1|r/rrwxr-xr-x|0|0|10|1700000000|1700000000|1700000000|1700000500"
     raw = {"tsk": {"bodyfile": body}}
