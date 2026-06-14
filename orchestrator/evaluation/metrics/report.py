@@ -59,6 +59,10 @@ def render_report(
     mae = v["time_mae_s"]
     mae_str = "n/a" if mae is None else f"{mae:.3f}"
 
+    # Precision is in claim-cluster units (matching.yaml precision_definition):
+    # true claims = clusters folded into a matched GT (primary + corroborators).
+    true_claims = sum(int(r.get("n_clusters", 1)) for r in matches.tp)
+
     lines: list[str] = []
     lines.append(f"# Scenario report: {v['scenario']} ({v['run_id']})")
     lines.append("")
@@ -70,9 +74,10 @@ def render_report(
     lines.append("")
     lines.append("| metric | value | raw |")
     lines.append("| --- | --- | --- |")
-    lines.append(f"| recall | {_pct(v['recall'])} | {v['tp']}/{v['gt_n']} |")
+    lines.append(f"| recall | {_pct(v['recall'])} | {v['tp']}/{v['gt_n']} events |")
     lines.append(
-        f"| precision | {_pct(v['precision'])} | {v['tp']}/{v['tp'] + v['fp']} |"
+        f"| precision | {_pct(v['precision'])} | "
+        f"{true_claims}/{true_claims + v['fp']} claims |"
     )
     lines.append(f"| f1 | {_pct(f1)} | - |")
     lines.append(f"| order_pairwise | {_pct(order)} | - |")
@@ -93,6 +98,29 @@ def render_report(
     lines.append(f"- tsk: {v['uniq_tsk']}")
     lines.append(f"- plaso: {v['uniq_plaso']}")
     lines.append(f"- vol3: {v['uniq_vol3']}")
+    lines.append("")
+    lines.append("## Per-event coverage (was each step found, by which tool)")
+    lines.append("")
+    lines.append("| gt_id | technique | event_class | tsk | plaso | vol3 | delta_t_s |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- |")
+    tp_by_id = {r["gt_id"]: r for r in matches.tp}
+    for ev in manifest.events:
+        row_tp = tp_by_id.get(ev.gt_id)
+        if row_tp is None:
+            cells = " | ".join("-" for _ in ("tsk", "plaso", "vol3"))
+            lines.append(
+                f"| {ev.gt_id} | {ev.technique} | {ev.event_class} | "
+                f"{cells} | missed |"
+            )
+            continue
+        tools = set(row_tp.get("tools", []))
+        dt = row_tp.get("delta_t_s")
+        dt_str = "n/a" if dt is None else f"{dt:.3f}"
+        cells = " | ".join("x" if t in tools else "-" for t in ("tsk", "plaso", "vol3"))
+        lines.append(
+            f"| {ev.gt_id} | {ev.technique} | {ev.event_class} | "
+            f"{cells} | {dt_str} |"
+        )
     lines.append("")
     lines.append("## True positives")
     lines.append("")

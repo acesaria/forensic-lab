@@ -65,8 +65,46 @@ class _Cluster:
         return sorted({f.source_tool for f in self.findings})
 
     @property
+    def technique(self) -> str | None:
+        return self.representative.technique
+
+    @property
     def finding_ids(self) -> list[str]:
         return sorted(f.finding_id for f in self.findings)
+
+
+def _corroborates(cluster: _Cluster, ev, gt_epoch: float, window: float) -> bool:
+    # Cross-channel corroboration: a leftover cluster observes the SAME action as
+    # a matched GT -- same technique, within the window -- through a DIFFERENT
+    # entity channel (type) than the GT entity. Anchored on technique, not on
+    # entity identity, so a log/process observation of a disk write folds into it.
+    # Same entity type with a different value is a distinct instance (e.g. another
+    # socket), not corroboration, so it is excluded.
+    if cluster.technique is None or cluster.technique != ev.technique:
+        return False
+    if cluster.entity.type == ev.entity.type:
+        return False
+    ce = cluster.epoch
+    if ce is None:
+        return True  # timeless (memory) corroborator: technique + channel only
+    return abs(ce - gt_epoch) <= window
+
+
+def _is_known_good(cluster: _Cluster, known_good: list[dict[str, Any]]) -> bool:
+    # A documented benign baseline that trips a GT-blind detector. Matched on
+    # detector id and/or an entity substring; not a planted instance value.
+    for rule in known_good:
+        det = rule.get("detector")
+        contains = rule.get("entity_contains")
+        if not (det or contains):
+            continue
+        for f in cluster.findings:
+            if det and f.detector != det:
+                continue
+            if contains and contains not in str(f.entity.value):
+                continue
+            return True
+    return False
 
 
 def load_matching_config(path: str | Path | None = None) -> dict[str, Any]:
@@ -134,6 +172,8 @@ def match(
     tol = float(cfg["tolerance_s"])
     bucket_s = int(cfg["dedup_bucket_s"])
     margin = float(cfg["scope_margin_s"])
+    corr_window = float(cfg.get("corroboration_window_s", tol))
+    known_good = cfg.get("known_good", []) or []
     equivalence = cfg.get("equivalence", {})
 
     clusters = _dedup(findings, bucket_s)
@@ -183,7 +223,11 @@ def match(
         for c in clusters:
             if c.cluster_id in consumed:
                 continue
-            if compat.get((ev.gt_id, c.cluster_id)):
+            # compat = same entity observed by another tool; _corroborates = the
+            # same action seen through a different channel (technique-anchored).
+            if compat.get((ev.gt_id, c.cluster_id)) or _corroborates(
+                c, ev, gt_epochs[ev.gt_id], corr_window
+            ):
                 attached.append(c)
                 consumed.add(c.cluster_id)
         rep = primary.representative
@@ -204,6 +248,9 @@ def match(
                 "primary_finding": rep.finding_id,
                 "delta_t_s": delta,
                 "tools": tools,
+                # Count of claim-clusters folded into this TP (primary +
+                # corroborators). Precision is counted in these claim units.
+                "n_clusters": len(attached),
                 # Carried so metrics computes order/time over the TP subset
                 # without re-matching: GT time + the primary finding's time and
                 # quality (memory findings -> "none", excluded from ordering).
@@ -235,7 +282,12 @@ def match(
             "finding_ids": c.finding_ids,
             "representative": c.representative.finding_id,
         }
-        (fp if in_window else background).append(row)
+        # A documented benign baseline is not a false claim: score it as
+        # background noise (excluded from precision), like an out-of-scope hit.
+        if _is_known_good(c, known_good):
+            background.append(row)
+        else:
+            (fp if in_window else background).append(row)
 
     tp.sort(key=lambda r: r["gt_id"])
     fp.sort(key=lambda r: r["cluster_id"])

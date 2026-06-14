@@ -11,6 +11,29 @@ dedup_bucket_s: 60       # findings within this bucket + same key collapse to 1 
 scope_margin_s: 1800     # 30 min: clusters outside [firstGT-margin, lastGT+margin]
                          # are background_noise, excluded from precision
 
+# Corroboration: a leftover cluster folds into a matched GT (multi-tool TP) when
+# it observes the SAME action -- same technique, within this window -- through a
+# DIFFERENT entity channel (type) than the GT entity. Anchored on technique, not
+# entity identity, so a log/process line about a disk write corroborates that
+# write; a different same-type instance (another socket) stays a separate claim.
+corroboration_window_s: 120
+
+# Precision is counted in CLAIM (cluster) units, not GT-event units:
+#   precision = true_claim_clusters / (true_claim_clusters + in_scope_fp_clusters)
+# true_claim_clusters = every cluster attached to a matched GT (primary +
+# corroborators); recall stays per-expected-event (matched_GT / N). Recorded
+# because the unit choice is part of the pre-registered method.
+precision_definition: claim_clusters
+
+# Known-good baseline: documented benign activity that trips a GT-blind detector.
+# A leftover cluster matching one of these is scored as background noise, not a
+# false positive. It is a benign baseline, never a planted instance value, so it
+# is not a circularity leak. vol3 malfind flags networkd-dispatcher's legitimate
+# executable heap region on stock Ubuntu.
+known_good:
+  - detector: vol3:malfind
+    entity_contains: networkd-dispatcher
+
 # Entity matching.
 entity:
   path_basename_fallback: false   # when true, basename equality may match paths

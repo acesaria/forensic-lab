@@ -181,8 +181,14 @@ def compute_row(
     fp = len(matches.fp)
     fn = len(matches.fn)
 
+    # Precision is in CLAIM (cluster) units so numerator and denominator share a
+    # unit (see matching.yaml precision_definition): every cluster folded into a
+    # matched GT is a true claim, every in-scope unmatched cluster (matches.fp) a
+    # false one. Recall stays per-expected-event. When each TP holds one cluster
+    # (no corroboration) true_claims == tp, so this reduces to the old ratio.
+    true_claims = sum(int(r.get("n_clusters", 1)) for r in matches.tp)
     recall = tp / n if n else None
-    precision = tp / (tp + fp) if (tp + fp) else None
+    precision = true_claims / (true_claims + fp) if (true_claims + fp) else None
     if recall in (None, 0) or precision in (None, 0):
         f1: float | None = None
     else:
