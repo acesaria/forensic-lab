@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import re
 import shlex
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 
 # An executor runs one resolved command and returns (exit_code, merged_output).
@@ -39,6 +39,21 @@ _PLACEHOLDER = re.compile(r"[\$#]\{([^}]+)\}")
 # /tmp is writeable without sudo and is wiped by the baseline snapshot revert,
 # so each experiment starts from a clean upload.
 _REMOTE_ATOMICS_ROOT = "/tmp/atomics"
+
+
+def _asset_command_strings(test: dict[str, Any]) -> list[str]:
+    """Every command string in a test that may name an atomics asset.
+
+    Covers the test command, its cleanup, and each dependency's prereq /
+    get_prereq command, so asset selection sees the same references that
+    run_test, run_cleanup, and run_prerequisites will execute.
+    """
+    executor = test.get("executor", {}) or {}
+    commands = [executor.get(key) for key in ("command", "cleanup_command")]
+    for dep in test.get("dependencies", []) or []:
+        commands.append(dep.get("prereq_command"))
+        commands.append(dep.get("get_prereq_command"))
+    return [c for c in commands if c]
 
 
 class ArtRunner:
@@ -70,7 +85,7 @@ class ArtRunner:
         executor: Executor | None = None,
     ) -> dict[str, Any]:
         test = self._load_test(technique_id, test_guid)
-        self._ensure_assets(technique_id)
+        self._ensure_assets(technique_id, test, input_arguments)
         cmd = self._build_command(test["executor"]["command"], test, input_arguments)
         short_guid = test_guid.split("-", 1)[0] if test_guid else ""
         label = f"{technique_id}/{short_guid}  {test.get('name', '')}".rstrip()
@@ -113,7 +128,7 @@ class ArtRunner:
         if not cleanup_cmd:
             _log.debug("no cleanup defined for %s/%s", technique_id, test_guid)
             return False
-        self._ensure_assets(technique_id)
+        self._ensure_assets(technique_id, test, input_arguments)
         cmd = self._build_command(cleanup_cmd, test, input_arguments)
         if executor is not None:
             code, err = executor(cmd, timeout)
@@ -145,7 +160,7 @@ class ArtRunner:
         prereqs = test.get("dependencies", [])
         if not prereqs:
             return
-        self._ensure_assets(technique_id)
+        self._ensure_assets(technique_id, test, input_arguments)
 
         for i, dep in enumerate(prereqs):
             check_cmd = dep.get("prereq_command")
@@ -185,45 +200,63 @@ class ArtRunner:
                 return test
         raise ValueError(f"GUID {guid} not found in {technique_id} ({yaml_path})")
 
-    def _ensure_assets(self, technique_id: str) -> None:
+    def _ensure_assets(
+        self,
+        technique_id: str,
+        test: dict[str, Any],
+        input_arguments: dict[str, str] | None,
+    ) -> None:
         """
-        SFTP the local atomics/<technique_id>/src/ tree to the VM under
-        _REMOTE_ATOMICS_ROOT so that ART YAML defaults referencing
+        SFTP only the atomics assets this test references to the VM under
+        _REMOTE_ATOMICS_ROOT, so ART YAML defaults referencing
         `PathToAtomicsFolder/...` resolve on the test target.
 
-        No-op if the technique has no src/ subtree locally, or if the tree
-        is already present on the VM (cheap re-check via `test -d`).
+        ART src/ trees ship assets for every supported platform side by side
+        (e.g. src/Linux/ and src/MacOS/, plus loose Windows .vbs / ESXi .txt
+        helpers in src/). Uploading the whole tree would land foreign-OS files
+        in the disk image under /tmp/atomics/<tech>/src and pollute the
+        forensic ground truth, so we upload exactly the files this test's own
+        commands name and nothing else. A test that references no asset (e.g.
+        plain `uname` discovery) uploads nothing. Presence is re-checked per
+        file so the prereq, test, and cleanup calls in one run never re-upload.
         """
-        src_root = self._atomics_path / technique_id / "src"
-        if not src_root.is_dir():
-            return
-        remote_tech_root = f"{_REMOTE_ATOMICS_ROOT}/{technique_id}"
-        code, _, _ = self._ssh.run(
-            f"test -d {shlex.quote(remote_tech_root)}/src", timeout=10
-        )
-        if code == 0:
-            return
-        self._ssh.run_checked(
-            f"mkdir -p {shlex.quote(remote_tech_root)}", timeout=10
-        )
-        uploaded = 0
-        for path in sorted(src_root.rglob("*")):
-            if not path.is_file():
+        for local in self._referenced_assets(technique_id, test, input_arguments):
+            if not local.is_file():
+                _log.warning("referenced atomics asset missing locally: %s", local)
                 continue
-            rel = path.relative_to(self._atomics_path / technique_id)
-            remote = f"{remote_tech_root}/{rel.as_posix()}"
-            # Compute the parent in Python instead of shelling out to
-            # `dirname` so the remote command takes a single quoted literal.
-            remote_dir = f"{remote_tech_root}/{rel.parent.as_posix()}"
-            self._ssh.run_checked(
-                f"mkdir -p {shlex.quote(remote_dir)}", timeout=10
-            )
-            self._ssh.put(path, remote)
-            uploaded += 1
-        console.ok(
-            f"uploaded {uploaded} atomics asset(s) for {technique_id} "
-            f"to {remote_tech_root}"
-        )
+            rel = local.relative_to(self._atomics_path / technique_id)
+            remote = f"{_REMOTE_ATOMICS_ROOT}/{technique_id}/{rel.as_posix()}"
+            code, _, _ = self._ssh.run(f"test -f {shlex.quote(remote)}", timeout=10)
+            if code == 0:
+                continue
+            remote_dir = str(PurePosixPath(remote).parent)
+            self._ssh.run_checked(f"mkdir -p {shlex.quote(remote_dir)}", timeout=10)
+            self._ssh.put(local, remote)
+            console.ok(f"uploaded atomics asset {rel.as_posix()} for {technique_id}")
+
+    def _referenced_assets(
+        self,
+        technique_id: str,
+        test: dict[str, Any],
+        input_arguments: dict[str, str] | None,
+    ) -> list[Path]:
+        """
+        Local paths of the atomics assets this test names in its commands.
+
+        Resolve every command string through the same placeholder +
+        PathToAtomicsFolder substitution used at execution, then collect the
+        tokens that point under this technique's uploaded asset root. Returns
+        the matching local files, deduplicated and sorted; tokens that do not
+        map to a real file are dropped by the caller.
+        """
+        prefix = f"{_REMOTE_ATOMICS_ROOT}/{technique_id}/"
+        token = re.compile(re.escape(prefix) + r"([^\s'\"|&;)<>]+)")
+        tech_dir = self._atomics_path / technique_id
+        rels: set[str] = set()
+        for raw in _asset_command_strings(test):
+            resolved = self._build_command(raw, test, input_arguments)
+            rels.update(m.group(1) for m in token.finditer(resolved))
+        return [tech_dir / rel for rel in sorted(rels)]
 
     @staticmethod
     def _build_command(
