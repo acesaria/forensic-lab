@@ -1,0 +1,58 @@
+{
+  "scenario_id": "scenario_01_ldpreload",
+  "run_id": "ubuntu-22.04_scenario_01_ldpreload_20260613-120000",
+  "distro": "ubuntu-22.04",
+  "cleanup": false,
+  "random_seed": 1337,
+  "timezone": "UTC",
+  "events": [
+    {
+      "gt_id": "G1",
+      "ts_utc": "2026-06-13T12:00:00.000Z",
+      "technique": "T1082",
+      "event_class": "file_created",
+      "entity": {"type": "path", "value": "/tmp/T1082.txt"},
+      "expected_sources": ["disk_fs"]
+    },
+    {
+      "gt_id": "G2",
+      "ts_utc": "2026-06-13T12:00:05.000Z",
+      "technique": "T1574.006",
+      "event_class": "persistence_installed",
+      "entity": {"type": "path", "value": "/etc/ld.so.preload"},
+      "expected_sources": ["disk_fs", "disk_logs"]
+    },
+    {
+      "gt_id": "G3",
+      "ts_utc": "2026-06-13T12:00:06.000Z",
+      "technique": "T1574.006",
+      "event_class": "file_created",
+      "entity": {"type": "path", "value": "/tmp/T1574006.so"},
+      "expected_sources": ["disk_fs", "memory"]
+    },
+    {
+      "gt_id": "G4",
+      "ts_utc": "2026-06-13T12:00:08.000Z",
+      "technique": "T1574.006",
+      "event_class": "process_exec",
+      "entity": {"type": "path", "value": "/tmp/T1574006.so"},
+      "expected_sources": ["memory"]
+    },
+    {
+      "gt_id": "G5",
+      "ts_utc": "2026-06-13T12:00:10.000Z",
+      "technique": "T1059.004",
+      "event_class": "network_connection",
+      "entity": {"type": "socket", "value": "192.168.100.1:4444"},
+      "expected_sources": ["memory"]
+    },
+    {
+      "gt_id": "G6",
+      "ts_utc": "2026-06-13T12:00:12.000Z",
+      "technique": "T1059.004",
+      "event_class": "file_created",
+      "entity": {"type": "path", "value": "/tmp/.a1b2c3"},
+      "expected_sources": ["disk_fs"]
+    }
+  ]
+}
