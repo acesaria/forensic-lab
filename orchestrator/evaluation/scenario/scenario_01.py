@@ -30,6 +30,11 @@ SCENARIO_CLEANUP = "scenario_01_ldpreload_cleanup"
 
 # Planted artifact locators (defaults; the live run may randomize fifo/port).
 SO_PATH = "/tmp/T1574006.so"
+# The ART T1574.006 test drops the payload source under PathToAtomicsFolder
+# (fixed at /tmp/atomics) and compiles it to SO_PATH. The source persists the
+# sed-unhook cleanup, so tsk flags it as a temp file; it is a real attack
+# artifact and belongs in ground truth (otherwise it scores as a false positive).
+SRC_PATH = "/tmp/atomics/T1574.006/src/Linux/T1574.006.c"
 PRELOAD_PATH = "/etc/ld.so.preload"
 DISCOVERY_OUTPUT = "/tmp/T1082.txt"
 RS_FIFO = "/tmp/.rs_fifo"
@@ -72,18 +77,22 @@ def ldpreload_persistence_observables(
     ]
 
 
-def ldpreload_so_observables(so_path: str = SO_PATH, *, cleanup: bool) -> list[Observable]:
-    # E2 disk artifact: the compiled .so on disk (so_path is a GT entity here AND
-    # in E3, so a detection of it is always a TP, never an FP). Recoverable on the
-    # timeline (tsk) and by signature (yara content_scan). Cleanup removes it from
-    # disk, so the on-disk loci go away (the in-memory mapping is a SEPARATE event,
-    # E3).
-    if cleanup:
-        return [_obs("timeline", "tsk", "path", so_path)]
-    return [
+def ldpreload_so_observables(
+    so_path: str = SO_PATH, src_path: str = SRC_PATH, *, cleanup: bool
+) -> list[Observable]:
+    # E2 disk artifacts of the compiled payload: the .so output (so_path is a GT
+    # entity here AND in E3, so a detection of it is always a TP, never an FP) and
+    # the .c source the ART test drops under /tmp/atomics. Both are recoverable on
+    # the timeline (tsk) and persist the sed-unhook cleanup; the yara signature
+    # locus needs the .so on disk, so it is no-cleanup only. The in-memory mapping
+    # is a SEPARATE event (E3).
+    obs = [
         _obs("timeline", "tsk", "path", so_path),
-        _obs("content_scan", "yara", "path", so_path),
+        _obs("timeline", "tsk", "path", src_path),
     ]
+    if not cleanup:
+        obs.append(_obs("content_scan", "yara", "path", so_path))
+    return obs
 
 
 def ldpreload_triggered_observables(so_path: str = SO_PATH, *, cleanup: bool) -> list[Observable]:
