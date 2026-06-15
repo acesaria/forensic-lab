@@ -1,5 +1,9 @@
 # orchestrator/forensics/bulk_extractor_runner.py
 #
+# DEFERRED: no longer invoked by the orchestrator run path; the bulk_extractor
+# string_search channel is out of the active evaluation pipeline (see
+# evaluation/detect/bulk_extractor_strings.py). Kept for future re-enablement.
+#
 # Thin bulk_extractor I/O over an E01/raw disk image. Runs the binary into a
 # temp directory, parses one or more feature files, and returns raw string
 # records. Finding emission happens in evaluation/detect/bulk_extractor_strings.py.

@@ -76,13 +76,7 @@ from orchestrator.evaluation.contracts.validate import load_gt_manifest
 from orchestrator.evaluation.extract.vol3 import extract_plugins
 from orchestrator.evaluation.extract.tsk import extract_bodyfile
 from orchestrator.evaluation.provenance import build_provenance, write_provenance
-from orchestrator.forensics import bulk_extractor_runner, deleted_file_runner, yara_runner
-
-# scenario_01 (Ubuntu 22.04) bulk_extractor token filter: surface only feature
-# strings around the LD_PRELOAD mechanism path and temp drops, keeping the
-# string_search finding set small. The mechanism path is intrinsic, not a seeded
-# instance value. Widen or drop this list to extend to other scenarios.
-_BE_TOKENS = ("/etc/ld.so.preload", "ld.so.preload", "/tmp/")
+from orchestrator.forensics import deleted_file_runner, yara_runner
 from orchestrator.evaluation.pipeline import run_from_raw
 
 
@@ -409,16 +403,11 @@ class ForensicOrchestrator:
             except Exception as exc:
                 console.warn(f"tsk extraction degraded: {exc}")
 
-            # External-tool channels (best-effort, like vol3/tsk). bulk_extractor
-            # reads the image directly; YARA needs a mounted/extracted FS root,
-            # provided per-distro by self._fs_scan_root (None -> skipped). The
-            # plaso_sigma detector runs automatically over raw_outputs["plaso"].
-            try:
-                raw_outputs["bulk_extractor"] = bulk_extractor_runner.run(
-                    disk_path, tokens=_BE_TOKENS
-                )
-            except Exception as exc:
-                console.warn(f"bulk_extractor degraded: {exc}")
+            # External-tool channels (best-effort, like vol3/tsk). YARA needs a
+            # mounted/extracted FS root, provided per-distro by self._fs_scan_root
+            # (None -> skipped). The plaso_sigma detector runs automatically over
+            # raw_outputs["plaso"]. (bulk_extractor string_search is deferred and
+            # not invoked here.)
             scan_root = self._fs_scan_root(distro_id)
             if scan_root is not None:
                 try:

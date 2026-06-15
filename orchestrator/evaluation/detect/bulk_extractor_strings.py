@@ -1,5 +1,11 @@
 # orchestrator/evaluation/detect/bulk_extractor_strings.py
 #
+# DEFERRED: this detector is NOT registered in detect/run.py and the orchestrator
+# no longer invokes bulk_extractor_runner, so the string_search channel is out of
+# the active evaluation pipeline. The module is kept (not deleted) so the channel
+# can be re-enabled later by adding it back to detect.run.DETECTORS and restoring
+# the runner call in orchestrator.py. It is otherwise unused.
+#
 # GT-blind detector over bulk_extractor feature records produced by
 # forensics.bulk_extractor_runner (placed in raw_outputs["bulk_extractor"]). Each
 # distinct feature string becomes a string_search finding. The runner already did

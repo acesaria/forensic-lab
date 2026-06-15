@@ -1,13 +1,13 @@
-# External-tool channels (Sigma over Plaso, YARA over files, bulk_extractor over
-# the image) flow into the same detect -> match -> metrics pipeline and populate
-# their (forensic_operation, source_tool) metric buckets. Drives the detectors
-# with synthetic raw outputs so it needs none of the external binaries/libraries.
+# External-tool channels (Sigma over Plaso, YARA over files) flow into the same
+# detect -> match -> metrics pipeline and populate their (forensic_operation,
+# source_tool) metric buckets. Drives the detectors with synthetic raw outputs so
+# it needs none of the external binaries/libraries. bulk_extractor is deferred and
+# out of the active pipeline; only its I/O parser is still guarded, at the bottom.
 
 from pathlib import Path
 
 from orchestrator.evaluation.contracts.models import Finding, GtManifest
 from orchestrator.evaluation.contracts.validate import load_gt_manifest, validate_finding
-from orchestrator.evaluation.detect.bulk_extractor_strings import detect as be_detect
 from orchestrator.evaluation.detect.run import run_detection
 from orchestrator.evaluation.detect.plaso_sigma import detect as sigma_detect
 from orchestrator.evaluation.detect.yara_scan import detect as yara_detect
@@ -31,11 +31,6 @@ def _raw():
                 "tags": [],
                 "meta": {"technique": "attack.t1574.006"},
             }
-        ],
-        "bulk_extractor": [
-            {"offset": "0", "feature": "/etc/ld.so.preload", "context": ""},
-            {"offset": "1", "feature": "/tmp/T1574006.so", "context": ""},
-            {"offset": "2", "feature": "/tmp/T1082.txt", "context": ""},
         ],
     }
 
@@ -65,12 +60,8 @@ def test_detectors_emit_expected_source_and_operation():
     assert y and all(f.source_tool == "yara" and f.forensic_operation == "content_scan" for f in y)
     assert y[0].entity.value == "/tmp/T1574006.so"
 
-    b = list(be_detect(raw, cfg))
-    assert b and all(f.source_tool == "bulk_extractor" and f.forensic_operation == "string_search" for f in b)
-    assert {str(f.entity.value) for f in b} == {"/etc/ld.so.preload", "/tmp/T1574006.so", "/tmp/T1082.txt"}
-
     # Every emitted finding is schema-valid (new source_tool enum members).
-    for f in [*s, *y, *b]:
+    for f in [*s, *y]:
         validate_finding({**f.to_dict(), "finding_id": "f-000000"})
 
 
@@ -84,18 +75,18 @@ def test_buckets_nonzero_through_pipeline():
         (r.values["forensic_operation"], r.values["source_tool"], r.values["rule_layer"]): r.values
         for r in compute_breakdown(manifest, m, findings)
     }
-    # YARA (content_scan) and bulk_extractor (string_search) land on scenario_01
-    # observables -> populated TP buckets, no false positives. The vendored Sigma
-    # rules do not cover scenario_01 on a filesystem-only timeline (its
-    # ld.so.preload rule is a keyword rule; auditd would add coverage), so
-    # plaso_sigma is exercised in test_detectors_emit..., not asserted here.
+    # YARA (content_scan) lands on a scenario_01 observable -> a populated TP
+    # bucket, no false positives. The vendored Sigma rules do not cover scenario_01
+    # on a filesystem-only timeline (its ld.so.preload rule is a keyword rule;
+    # auditd would add coverage), so plaso_sigma is exercised in
+    # test_detectors_emit..., not asserted here.
     yara = rows[("content_scan", "yara", "community")]
-    be = rows[("string_search", "bulk_extractor", "community")]
     assert yara["tp"] >= 1 and yara["fp"] == 0 and yara["precision"] == 1.0
-    assert be["tp"] >= 1 and be["fp"] == 0 and be["precision"] == 1.0
 
 
 def test_bulk_extractor_feature_parsing(tmp_path):
+    # bulk_extractor is deferred (not in the active pipeline); this only guards the
+    # I/O parser so the kept-but-dormant runner does not bit-rot.
     feat = tmp_path / "wordlist.txt"
     feat.write_text(
         "# Banner line ignored\n"
