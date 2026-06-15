@@ -52,15 +52,10 @@ def _obs(operation: str, source_tool: str, entity_type: str, entity_value: str) 
 
 
 def discovery_observables(output_path: str = DISCOVERY_OUTPUT, *, cleanup: bool) -> list[Observable]:
-    # E1_discovery_os_info (T1082). No-cleanup: the file is on disk (timeline) and
-    # its path is recoverable from raw bytes (string_search). Cleanup deletes it,
-    # so only the timeline locus is modeled and recovery typically fails.
-    if cleanup:
-        return [_obs("timeline", "tsk", "path", output_path)]
-    return [
-        _obs("timeline", "tsk", "path", output_path),
-        _obs("string_search", "bulk_extractor", "string", output_path),
-    ]
+    # E1_discovery_os_info (T1082). The file is on disk and recoverable on the
+    # timeline (tsk) in both variants; cleanup deletes it so recovery typically
+    # fails, but the timeline locus is the modeled expectation either way.
+    return [_obs("timeline", "tsk", "path", output_path)]
 
 
 def ldpreload_persistence_observables(
@@ -69,28 +64,25 @@ def ldpreload_persistence_observables(
     # E2_ldpreload_persistence (T1574.006). The preload config and the log entry of
     # the write survive cleanup (cleanup only empties the file via sed), so the
     # persistence stays observable on disk (tsk), in the logs (plaso), and via a
-    # Sigma rule over those logs (plaso_sigma); only the raw-byte scan is dropped.
-    obs = [
+    # Sigma rule over those logs (plaso_sigma) in both variants.
+    return [
         _obs("timeline", "tsk", "path", preload_path),
         _obs("timeline", "plaso", "process", f"sudo sh -c 'echo {so_path} > {preload_path}'"),
         _obs("timeline", "plaso_sigma", "path", preload_path),
     ]
-    if not cleanup:
-        obs.append(_obs("string_search", "bulk_extractor", "string", preload_path))
-    return obs
 
 
 def ldpreload_so_observables(so_path: str = SO_PATH, *, cleanup: bool) -> list[Observable]:
-    # E2 disk artifact: the compiled .so on disk, recoverable on the timeline
-    # (tsk), by signature (yara content_scan), and as a raw string (bulk_extractor).
-    # Cleanup removes it from disk, so the on-disk loci go away (the in-memory
-    # mapping is a SEPARATE event, E3).
+    # E2 disk artifact: the compiled .so on disk (so_path is a GT entity here AND
+    # in E3, so a detection of it is always a TP, never an FP). Recoverable on the
+    # timeline (tsk) and by signature (yara content_scan). Cleanup removes it from
+    # disk, so the on-disk loci go away (the in-memory mapping is a SEPARATE event,
+    # E3).
     if cleanup:
         return [_obs("timeline", "tsk", "path", so_path)]
     return [
         _obs("timeline", "tsk", "path", so_path),
         _obs("content_scan", "yara", "path", so_path),
-        _obs("string_search", "bulk_extractor", "string", so_path),
     ]
 
 
@@ -107,14 +99,10 @@ def reverse_shell_socket_observables(socket_value: str, *, cleanup: bool) -> lis
 
 
 def reverse_shell_fifo_observables(fifo_path: str = RS_FIFO, *, cleanup: bool) -> list[Observable]:
-    # E4 disk artifact: the reverse-shell FIFO. The custom steps have no ART
-    # cleanup, so the FIFO persists on disk; only the raw-byte string scan drops.
-    if cleanup:
-        return [_obs("timeline", "tsk", "path", fifo_path)]
-    return [
-        _obs("timeline", "tsk", "path", fifo_path),
-        _obs("string_search", "bulk_extractor", "string", fifo_path),
-    ]
+    # E4 disk artifact: the reverse-shell FIFO, recoverable on the timeline (tsk).
+    # The custom steps have no ART cleanup, so the FIFO persists on disk in both
+    # variants.
+    return [_obs("timeline", "tsk", "path", fifo_path)]
 
 
 def _ts(base_epoch: float, offset_s: float) -> str:
