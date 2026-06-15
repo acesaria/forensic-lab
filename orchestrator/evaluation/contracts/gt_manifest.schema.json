@@ -75,7 +75,7 @@
         },
         "source_tool": {
           "type": "string",
-          "enum": ["tsk", "plaso", "vol3", "plaso_sigma", "bulk_extractor", "yara"]
+          "enum": ["tsk", "plaso", "vol3", "plaso_sigma", "yara"]
         },
         "entity_type": {
           "type": "string",

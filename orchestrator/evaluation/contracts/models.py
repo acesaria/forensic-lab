@@ -58,7 +58,7 @@ class Observable:
     declared yet" and keeps older scenarios working unchanged."""
 
     operation: str  # one of FORENSIC_OPERATIONS
-    source_tool: str  # tsk | plaso | vol3 | bulk_extractor | yara
+    source_tool: str  # tsk | plaso | vol3 | plaso_sigma | yara
     entity_type: str  # path | process | socket | mapping | log_line | string
     entity_value: str
     time_hint: dict[str, Any] | None = None  # {kind, ts_utc?, window_s?}

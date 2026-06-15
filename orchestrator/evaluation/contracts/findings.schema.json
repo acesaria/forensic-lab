@@ -18,7 +18,7 @@
     "source_tool": {
       "type": "string",
       "enum": [
-        "plaso", "vol3", "tsk", "plaso_sigma", "yara", "bulk_extractor",
+        "plaso", "vol3", "tsk", "plaso_sigma", "yara",
         "tsk_recover", "ext4magic", "scalpel", "photorec"
       ]
     },

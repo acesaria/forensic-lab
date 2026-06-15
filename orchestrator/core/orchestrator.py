@@ -406,8 +406,7 @@ class ForensicOrchestrator:
             # External-tool channels (best-effort, like vol3/tsk). YARA needs a
             # mounted/extracted FS root, provided per-distro by self._fs_scan_root
             # (None -> skipped). The plaso_sigma detector runs automatically over
-            # raw_outputs["plaso"]. (bulk_extractor string_search is deferred and
-            # not invoked here.)
+            # raw_outputs["plaso"].
             scan_root = self._fs_scan_root(distro_id)
             if scan_root is not None:
                 try:

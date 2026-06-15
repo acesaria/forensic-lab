@@ -1,8 +1,7 @@
 # External-tool channels (Sigma over Plaso, YARA over files) flow into the same
 # detect -> match -> metrics pipeline and populate their (forensic_operation,
 # source_tool) metric buckets. Drives the detectors with synthetic raw outputs so
-# it needs none of the external binaries/libraries. bulk_extractor is deferred and
-# out of the active pipeline; only its I/O parser is still guarded, at the bottom.
+# it needs none of the external binaries/libraries.
 
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from orchestrator.evaluation.detect.plaso_sigma import detect as sigma_detect
 from orchestrator.evaluation.detect.yara_scan import detect as yara_detect
 from orchestrator.evaluation.match.matcher import match
 from orchestrator.evaluation.metrics.compute import compute_breakdown
-from orchestrator.forensics import bulk_extractor_runner, sigma_runner
+from orchestrator.forensics import sigma_runner
 
 _FIX = Path(__file__).parent / "fixtures" / "scenario_01"
 _G2_TS_US = 1781784005_000000  # 2026-06-13T12:00:05Z, near G2
@@ -82,21 +81,3 @@ def test_buckets_nonzero_through_pipeline():
     # test_detectors_emit..., not asserted here.
     yara = rows[("content_scan", "yara", "community")]
     assert yara["tp"] >= 1 and yara["fp"] == 0 and yara["precision"] == 1.0
-
-
-def test_bulk_extractor_feature_parsing(tmp_path):
-    # bulk_extractor is deferred (not in the active pipeline); this only guards the
-    # I/O parser so the kept-but-dormant runner does not bit-rot.
-    feat = tmp_path / "wordlist.txt"
-    feat.write_text(
-        "# Banner line ignored\n"
-        "4096\t/etc/ld.so.preload\tcontext-bytes\n"
-        "8192\t/usr/bin/python3\tother\n",
-        encoding="utf-8",
-    )
-    # Token filter keeps only matching features; parser stays generic.
-    recs = bulk_extractor_runner.parse_feature_file(feat, tokens=["ld.so.preload"])
-    assert [r["feature"] for r in recs] == ["/etc/ld.so.preload"]
-    assert recs[0]["offset"] == "4096"
-    # No filter -> every feature line.
-    assert len(bulk_extractor_runner.parse_feature_file(feat)) == 2

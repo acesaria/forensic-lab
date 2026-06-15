@@ -15,8 +15,7 @@
       "details": {"step": "E1_discovery_os_info"},
       "expected_sources": ["disk_fs"],
       "observables": [
-        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/T1082.txt"},
-        {"operation": "string_search", "source_tool": "bulk_extractor", "entity_type": "string", "entity_value": "/tmp/T1082.txt"}
+        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/T1082.txt"}
       ]
     },
     {
@@ -30,8 +29,7 @@
       "observables": [
         {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/etc/ld.so.preload"},
         {"operation": "timeline", "source_tool": "plaso", "entity_type": "process", "entity_value": "sudo sh -c 'echo /tmp/T1574006.so > /etc/ld.so.preload'"},
-        {"operation": "timeline", "source_tool": "plaso_sigma", "entity_type": "path", "entity_value": "/etc/ld.so.preload"},
-        {"operation": "string_search", "source_tool": "bulk_extractor", "entity_type": "string", "entity_value": "/etc/ld.so.preload"}
+        {"operation": "timeline", "source_tool": "plaso_sigma", "entity_type": "path", "entity_value": "/etc/ld.so.preload"}
       ]
     },
     {
@@ -44,8 +42,7 @@
       "expected_sources": ["disk_fs", "memory"],
       "observables": [
         {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/T1574006.so"},
-        {"operation": "content_scan", "source_tool": "yara", "entity_type": "path", "entity_value": "/tmp/T1574006.so"},
-        {"operation": "string_search", "source_tool": "bulk_extractor", "entity_type": "string", "entity_value": "/tmp/T1574006.so"}
+        {"operation": "content_scan", "source_tool": "yara", "entity_type": "path", "entity_value": "/tmp/T1574006.so"}
       ]
     },
     {
@@ -81,8 +78,7 @@
       "details": {"step": "E4_reverse_shell_fifo"},
       "expected_sources": ["disk_fs"],
       "observables": [
-        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/.a1b2c3"},
-        {"operation": "string_search", "source_tool": "bulk_extractor", "entity_type": "string", "entity_value": "/tmp/.a1b2c3"}
+        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/.a1b2c3"}
       ]
     }
   ]
