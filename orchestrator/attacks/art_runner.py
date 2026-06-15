@@ -181,6 +181,30 @@ class ArtRunner:
             install = self._build_command(install_cmd, test, input_arguments)
             self._ssh.run_checked(install, timeout=timeout)
 
+    def resolve_arg(
+        self,
+        technique_id: str,
+        guid: str,
+        arg_name: str,
+        overrides: dict[str, str] | None = None,
+    ) -> str:
+        """Resolve an atomic input_argument to the value the test would use (an
+        override, else its default), applying the PathToAtomicsFolder rewrite. Lets
+        the ART test own its artifact paths so scenarios don't hardcode them."""
+        test = self._load_test(technique_id, guid)
+        if overrides and arg_name in overrides:
+            value = overrides[arg_name]
+        else:
+            args = test.get("input_arguments") or {}
+            if arg_name not in args:
+                raise KeyError(
+                    f"{technique_id}/{guid}: no input_argument {arg_name!r}"
+                )
+            value = args[arg_name].get("default")
+        if value is None:
+            return ""
+        return str(value).replace("PathToAtomicsFolder", _REMOTE_ATOMICS_ROOT)
+
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------

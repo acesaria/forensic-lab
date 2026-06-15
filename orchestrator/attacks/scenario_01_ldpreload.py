@@ -40,8 +40,9 @@ Each step that plants an artifact records the planted values under a "locators"
 sub-dict with stable keys (e.g. ldpreload -> so_path/preload_path, reverse_shell
 -> fifo/port). These are intent (what the attack put there), kept distinct from
 the observed facts (so_loaded, trigger_pid, connected, ...) recorded alongside.
-The planted values come from the module-level constants below, so artifact specs
-can reference a step's locators instead of hardcoding paths and ports.
+The ART-driven paths are read from the atomic at run() time (runner.resolve_arg);
+only the intrinsic preload path and the custom reverse-shell fifo/port are
+module-level constants.
 
 Ground-truth shape
 ------------------
@@ -74,12 +75,13 @@ from orchestrator.evaluation.scenario.scenario_01 import (
     reverse_shell_socket_observables,
 )
 
-# --- planted artifact locators (single source of truth) -----------------
-# What the attack plants on disk / in memory. Steps surface these under their
-# "locators" sub-dict so specs reference them instead of hardcoding values.
-SO_PATH = "/tmp/T1574006.so"
+# --- planted artifact locators -------------------------------------------
+# What the attack plants on disk / in memory. The ART-driven paths (the .so, its
+# .c source, the discovery output) are read from the atomic at run() time via
+# runner.resolve_arg, so the test owns them. PRELOAD_PATH is the intrinsic
+# mechanism of T1574.006 (hardcoded in the atomic's command, not an argument), and
+# the reverse-shell fifo/port are custom (not ART), so they stay constants here.
 PRELOAD_PATH = "/etc/ld.so.preload"
-DISCOVERY_OUTPUT = "/tmp/T1082.txt"
 RS_FIFO = "/tmp/.rs_fifo"
 RS_PORT = 4444
 
@@ -123,6 +125,20 @@ def run(
     fifo = f"/tmp/.{params.token()}" if params is not None else RS_FIFO
     port = params.port() if params is not None else RS_PORT
 
+    # ART-owned artifact paths, read from the atomics so they are never hardcoded
+    # here: the discovery output (T1082) and the compiled .so plus its .c source
+    # (T1574.006). PRELOAD_PATH stays a constant (it is baked into the atomic's
+    # command, not an input_argument).
+    discovery_output = runner.resolve_arg(
+        _DISCOVERY.technique, _DISCOVERY.guid, "output_file", _DISCOVERY.input_arguments
+    )
+    so_path = runner.resolve_arg(
+        _LDPRELOAD.technique, _LDPRELOAD.guid, "path_to_shared_library", _LDPRELOAD.input_arguments
+    )
+    so_source = runner.resolve_arg(
+        _LDPRELOAD.technique, _LDPRELOAD.guid, "path_to_shared_library_source", _LDPRELOAD.input_arguments
+    )
+
     # Drive the attacker's commands through one interactive login shell so they
     # are typed into ~/.bash_history, the way a real intrusion leaves them. The
     # reverse shell stays on the exec path (no PTY) so its backgrounded job
@@ -153,21 +169,21 @@ def run(
     try:
         console.step_header("[1/4] discovery")
         discovery = _step(_DISCOVERY)
-        discovery["locators"] = {"output_path": DISCOVERY_OUTPUT}
+        discovery["locators"] = {"output_path": discovery_output}
         steps.append(discovery)
         art_tests.append(_DISCOVERY)
         _record(
             technique="T1082",
             event_class="file_created",
             entity_type="path",
-            entity_value=DISCOVERY_OUTPUT,
+            entity_value=discovery_output,
             expected_sources=["disk_fs"],
-            observables=discovery_observables(DISCOVERY_OUTPUT, cleanup=run_cleanup),
+            observables=discovery_observables(discovery_output, cleanup=run_cleanup),
         )
 
         console.step_header("[2/4] LD_PRELOAD infection")
         ldpreload = _step(_LDPRELOAD, raise_on_error=True)
-        ldpreload["locators"] = {"so_path": SO_PATH, "preload_path": PRELOAD_PATH}
+        ldpreload["locators"] = {"so_path": so_path, "preload_path": PRELOAD_PATH}
         steps.append(ldpreload)
         art_tests.append(_LDPRELOAD)
         _record(
@@ -177,16 +193,16 @@ def run(
             entity_value=PRELOAD_PATH,
             expected_sources=["disk_fs", "disk_logs"],
             observables=ldpreload_persistence_observables(
-                PRELOAD_PATH, SO_PATH, cleanup=run_cleanup
+                PRELOAD_PATH, so_path, cleanup=run_cleanup
             ),
         )
         _record(
             technique="T1574.006",
             event_class="file_created",
             entity_type="path",
-            entity_value=SO_PATH,
+            entity_value=so_path,
             expected_sources=["disk_fs", "memory"],
-            observables=ldpreload_so_observables(SO_PATH, cleanup=run_cleanup),
+            observables=ldpreload_so_observables(so_path, so_source, cleanup=run_cleanup),
         )
 
         console.step_header("[3/4] LD_PRELOAD hook trigger")
@@ -195,9 +211,9 @@ def run(
             technique="T1574.006",
             event_class="process_exec",
             entity_type="path",
-            entity_value=SO_PATH,
+            entity_value=so_path,
             expected_sources=["memory"],
-            observables=ldpreload_triggered_observables(SO_PATH, cleanup=run_cleanup),
+            observables=ldpreload_triggered_observables(so_path, cleanup=run_cleanup),
         )
 
         console.step_header("[4/4] reverse shell")
@@ -231,7 +247,7 @@ def run(
                 technique="T1070.004",
                 event_class="file_deleted",
                 entity_type="path",
-                entity_value=DISCOVERY_OUTPUT,
+                entity_value=discovery_output,
                 expected_sources=["disk_fs"],
                 # The deletion itself is observable as a recoverable tombstone
                 # (deleted-inode recovery), a different locus than the live file.
@@ -240,7 +256,7 @@ def run(
                         operation="deleted_file",
                         source_tool="tsk",
                         entity_type="path",
-                        entity_value=DISCOVERY_OUTPUT,
+                        entity_value=discovery_output,
                     )
                 ],
             )
