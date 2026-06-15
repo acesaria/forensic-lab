@@ -451,7 +451,6 @@ class ForensicOrchestrator:
                 raw_outputs,
                 analysis_dir,
                 case_window=case_window,
-                legacy=True,
             )
             self._write_recovery_provenance(run_id, analysis_dir, recovery_versions)
         except Exception as exc:

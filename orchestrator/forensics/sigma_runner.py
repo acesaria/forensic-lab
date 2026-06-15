@@ -2,13 +2,13 @@
 #
 # Thin Sigma-rule I/O over the vendored SigmaHQ subset (vendor/sigma/). No
 # classes, no GT awareness: this module only LOADS and logsource-FILTERS rules
-# for the Linux/Plaso pipeline. Evaluation against events and Finding emission
-# happen one layer up, in orchestrator/evaluation/detect/sigma_vendored.py, so
-# this stays in the forensics tool-I/O layer (no evaluation imports).
+# for the Linux/Plaso pipeline. Compilation to SQL and Finding emission happen one
+# layer up, in orchestrator/evaluation/detect/plaso_sigma.py, so this stays in the
+# forensics tool-I/O layer (no evaluation imports).
 #
-# pySigma is used to parse/validate rules when installed; otherwise the rules are
-# read with PyYAML (the in-memory evaluator only needs the detection/logsource
-# dicts, which both paths produce identically).
+# Rules are read with PyYAML into the detection/logsource dicts the detector
+# hands to pySigma; pySigma additionally parse-validates them (best effort) so a
+# malformed rule surfaces a warning here instead of silently never matching.
 
 from __future__ import annotations
 

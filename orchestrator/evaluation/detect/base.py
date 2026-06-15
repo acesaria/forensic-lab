@@ -11,34 +11,19 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Protocol
 
-from orchestrator.evaluation.contracts.models import Entity, Finding
-
-# Controlled event-class vocabulary mirrored from the contract. Duplicated as a
-# plain tuple so this layer needs no import that could smuggle in GT awareness.
-EVENT_CLASSES: tuple[str, ...] = (
-    "file_created",
-    "file_deleted",
-    "file_modified",
-    "process_exec",
-    "persistence_installed",
-    "network_connection",
-    "auth_login",
-    "log_tampering",
-    "history_cleared",
+from orchestrator.evaluation.contracts.models import (
+    EVENT_CLASSES,
+    FORENSIC_OPERATIONS,
+    Entity,
+    Finding,
 )
 
-# Forensic operation that produced a finding (mirrored as a plain tuple, like
-# EVENT_CLASSES, so the detect layer pulls in nothing GT-aware). Every detector
-# tags its findings with one of these so metrics can be sliced per operation.
-FORENSIC_OPERATIONS: tuple[str, ...] = (
-    "timeline",
-    "memory_analysis",
-    "string_search",
-    "deleted_file",
-    "content_scan",
-)
+# The controlled vocabularies (EVENT_CLASSES, FORENSIC_OPERATIONS) live in the
+# shared contract and are imported above; importing models here is safe because
+# it carries data shapes only, no ground-truth lookup.
 
-# Outcome of a single deleted-file recovery attempt (one level, one target).
+# Outcome of a single deleted-file recovery attempt (one level, one target). Kept
+# local because only the recovery channel uses it.
 RECOVERY_OUTCOMES: tuple[str, ...] = (
     "found",
     "not_found",

@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from orchestrator.evaluation.contracts.models import (
     EVENT_CLASSES,
-    ENTITY_TYPES,
     Entity,
     Finding,
     GtEvent,
@@ -18,7 +17,6 @@ from orchestrator.evaluation.contracts.models import (
 
 __all__ = [
     "EVENT_CLASSES",
-    "ENTITY_TYPES",
     "Entity",
     "Finding",
     "GtEvent",

@@ -32,7 +32,6 @@ from orchestrator.evaluation.metrics.compute import (
     write_metrics_csv,
     write_recovery_csv,
 )
-from orchestrator.evaluation.metrics.legacy import write_legacy_csv
 from orchestrator.evaluation.metrics.report import render_report, write_report
 
 _PKG_DIR = Path(__file__).resolve().parent
@@ -52,17 +51,13 @@ def build_rules_config(
 ) -> dict[str, Any]:
     rs = pipeline_cfg.get("rulesets", {})
     detect_cfg = pipeline_cfg.get("detect", {})
-    sigma_dirs = [
-        str((repo_root / d).resolve()) for d in rs.get("sigma_rule_dirs", [])
-    ]
-    # Vendored SigmaHQ subset for the plaso_sigma detector (defaults applied by
-    # the runner when not listed here).
+    # Vendored SigmaHQ Linux subset the plaso_sigma detector compiles + runs
+    # (default applied by the detector when not listed here).
     sigma_vendored = [
         str((repo_root / d).resolve())
         for d in rs.get("sigma_vendored_dirs", ["vendor/sigma/rules/linux"])
     ]
     cfg: dict[str, Any] = {
-        "sigma_rule_dirs": sigma_dirs,
         "sigma_vendored_dirs": sigma_vendored,
         "vol3": detect_cfg.get("vol3", {}),
     }
@@ -109,7 +104,6 @@ def _write_outputs(
     matches: Matches,
     out_dir: Path,
     *,
-    legacy: bool,
     matching_config_path: str | Path | None,
 ) -> MetricRow:
     validate_matches(matches.to_dict())
@@ -127,8 +121,6 @@ def _write_outputs(
         manifest, matches, findings, row=row, config_path=matching_config_path
     )
     write_report(report_text, out_dir / "report.md")
-    if legacy:
-        write_legacy_csv([row], out_dir / "metrics_legacy.csv")
     return row
 
 
@@ -140,7 +132,6 @@ def run_from_raw(
     pipeline_cfg: dict[str, Any] | None = None,
     matching_config_path: str | Path | None = None,
     case_window: dict[str, str] | None = None,
-    legacy: bool = False,
 ) -> MetricRow:
     out = Path(out_dir)
     pipeline_cfg = pipeline_cfg or load_pipeline_config()
@@ -163,7 +154,6 @@ def run_from_raw(
         findings,
         matches,
         out,
-        legacy=legacy,
         matching_config_path=matching_config_path,
     )
 
@@ -175,7 +165,6 @@ def run_score(
     *,
     matching_config_path: str | Path | None = None,
     ruleset_hash_value: str = "sha256:0",
-    legacy: bool = False,
 ) -> MetricRow:
     out = Path(out_dir)
     manifest = GtManifest.from_dict(load_gt_manifest(manifest_path))
@@ -191,6 +180,5 @@ def run_score(
         findings,
         matches,
         out,
-        legacy=legacy,
         matching_config_path=matching_config_path,
     )

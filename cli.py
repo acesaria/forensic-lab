@@ -114,7 +114,6 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     score.add_argument("--findings", required=True)
     score.add_argument("--out-dir", required=True)
     score.add_argument("--ruleset-hash", default="sha256:0")
-    score.add_argument("--legacy-csv", action="store_true")
 
     pipeline = sub.add_parser(
         "pipeline",
@@ -124,7 +123,6 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     pipeline.add_argument("--out-dir", default=None)
     pipeline.add_argument("--case-start", default=None, help="ISO-8601 UTC window start")
     pipeline.add_argument("--case-end", default=None, help="ISO-8601 UTC window end")
-    pipeline.add_argument("--legacy-csv", action="store_true")
 
     verify = sub.add_parser(
         "verify",
@@ -210,7 +208,6 @@ def _cmd_score(args: argparse.Namespace) -> int:
         args.findings,
         args.out_dir,
         ruleset_hash_value=args.ruleset_hash,
-        legacy=args.legacy_csv,
     )
     _print_metric_row(row)
     print(f"\nwrote matches.json + metrics.csv + report.md to {args.out_dir}")
@@ -244,7 +241,6 @@ def _cmd_pipeline(args: argparse.Namespace) -> int:
         raw,
         args.out_dir or run_dir,
         case_window=case_window,
-        legacy=args.legacy_csv,
     )
     _print_metric_row(row)
     print("\nwrote findings.jsonl + matches.json + metrics.csv + report.md")

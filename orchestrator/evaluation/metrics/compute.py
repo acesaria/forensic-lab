@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from dataclasses import dataclass
 from itertools import combinations
@@ -31,7 +30,6 @@ METRICS_COLS: tuple[str, ...] = (
     "precision",
     "f1",
     "order_pairwise",
-    "kendall_tau",
     "time_mae_s",
     "uniq_tsk",
     "uniq_plaso",
@@ -60,7 +58,7 @@ def _fmt(v: Any) -> str:
 
 
 def _timeline_tp(matches: Matches) -> list[dict[str, Any]]:
-    # TP rows that participate in order_pairwise / kendall_tau / time_mae: the
+    # TP rows that participate in order_pairwise / time_mae: the
     # primary must carry a wall-clock time AND be a timeline-operation finding.
     # memory_analysis primaries (and anything ts_quality != wallclock) carry no
     # reliable order and are excluded. primary_operation defaults to "timeline"
@@ -94,52 +92,6 @@ def order_pairwise(matches: Matches) -> float | None:
         elif (gt_diff > 0) == (rec_diff > 0):
             correct += 1
     return correct / total if total else None
-
-
-def kendall_tau(matches: Matches) -> float | None:
-    rows = _timeline_tp(matches)
-    if len(rows) < 2:
-        return None
-    gt = [parse_iso_utc(r["gt_ts_utc"]) for r in rows]
-    rec = [parse_iso_utc(r["primary_ts_utc"]) for r in rows]
-    try:
-        from scipy.stats import kendalltau
-
-        tau, _ = kendalltau(gt, rec)
-        return None if (tau is None or math.isnan(tau)) else float(tau)
-    except ImportError:
-        return _kendall_tau_b(gt, rec)
-
-
-def _kendall_tau_b(x: list[float], y: list[float]) -> float | None:
-    # Hand-rolled tau-b for when scipy is absent. Handles ties in either ranking.
-    n = len(x)
-    if n < 2:
-        return None
-    concordant = discordant = 0
-    ties_x = ties_y = 0
-    for i, j in combinations(range(n), 2):
-        dx = x[i] - x[j]
-        dy = y[i] - y[j]
-        if dx == 0 and dy == 0:
-            ties_x += 1
-            ties_y += 1
-            continue
-        if dx == 0:
-            ties_x += 1
-            continue
-        if dy == 0:
-            ties_y += 1
-            continue
-        if (dx > 0) == (dy > 0):
-            concordant += 1
-        else:
-            discordant += 1
-    n0 = n * (n - 1) / 2
-    denom = math.sqrt((n0 - ties_x) * (n0 - ties_y))
-    if denom == 0:
-        return None
-    return (concordant - discordant) / denom
 
 
 def time_mae_s(matches: Matches) -> float | None:
@@ -217,7 +169,6 @@ def compute_row(
             "precision": precision,
             "f1": f1,
             "order_pairwise": order_pairwise(matches),
-            "kendall_tau": kendall_tau(matches),
             "time_mae_s": time_mae_s(matches),
             "uniq_tsk": uniq["tsk"],
             "uniq_plaso": uniq["plaso"],

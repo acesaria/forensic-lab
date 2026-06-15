@@ -23,9 +23,8 @@ EVENT_CLASSES: tuple[str, ...] = (
     "history_cleared",
 )
 
-ENTITY_TYPES: tuple[str, ...] = ("path", "process", "user", "socket")
-
-TS_QUALITIES: tuple[str, ...] = ("wallclock", "relative", "none")
+# Entity types and ts_quality values are enforced by the JSON Schemas
+# (contracts/*.schema.json), which are the on-disk source of truth.
 
 # Forensic operation that produced a finding, so metrics can be sliced per
 # operation as well as per source_tool. A finding always carries exactly one.

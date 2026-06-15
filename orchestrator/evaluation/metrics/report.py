@@ -26,18 +26,19 @@ def _pct(v: float | None) -> str:
 def _recall_by_layer(
     manifest: GtManifest,
     findings: list[Finding],
+    matches: Matches,
     config: dict[str, Any] | None,
     config_path: str | Path | None,
 ) -> tuple[float | None, float | None]:
-    # Re-match with community-only findings vs all findings; report recall for
-    # each so the contribution of custom gap-filler rules is explicit.
+    # Community-vs-all recall, to show the contribution of custom gap-filler
+    # rules. The all-layer result is the matches we were already handed, so only
+    # the community-only view needs a re-match.
     from orchestrator.evaluation.match.matcher import match
 
     n = len(manifest.events) or 1
     community = [f for f in findings if f.rule_layer == "community"]
     m_comm = match(manifest, community, config=config, config_path=config_path)
-    m_all = match(manifest, findings, config=config, config_path=config_path)
-    return (len(m_comm.tp) / n, len(m_all.tp) / n)
+    return (len(m_comm.tp) / n, len(matches.tp) / n)
 
 
 def render_report(
@@ -55,7 +56,7 @@ def render_report(
     by_id = {f.finding_id: f for f in findings}
 
     comm_recall, all_recall = _recall_by_layer(
-        manifest, findings, config, config_path
+        manifest, findings, matches, config, config_path
     )
 
     order = v.get("order_pairwise")
@@ -88,7 +89,6 @@ def render_report(
     lines.append(f"| f1 | {_pct(f1)} | - |")
     lines.append(f"| supporting clusters (corroboration) | {supporting} | secondary |")
     lines.append(f"| order_pairwise | {_pct(order)} | - |")
-    lines.append(f"| kendall_tau | {_pct(v['kendall_tau'])} | - |")
     lines.append(f"| time_mae_s | {mae_str} | - |")
     lines.append(
         f"| f1 * order_pairwise (DERIVED) | {_pct(derived)} | "

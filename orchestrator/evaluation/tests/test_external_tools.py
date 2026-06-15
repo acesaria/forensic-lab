@@ -9,7 +9,7 @@ from orchestrator.evaluation.contracts.models import Finding, GtManifest
 from orchestrator.evaluation.contracts.validate import load_gt_manifest, validate_finding
 from orchestrator.evaluation.detect.bulk_extractor_strings import detect as be_detect
 from orchestrator.evaluation.detect.run import run_detection
-from orchestrator.evaluation.detect.sigma_vendored import detect as sigma_detect
+from orchestrator.evaluation.detect.plaso_sigma import detect as sigma_detect
 from orchestrator.evaluation.detect.yara_scan import detect as yara_detect
 from orchestrator.evaluation.match.matcher import match
 from orchestrator.evaluation.metrics.compute import compute_breakdown
@@ -50,9 +50,16 @@ def test_detectors_emit_expected_source_and_operation():
     raw = _raw()
     cfg = {"sigma_vendored_dirs": [str(sigma_runner.vendored_rules_dir())]}
 
-    s = list(sigma_detect(raw, cfg))
+    # Sigma over the timeline: a vendored file_event rule (TripleCross
+    # "ebpfbackdoor" persistence) compiles to SQL and fires on the matching
+    # filesystem row. The scenario's own /etc/ld.so.preload rule is a Sigma
+    # keyword rule, not expressible in SQL, so it is skipped (auditd; future work).
+    sigma_raw = {"plaso": [
+        {"timestamp": _G2_TS_US, "filename": "/etc/cron.d/ebpfbackdoor", "data_type": "fs:stat"},
+    ]}
+    s = list(sigma_detect(sigma_raw, cfg))
     assert s and all(f.source_tool == "plaso_sigma" and f.forensic_operation == "timeline" for f in s)
-    assert any(f.entity.value == "/etc/ld.so.preload" and f.technique == "T1574.006" for f in s)
+    assert any(f.entity.value == "/etc/cron.d/ebpfbackdoor" and f.technique == "T1053.003" for f in s)
 
     y = list(yara_detect(raw, cfg))
     assert y and all(f.source_tool == "yara" and f.forensic_operation == "content_scan" for f in y)
@@ -77,13 +84,13 @@ def test_buckets_nonzero_through_pipeline():
         (r.values["forensic_operation"], r.values["source_tool"], r.values["rule_layer"]): r.values
         for r in compute_breakdown(manifest, m, findings)
     }
-    # Each new (operation, source_tool) bucket is populated with true positives
-    # and no false positives (all findings land on a GT observable). Keyed with
-    # rule_layer "community" so the layer-agnostic FN aggregate row is distinct.
-    sigma = rows[("timeline", "plaso_sigma", "community")]
+    # YARA (content_scan) and bulk_extractor (string_search) land on scenario_01
+    # observables -> populated TP buckets, no false positives. The vendored Sigma
+    # rules do not cover scenario_01 on a filesystem-only timeline (its
+    # ld.so.preload rule is a keyword rule; auditd would add coverage), so
+    # plaso_sigma is exercised in test_detectors_emit..., not asserted here.
     yara = rows[("content_scan", "yara", "community")]
     be = rows[("string_search", "bulk_extractor", "community")]
-    assert sigma["tp"] >= 1 and sigma["fp"] == 0 and sigma["precision"] == 1.0
     assert yara["tp"] >= 1 and yara["fp"] == 0 and yara["precision"] == 1.0
     assert be["tp"] >= 1 and be["fp"] == 0 and be["precision"] == 1.0
 

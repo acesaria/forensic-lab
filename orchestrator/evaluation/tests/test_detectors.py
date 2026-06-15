@@ -1,15 +1,12 @@
 # GT-blind detector unit tests over crafted raw outputs (no live tools needed).
 
-from pathlib import Path
+import textwrap
 
 from orchestrator.evaluation.detect import tsk_heuristics, vol3_heuristics
 from orchestrator.evaluation.detect.plaso_sigma import detect as sigma_detect
 from orchestrator.evaluation.detect.run import run_detection
 
 _RULE_CFG = {
-    "sigma_rule_dirs": [
-        str(Path(__file__).resolve().parent.parent / "config" / "rules" / "custom")
-    ],
     "vol3": {"private_ranges": ["192.168.100.0/24"]},
 }
 
@@ -106,18 +103,63 @@ def test_tsk_temp_exec_skips_directories():
     assert {f.entity.value for f in created} == {"/tmp/payload"}
 
 
-def test_sigma_process_rule_skips_filestat():
-    # A process_creation rule must not fire on a filesystem-metadata event.
+def test_sigma_file_event_rule_fires():
+    # A vendored file_event rule (TripleCross "ebpfbackdoor") compiles to SQL and
+    # fires on the matching filesystem-metadata row.
+    events = [{"timestamp": 1700000000_000000, "data_type": "fs:stat",
+               "filename": "/etc/cron.d/ebpfbackdoor"}]
+    findings = list(sigma_detect({"plaso": events}, {}))
+    assert findings
+    f = findings[0]
+    assert f.source_tool == "plaso_sigma" and f.rule_layer == "community"
+    assert f.event_class == "file_created" and f.entity.value == "/etc/cron.d/ebpfbackdoor"
+    assert f.technique == "T1053.003"
+
+
+def test_sigma_keyword_rule_fires_via_fts():
+    # Sigma full-text "keyword" rules cannot be expressed by the SQL backend, so
+    # the detector evaluates them with SQLite FTS5 over the event text. The
+    # vendored ld.so.preload rule (keyword /etc/ld.so.preload, T1574.006) fires,
+    # and the entity is the IOC path itself -- even when matched in a log line.
     events = [
-        {"timestamp": 1700000000_000000, "data_type": "fs:stat", "parser": "filestat",
-         "filename": "/tmp/.ICE-unix", "message": "EXT:/tmp/.ICE-unix Type: directory"},
-        {"timestamp": 1700000001_000000, "executable": "/tmp/payload", "message": "ran /tmp/payload"},
+        {"timestamp": 1700000000_000000, "data_type": "fs:stat",
+         "filename": "/etc/ld.so.preload"},
+        {"timestamp": 1700000001_000000, "data_type": "syslog:line",
+         "filename": "/var/log/auth.log",
+         "message": "sudo: sh -c echo x > /etc/ld.so.preload"},
     ]
-    raw = {"plaso": events}
-    findings = [f for f in sigma_detect(raw, _RULE_CFG) if f.detector == "sigma:lnx_tmp_exec"]
-    assert {str(f.entity.value) for f in findings} == {"/tmp/payload"} or all(
-        ".ICE-unix" not in str(f.entity.value) for f in findings
-    )
+    findings = list(sigma_detect({"plaso": events}, {}))
+    preload = [f for f in findings if f.entity.value == "/etc/ld.so.preload"]
+    assert preload, "ld.so.preload keyword rule should fire via FTS5"
+    f = preload[0]
+    assert f.source_tool == "plaso_sigma" and f.entity.type == "path"
+    assert f.event_class == "file_created" and f.technique == "T1574.006"
+    # The log-line mention maps to the IOC, not to /var/log/auth.log.
+    assert all(f2.entity.value != "/var/log/auth.log" for f2 in findings)
+
+
+def test_sigma_gate_skips_filestat_for_process_rule(tmp_path):
+    # A process_creation rule must not fire on a bare filesystem-metadata row (a
+    # file existing under /tmp is not proof it executed); it may fire on a real
+    # execution event. Uses a throwaway rule dir so the test is self-contained.
+    (tmp_path / "proc.yml").write_text(textwrap.dedent("""
+        title: Temp Exec
+        id: 00000000-0000-0000-0000-000000000001
+        status: test
+        logsource: {product: linux, category: process_creation}
+        detection:
+          sel: {Image|startswith: '/tmp/'}
+          condition: sel
+        tags: [attack.t1059.004]
+    """).strip(), encoding="utf-8")
+    events = [
+        {"timestamp": 1700000000_000000, "data_type": "fs:stat", "filename": "/tmp/payload"},
+        {"timestamp": 1700000001_000000, "executable": "/tmp/payload"},
+    ]
+    cfg = {"sigma_vendored_dirs": [str(tmp_path)]}
+    refs = {f.raw_ref for f in sigma_detect({"plaso": events}, cfg)}
+    assert "plaso_sigma:event:1" in refs  # real execution fired
+    assert "plaso_sigma:event:0" not in refs  # filestat row gated out
 
 
 def test_tsk_deleted_and_persistence():
@@ -178,18 +220,6 @@ def test_tsk_timestamp_anomaly():
         if f.detector == "tsk:timestamp_anomaly"
     ]
     assert len(anomalies) == 1
-
-
-def test_sigma_custom_tmp_exec_fires():
-    events = [
-        {"timestamp": 1700000000_000000, "executable": "/tmp/payload", "message": "ran /tmp/payload"},
-        {"timestamp": 1700000001_000000, "executable": "/usr/bin/ls", "message": "ran ls"},
-    ]
-    raw = {"plaso": events}
-    findings = [f for f in sigma_detect(raw, _RULE_CFG) if f.detector == "sigma:lnx_tmp_exec"]
-    assert len(findings) == 1
-    assert findings[0].rule_layer == "custom"
-    assert "/tmp/payload" in str(findings[0].entity.value)
 
 
 def test_run_detection_assigns_sorted_ids():

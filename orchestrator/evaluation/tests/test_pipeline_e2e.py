@@ -55,13 +55,12 @@ def test_run_from_raw_writes_metrics(tmp_path: Path):
     }
     case_window = {"start": "2026-06-10T09:00:00.000Z", "end": "2026-06-10T11:00:00.000Z"}
     row = run_from_raw(
-        _manifest(), raw, tmp_path, case_window=case_window, legacy=True
+        _manifest(), raw, tmp_path, case_window=case_window
     )
-    # findings, matches, metrics, report, legacy all written.
+    # findings, matches, metrics, report all written.
     assert (tmp_path / "findings.jsonl").is_file()
     assert (tmp_path / "matches.json").is_file()
     assert (tmp_path / "report.md").is_file()
-    assert (tmp_path / "metrics_legacy.csv").is_file()
 
     metrics_csv = tmp_path / "metrics.csv"
     assert metrics_csv.is_file()
