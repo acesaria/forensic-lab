@@ -65,25 +65,22 @@ from orchestrator.attacks.helpers import (
 )
 from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
-from orchestrator.evaluation.contracts.models import Observable
 from orchestrator.evaluation.scenario.scenario_01 import (
-    discovery_observables,
-    ldpreload_persistence_observables,
-    ldpreload_so_observables,
-    ldpreload_triggered_observables,
-    reverse_shell_fifo_observables,
-    reverse_shell_socket_observables,
+    EVENTS_BY_STEP,
+    PRELOAD_PATH,
+    RS_FIFO,
+    RS_PORT,
+    EventCtx,
+    record_event,
 )
 
 # --- planted artifact locators -------------------------------------------
 # What the attack plants on disk / in memory. The ART-driven paths (the .so, its
 # .c source, the discovery output) are read from the atomic at run() time via
-# runner.resolve_arg, so the test owns them. PRELOAD_PATH is the intrinsic
-# mechanism of T1574.006 (hardcoded in the atomic's command, not an argument), and
-# the reverse-shell fifo/port are custom (not ART), so they stay constants here.
-PRELOAD_PATH = "/etc/ld.so.preload"
-RS_FIFO = "/tmp/.rs_fifo"
-RS_PORT = 4444
+# runner.resolve_arg, so the test owns them. PRELOAD_PATH (the intrinsic mechanism
+# of T1574.006, hardcoded in the atomic's command) and the custom reverse-shell
+# fifo/port are not ART-derived; they come from scenario_01 (the GT layer) so the
+# attack and the calibration manifest share one source of truth.
 
 # --- ART step descriptors -----------------------------------------------
 
@@ -162,9 +159,22 @@ def run(
     # it. Record the step so the evaluator scores it: ground_truth must mirror
     # the spec step names exactly. Best-effort (no raise_on_error): a discovery
     # failure should not abort the attack.
-    def _record(**kwargs: Any) -> None:
+    # The live GT shares its event skeleton with the calibration manifest: build
+    # the per-run context once (resolved/randomized locators) and record each
+    # event from EVENTS_BY_STEP at the moment its step executes, so the timestamps
+    # stay wall-clock. record_event with ts_utc unset stamps the current time.
+    ctx = EventCtx(
+        cleanup=run_cleanup,
+        discovery_output=discovery_output,
+        so_path=so_path,
+        src_path=so_source,
+        socket_value=f"{host_ip}:{port}",
+        fifo=fifo,
+    )
+
+    def _record(step: str) -> None:
         if gt_builder is not None:
-            gt_builder.record(**kwargs)
+            record_event(gt_builder, EVENTS_BY_STEP[step], ctx)
 
     try:
         console.step_header("[1/4] discovery")
@@ -172,94 +182,32 @@ def run(
         discovery["locators"] = {"output_path": discovery_output}
         steps.append(discovery)
         art_tests.append(_DISCOVERY)
-        _record(
-            technique="T1082",
-            event_class="file_created",
-            entity_type="path",
-            entity_value=discovery_output,
-            expected_sources=["disk_fs"],
-            observables=discovery_observables(discovery_output, cleanup=run_cleanup),
-        )
+        _record("E1_discovery_os_info")
 
         console.step_header("[2/4] LD_PRELOAD infection")
         ldpreload = _step(_LDPRELOAD, raise_on_error=True)
         ldpreload["locators"] = {"so_path": so_path, "preload_path": PRELOAD_PATH}
         steps.append(ldpreload)
         art_tests.append(_LDPRELOAD)
-        _record(
-            technique="T1574.006",
-            event_class="persistence_installed",
-            entity_type="path",
-            entity_value=PRELOAD_PATH,
-            expected_sources=["disk_fs", "disk_logs"],
-            observables=ldpreload_persistence_observables(
-                PRELOAD_PATH, so_path, cleanup=run_cleanup
-            ),
-        )
-        _record(
-            technique="T1574.006",
-            event_class="file_created",
-            entity_type="path",
-            entity_value=so_path,
-            expected_sources=["disk_fs", "memory"],
-            observables=ldpreload_so_observables(so_path, so_source, cleanup=run_cleanup),
-        )
+        _record("E2_ldpreload_persistence")
+        _record("E2_ldpreload_payload")
 
         console.step_header("[3/4] LD_PRELOAD hook trigger")
         steps.append(_trigger_hook(ssh))
-        _record(
-            technique="T1574.006",
-            event_class="process_exec",
-            entity_type="path",
-            entity_value=so_path,
-            expected_sources=["memory"],
-            observables=ldpreload_triggered_observables(so_path, cleanup=run_cleanup),
-        )
+        _record("E3_ldpreload_triggered")
 
         console.step_header("[4/4] reverse shell")
         # keep_open=True leaves the socket ESTABLISHED with nc resident through
         # memory acquisition, so linux.sockstat recovers it (sockscan still backs
         # up the post-mortem CLOSE case when run with keep_open=False).
         run_reverse_shell(ssh, host_ip, steps, port=port, fifo=fifo, keep_open=True)
-        _record(
-            technique="T1059.004",
-            event_class="network_connection",
-            entity_type="socket",
-            entity_value=f"{host_ip}:{port}",
-            expected_sources=["memory"],
-            observables=reverse_shell_socket_observables(
-                f"{host_ip}:{port}", cleanup=run_cleanup
-            ),
-        )
-        _record(
-            technique="T1059.004",
-            event_class="file_created",
-            entity_type="path",
-            entity_value=fifo,
-            expected_sources=["disk_fs"],
-            observables=reverse_shell_fifo_observables(fifo, cleanup=run_cleanup),
-        )
+        _record("E4_reverse_shell")
+        _record("E4_reverse_shell_fifo")
 
         if run_cleanup:
             console.step_header("cleanup")
             _run_cleanups(runner, art_tests, steps, executor=ssh.run_shell)
-            _record(
-                technique="T1070.004",
-                event_class="file_deleted",
-                entity_type="path",
-                entity_value=discovery_output,
-                expected_sources=["disk_fs"],
-                # The deletion itself is observable as a recoverable tombstone
-                # (deleted-inode recovery), a different locus than the live file.
-                observables=[
-                    Observable(
-                        operation="deleted_file",
-                        source_tool="tsk",
-                        entity_type="path",
-                        entity_value=discovery_output,
-                    )
-                ],
-            )
+            _record("E5_discovery_deleted")
         else:
             # No cleanup step recorded: with run_cleanup=False the cleanup-phase
             # specs have nothing to match, so ground_truth carries only the attack
