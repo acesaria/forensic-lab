@@ -1,2 +1,0 @@
-Scenario,Cleanup,Distro,Found/Tot,DR%,QoR,Order,Active tools
-scenario_01_ldpreload,No,ubuntu-22.04,6/6,100.0,High,OK,"plaso, tsk, vol3"

@@ -56,4 +56,7 @@ shared/isf/
 forensics_report.json
 TODO.md
 
+shared/experiments/
+
 *.bak
+shared/experiments/ubuntu-22.04_scenario_01_ldpreload_20260615-200322/dumps/ground_truth.json
