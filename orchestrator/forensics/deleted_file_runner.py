@@ -125,9 +125,10 @@ def _run_tsk_recover(image_path: Path, partition_info: dict[str, Any], out: Path
         return None, "tsk_recover not installed"
     out.mkdir(parents=True, exist_ok=True)
     cmd = ["tsk_recover", "-e"]  # -e: every file, allocated + unallocated
-    offset = int(partition_info.get("offset_sectors") or 0)
-    if offset:
-        cmd += ["-o", str(offset)]
+    # partition_info carries a BYTE offset; tsk_recover -o is in sectors.
+    offset_sectors = int(partition_info.get("offset_bytes") or 0) // 512
+    if offset_sectors:
+        cmd += ["-o", str(offset_sectors)]
     cmd += [str(image_path), str(out)]
     return _run(cmd, out)
 

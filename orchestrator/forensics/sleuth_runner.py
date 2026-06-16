@@ -73,6 +73,12 @@ class SleuthKitRunner:
         console.ok(f"disk probe passed: filesystem readable ({disk_path.name})")
 
     def partition_offset(self, disk_path: Path) -> int:
+        # Byte offset of the first Linux (ext2/3/4) filesystem in the image,
+        # located by walking the mmls partition table in order and probing each
+        # slot with fsstat. Thesis simplification (documented): ext-focused, we
+        # take the FIRST ext partition and do not handle multi-Linux-partition
+        # layouts. Shared by the tsk extractor and the deleted-file recovery so
+        # they always target the same partition.
         cmd = [self._mmls_bin, *_image_type_flag(disk_path), str(disk_path)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -81,41 +87,25 @@ class SleuthKitRunner:
                 f"{result.stderr.strip() or '(no output)'}"
             )
 
-        best_start: int | None = None
-        best_length: int = -1
         for line in result.stdout.splitlines():
             parts = line.split()
-            # mmls output rows: Slot Start End Length Description
-            # Skip header lines and meta/unallocated rows.
+            # mmls rows: Slot Start End Length Description. Skip headers and
+            # meta/unallocated rows (slot "Meta" or "---"); real slots are numeric.
             if len(parts) < 4:
                 continue
-            slot = parts[1]
-            # Unallocated rows have "---" in slot; meta rows have "Meta".
-            # Real partition slots are numeric (DOS: "00", GPT: "000", "013"...).
-            if not slot.replace("-", "").isdigit():
+            if not parts[1].replace("-", "").isdigit():
                 continue
             try:
                 start = int(parts[2])
-                length = int(parts[4])
             except (ValueError, IndexError):
                 continue
-            # Pick the partition with the largest sector count -- that is the root fs.
-            if length > best_length:
-                best_length = length
-                best_start = start
+            offset = start * 512
+            if self._verify_partition(disk_path, offset):  # fsstat says ext?
+                return offset
 
-        if best_start is None:
-            raise RuntimeError(
-                f"no usable partition found in mmls output for {disk_path.name}"
-            )
-
-        offset = best_start * 512
-        if not self._verify_partition(disk_path, offset):
-            raise RuntimeError(
-                f"selected partition at sector {best_start} does not appear to be "
-                f"ext2/3/4 (fsstat check failed) for {disk_path.name}"
-            )
-        return offset
+        raise RuntimeError(
+            f"no ext2/3/4 partition found in mmls output for {disk_path.name}"
+        )
 
     def fls(self, disk_path: Path, offset: int, flags: str = "-r -l") -> list[str]:
         # fls expects -o in sectors, while callers carry offsets in bytes.

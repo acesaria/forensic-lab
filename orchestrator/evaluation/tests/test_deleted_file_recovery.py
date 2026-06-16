@@ -13,7 +13,7 @@ from orchestrator.forensics import deleted_file_runner as dfr
 
 _PARTITION = {
     "fs_type": "ext4",
-    "offset_sectors": 0,
+    "offset_bytes": 0,
     "is_tmpfs": False,
     "tmpfs_mounts": ["/tmp", "/dev/shm", "/run"],
 }

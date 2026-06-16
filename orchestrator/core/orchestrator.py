@@ -503,14 +503,15 @@ class ForensicOrchestrator:
     def _partition_info(self, distro_id: str, disk_path: Path) -> dict[str, Any]:
         # Filesystem context for the recovery runner. fs_type gates ext4magic;
         # tmpfs_mounts mark volatile paths (deletions there are unrecoverable).
-        # offset_sectors locates the partition for tsk_recover; best-effort.
+        # offset_bytes (from partition_offset) locates the ext partition for
+        # tsk_recover; best-effort.
         try:
             offset = self._sleuth_runner.partition_offset(disk_path)
         except Exception:
             offset = 0
         return {
             "fs_type": self._role_defaults.get("root_fs_type", "ext4"),
-            "offset_sectors": offset,
+            "offset_bytes": offset,
             "is_tmpfs": False,
             # Only genuinely volatile mounts. On Ubuntu 22.04 cloud images /tmp is
             # disk-backed ext4 (NOT tmpfs), so deletions there ARE recoverable;
