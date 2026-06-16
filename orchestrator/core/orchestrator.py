@@ -512,8 +512,12 @@ class ForensicOrchestrator:
             "fs_type": self._role_defaults.get("root_fs_type", "ext4"),
             "offset_sectors": offset,
             "is_tmpfs": False,
+            # Only genuinely volatile mounts. On Ubuntu 22.04 cloud images /tmp is
+            # disk-backed ext4 (NOT tmpfs), so deletions there ARE recoverable;
+            # listing /tmp here wrongly made the recovery skip /tmp targets as
+            # unsupported_fs (the scenario_01 cleanup G1/G7 false negatives).
             "tmpfs_mounts": self._role_defaults.get(
-                "tmpfs_mounts", ["/tmp", "/dev/shm", "/run"]
+                "tmpfs_mounts", ["/dev/shm", "/run"]
             ),
         }
 
