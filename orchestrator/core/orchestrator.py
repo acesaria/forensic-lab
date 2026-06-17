@@ -25,10 +25,8 @@ VM power-state contract
 prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM destroyed)
 _reset_lab         ends ON + SSH ready
-_run_acquisition   end state depends on mode: "offline" -> OFF,
-                   "external_snapshot" -> ON (guest never stopped)
-run_experiment     mirrors _run_acquisition when acquire=True; ends ON when
-                   acquire=False
+_run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
+run_experiment     ends OFF when acquire=True; ends ON when acquire=False
 """
 
 from datetime import datetime
@@ -55,10 +53,6 @@ from orchestrator.core.vm_manager import VMManager
 from orchestrator.attacks import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
-from orchestrator.forensics.dumper import (
-    ImageMetadata,
-    normalize_disk_acquisition_mode,
-)
 from orchestrator.forensics.plaso_runner import (
     default_linux_filter,
     read_timeline,
@@ -191,10 +185,9 @@ class ForensicOrchestrator:
         3. Acquire RAM + disk (unless acquire=False)
         4. Detect IOCs + score per-step metrics (unless evaluate=False)
 
-        End VM state mirrors the acquisition mode: "offline" leaves the
-        VM OFF, "external_snapshot" leaves it ON. When acquire=False the
-        VM is left ON. Evaluation needs the acquired images, so it only
-        runs when acquire is True.
+        The VM ends OFF after acquisition (host-side disk acquisition needs it
+        powered down). When acquire=False the VM is left ON. Evaluation needs the
+        acquired images, so it only runs when acquire is True.
         Returns manifest path if acquired, else None.
         """
         console.section(f"experiment: {scenario_id} on {distro_id}")
@@ -227,12 +220,7 @@ class ForensicOrchestrator:
             gt_manifest_path = self._persist_gt_manifest(run_id, gt_builder)
 
         if acquire:
-            manifest_path = self._run_acquisition(
-                vm_name,
-                run_id,
-                scenario_id,
-                disk_acquisition_mode="offline",
-            )
+            manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
             if evaluate:
                 self._evaluate_run_framework(
                     run_id, scenario_id, distro_id, gt_manifest_path, manifest_path
@@ -417,13 +405,14 @@ class ForensicOrchestrator:
             # Escalating deleted-file recovery. Targets are the GT deleted_file
             # observables, passed as plain dicts so the runner stays GT-blind.
             analysis_dir = self._paths.run_analysis_dir(run_id)
+            case_window = self._case_window(gt)
             recovery_versions: dict[str, Any] = {}
             targets = self._deleted_file_targets(gt)
             if targets:
                 try:
                     payload = deleted_file_runner.run(
                         disk_path,
-                        self._partition_info(distro_id, disk_path),
+                        self._partition_info(distro_id, disk_path, case_window),
                         targets,
                         analysis_dir / "deleted_file",
                         run_id,
@@ -433,7 +422,6 @@ class ForensicOrchestrator:
                 except Exception as exc:
                     console.warn(f"deleted-file recovery degraded: {exc}")
 
-            case_window = self._case_window(gt)
             row = run_from_raw(
                 gt,
                 raw_outputs,
@@ -500,18 +488,40 @@ class ForensicOrchestrator:
                     )
         return targets
 
-    def _partition_info(self, distro_id: str, disk_path: Path) -> dict[str, Any]:
+    def _partition_info(
+        self,
+        distro_id: str,
+        disk_path: Path,
+        case_window: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
         # Filesystem context for the recovery runner. fs_type gates ext4magic;
         # tmpfs_mounts mark volatile paths (deletions there are unrecoverable).
-        # offset_bytes (from partition_offset) locates the ext partition for
-        # tsk_recover; best-effort.
+        # offset_bytes locates the ext partition for tsk_recover (start-only);
+        # part_start_sector/part_count_sectors additionally let the runner carve
+        # the exact ext partition (dd skip/count) into a raw image for ext4magic,
+        # which cannot read the whole-disk E01. All best-effort.
+        from orchestrator.forensics.timeutil import parse_iso_utc
+
         try:
-            offset = self._sleuth_runner.partition_offset(disk_path)
+            start_sector, count_sectors = self._sleuth_runner.partition_extent(disk_path)
         except Exception:
-            offset = 0
+            start_sector, count_sectors = 0, 0
+        # ext4magic -a/-b bound the journal scan to the case window (unix epoch
+        # seconds), reusing the same padded span the tsk heuristic uses.
+        window_start = window_end = None
+        if case_window:
+            try:
+                window_start = int(parse_iso_utc(case_window["start"]))
+                window_end = int(parse_iso_utc(case_window["end"]))
+            except Exception:
+                window_start = window_end = None
         return {
             "fs_type": self._role_defaults.get("root_fs_type", "ext4"),
-            "offset_bytes": offset,
+            "offset_bytes": start_sector * 512,
+            "part_start_sector": start_sector,
+            "part_count_sectors": count_sectors,
+            "window_start_epoch": window_start,
+            "window_end_epoch": window_end,
             "is_tmpfs": False,
             # Only genuinely volatile mounts. On Ubuntu 22.04 cloud images /tmp is
             # disk-backed ext4 (NOT tmpfs), so deletions there ARE recoverable;
@@ -526,7 +536,7 @@ class ForensicOrchestrator:
         self, run_id: str, analysis_dir: Path, tool_versions: dict[str, Any]
     ) -> None:
         # Record the recovery tool versions actually used in provenance.json so the
-        # run is reproducible (which of tsk_recover/ext4magic/scalpel/photorec ran).
+        # run is reproducible (which of tsk_recover/ext4magic ran).
         if not tool_versions:
             return
         try:
@@ -711,19 +721,11 @@ class ForensicOrchestrator:
         vm_name: str,
         run_id: str,
         scenario_id: str,
-        disk_acquisition_mode: str = "offline",
     ) -> str:
         """
-        Acquire memory (VM ON) then disk via the chosen workflow:
-          - "offline":           shut down VM, then host-side acquire qcow2.
-          - "external_snapshot": take a live external disk snapshot so writes
-                                 divert to an overlay, host-side acquire the
-                                 quiesced base, then blockcommit + pivot.
-
-        Returns manifest path. The canonical mode label is recorded in the
-        manifest under disk_acquisition_mode.
+        Acquire memory (VM ON), then shut the guest down and acquire its disk
+        host-side from the released qcow2. Returns the manifest path.
         """
-        mode = normalize_disk_acquisition_mode(disk_acquisition_mode)
         vm_disk_path = self.vm_manager.get_disk_path(vm_name)
 
         run_dir = self.dumper.run_dir(run_id)
@@ -732,82 +734,15 @@ class ForensicOrchestrator:
 
         console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)
-        disk_meta = self._acquire_disk_for_mode(
-            vm_name, vm_disk_path, disk_dump_path, mode
-        )
+        # qemu-img convert needs the qcow2 not held by QEMU; a clean guest
+        # shutdown is the simplest way to release the lock.
+        console.step(f"acquiring disk from '{vm_name}'...")
+        self.vm_manager.shutdown_vm(vm_name)
+        disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
 
         console.section_end()
 
-        return self.dumper.write_manifest(
-            run_id,
-            scenario_id,
-            memory_meta,
-            disk_meta,
-            disk_acquisition_mode=mode,
-        )
-
-    def _acquire_disk_for_mode(
-        self,
-        vm_name: str,
-        vm_disk_path: Path,
-        dump_path: Path,
-        mode: str,
-    ) -> ImageMetadata:
-        # Mode dispatch lives here, not in the dumper: VM lifecycle and
-        # snapshot prepare/finalize are orchestration concerns, while the
-        # dumper is pure host-side I/O.
-        console.step(f"acquiring disk from '{vm_name} (mode={mode})'...")
-
-        if mode == "offline":
-            # qemu-img convert needs the qcow2 not held by QEMU; a clean
-            # guest shutdown is the simplest way to release the lock.
-            self.vm_manager.shutdown_vm(vm_name)
-            return self.dumper.acquire_disk(vm_disk_path, dump_path)
-
-        if mode == "external_snapshot":
-            # Live external disk snapshot diverts guest writes to an overlay,
-            # leaving the VM disk stable for host-side acquisition without the
-            # shutdown noise that would otherwise alter guest-visible artifacts.
-            overlay_path = vm_disk_path.parent / (
-                f"{vm_name}-acq-{int(datetime.now().timestamp())}.overlay.qcow2"
-            )
-
-            self.vm_manager.prepare_disk_acquisition_external(vm_name, overlay_path)
-
-            acq_exc: BaseException | None = None
-            disk_meta: ImageMetadata | None = None
-
-            try:
-                disk_meta = self.dumper.acquire_disk(vm_disk_path, dump_path)
-            except BaseException as exc:
-                acq_exc = exc
-
-            try:
-                self.vm_manager.finalize_disk_acquisition_external(
-                    vm_name, overlay_path
-                )
-            except Exception as fin_exc:
-                if acq_exc is not None:
-                    raise RuntimeError(
-                        "disk acquisition failed AND snapshot finalize failed; "
-                        "qcow2 chain needs manual cleanup.\n"
-                        f"  acquisition: {acq_exc}\n"
-                        f"  finalize:    {fin_exc}\n"
-                        f"  overlay:     {overlay_path}"
-                    ) from acq_exc
-                raise RuntimeError(
-                    "disk acquisition succeeded but snapshot finalize failed; "
-                    "qcow2 chain may need manual cleanup.\n"
-                    f"  overlay: {overlay_path}"
-                ) from fin_exc
-
-            if acq_exc is not None:
-                raise acq_exc
-
-            assert disk_meta is not None
-            return disk_meta
-
-        raise ValueError(f"unknown disk acquisition mode: {mode!r}")
+        return self.dumper.write_manifest(run_id, scenario_id, memory_meta, disk_meta)
 
 
 # --- module helpers ------------------------------------------------------
