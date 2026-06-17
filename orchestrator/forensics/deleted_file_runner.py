@@ -1,11 +1,13 @@
 # orchestrator/forensics/deleted_file_runner.py
 #
 # Escalating deleted-file recovery for the "deleted_file" forensic operation.
-# Three successive levels, stopping per target as soon as it is recovered:
+# Two successive levels, stopping per target as soon as it is recovered:
 #
 #   Level 1  tsk_recover  metadata-based, safe, any supported FS
 #   Level 2  ext4magic    journal-based, ext4 only (supersedes extundelete)
-#   Level 3  photorec/scalpel  signature carving, last resort, high FP rate
+#
+# Signature carving (photorec/scalpel) was deliberately dropped: it cannot name
+# what it recovers and its precision is too unreliable to justify here.
 #
 # Pure tool I/O: runs the binaries, walks their output, and decides a per-target
 # per-level OUTCOME (found / not_found / not_applicable / tool_error). It returns
@@ -32,16 +34,10 @@ TMPFS_NOTE = (
     "tmpfs has no persistent journal; tsk_recover and journal-based tools cannot "
     "recover tmpfs deletions"
 )
-CARVE_NOTE = (
-    "signature-based carving produces many false positives; treat hits as "
-    "candidate evidence only"
-)
 
 _VERSION_PROBES: dict[str, list[str]] = {
     "tsk_recover": ["tsk_recover", "-V"],
     "ext4magic": ["ext4magic", "-V"],  # -V prints "ext4magic  version : 0.3.2"
-    "photorec": ["photorec", "/version"],
-    "scalpel": ["scalpel", "-V"],
 }
 
 
@@ -102,21 +98,6 @@ def _match_target_in_dir(target_path: str, root: Path) -> str | None:
     return fallback
 
 
-def _match_carved(target_path: str, root: Path) -> str | None:
-    # Level 3 carving loses names: match by file extension (a carved file of the
-    # target's type is a candidate). No extension -> any carved file is a weak
-    # candidate. This is deliberately permissive; high_fp_risk flags the caveat.
-    base = target_path.rsplit("/", 1)[-1]
-    ext = base.rsplit(".", 1)[-1].lower() if "." in base else ""
-    first: str | None = None
-    for p in _iter_files(root):
-        if first is None:
-            first = str(p)
-        if ext and p.suffix.lower().lstrip(".") == ext:
-            return str(p)
-    return None if ext else first
-
-
 # --- level executors (best-effort; return (recovered_root, error)) -------------
 
 
@@ -133,26 +114,100 @@ def _run_tsk_recover(image_path: Path, partition_info: dict[str, Any], out: Path
     return _run(cmd, out)
 
 
-def _run_ext4magic(image_path: Path, partition_info: dict[str, Any], out: Path) -> tuple[Path | None, str | None]:
+def _prepare_partition_raw(
+    image_path: Path, partition_info: dict[str, Any], work_dir: Path
+) -> tuple[Path | None, str | None]:
+    # ext4magic reads neither EWF/E01 nor a whole-disk image and has no
+    # partition-offset option, so it needs a RAW image of the ext4 partition
+    # ALONE. We keep the full E01 as the canonical artifact (TSK/plaso/etc) and
+    # derive a partition raw just for ext4magic:
+    #   ewfexport full E01 -> disk.raw  (-t - => single deterministic file,
+    #                                     sidestepping the 1.4 GiB segment split)
+    #   dd bs=512 skip=<start> count=<count> disk.raw -> disk_part.raw
+    # The journal travels inside the partition, so no external -j is needed.
+    # TODO(live-acq): when acquiring from inside the running VM over SSH
+    # (dcfldd | nc, see core/ssh_client.run), the receiver can write this
+    # partition raw directly and the ewfexport step becomes a no-op.
+    start = partition_info.get("part_start_sector")
+    if start is None:
+        start = int(partition_info.get("offset_bytes") or 0) // 512
+    count = partition_info.get("part_count_sectors")
+    if not count:
+        return None, "partition sector count unavailable; cannot carve ext4 partition for ext4magic"
+
+    work_dir.mkdir(parents=True, exist_ok=True)
+    part_raw = work_dir / "disk_part.raw"
+
+    if image_path.suffix.lower() in (".raw", ".dd", ".img"):
+        disk_raw = image_path  # already raw (e.g. a future live-acquired image)
+    else:
+        if _which("ewfexport") is None:
+            return None, "ewfexport not installed"
+        disk_raw = work_dir / "disk.raw"
+        _log.info("ext4magic prep: ewfexport %s -> %s (raw)", image_path.name, disk_raw.name)
+        try:
+            with disk_raw.open("wb") as fh:
+                res = subprocess.run(
+                    ["ewfexport", "-u", "-q", "-f", "raw", "-t", "-", str(image_path)],
+                    stdout=fh, stderr=subprocess.PIPE,
+                )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return None, f"ewfexport failed to execute: {exc}"
+        if res.returncode != 0:
+            return None, f"ewfexport exit {res.returncode}: {res.stderr.decode(errors='replace').strip() or '(no output)'}"
+
+    dd_cmd = [
+        "dd", f"if={disk_raw}", f"of={part_raw}",
+        "bs=512", f"skip={start}", f"count={count}", "conv=sparse",
+    ]
+    _log.info("ext4magic prep: %s", " ".join(dd_cmd))
+    try:
+        dd = subprocess.run(dd_cmd, capture_output=True, text=True)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"dd failed to execute: {exc}"
+    if dd.returncode != 0:
+        return None, f"dd partition extract exit {dd.returncode}: {dd.stderr.strip() or '(no output)'}"
+    _log.info("ext4magic prep: ext4 partition raw ready (%s, %s sectors @ %s)", part_raw.name, count, start)
+    return part_raw, None
+
+
+def _ext4magic_window(partition_info: dict[str, Any]) -> list[str]:
+    # -a/-b bound the journal scan to the case window (unix epoch seconds).
+    # Default -a 1 (everything after epoch) when no window is supplied; -b omitted.
+    start = partition_info.get("window_start_epoch")
+    end = partition_info.get("window_end_epoch")
+    flags = ["-a", str(int(start)) if start else "1"]
+    if end:
+        flags += ["-b", str(int(end))]
+    return flags
+
+
+def _run_ext4magic(
+    part_raw: Path, partition_info: dict[str, Any], relpath: str, out: Path
+) -> tuple[str | None, str | None]:
+    # Two stages on the ext4 partition raw: list (diagnostic, non-fatal) then
+    # recover. -f takes a filesystem-relative path (tmp/T1082.txt, no leading
+    # slash). Returns (recovered_path | None, error).
     if _which("ext4magic") is None:
         return None, "ext4magic not installed"
     out.mkdir(parents=True, exist_ok=True)
-    # -a 1: recover everything changed after epoch; -r: restore deleted; -d: dest.
-    # An external journal image may be supplied via partition_info["journal"].
-    cmd = ["ext4magic", str(image_path), "-a", "1", "-r", "-d", str(out)]
-    journal = partition_info.get("journal")
-    if journal:
-        cmd += ["-j", str(journal)]
-    return _run(cmd, out)
+    window = _ext4magic_window(partition_info)
+    base = ["ext4magic", str(part_raw), "-f", relpath, *window]
 
+    list_cmd = base + ["-l"]
+    _log.info("ext4magic list: %s", " ".join(list_cmd))
+    try:
+        lres = subprocess.run(list_cmd, capture_output=True, text=True)
+        _log.debug("ext4magic list rc=%s\n%s", lres.returncode, (lres.stdout or lres.stderr).strip())
+    except (OSError, subprocess.SubprocessError) as exc:
+        _log.debug("ext4magic list skipped: %s", exc)
 
-def _run_carving(tool: str, image_path: Path, out: Path) -> tuple[Path | None, str | None]:
-    out.mkdir(parents=True, exist_ok=True)
-    if tool == "scalpel":
-        cmd = ["scalpel", "-o", str(out), str(image_path)]
-    else:  # photorec batch mode
-        cmd = ["photorec", "/d", str(out), "/cmd", str(image_path), "fileopt,everything,enable,search"]
-    return _run(cmd, out)
+    rec_cmd = base + ["-r", "-d", str(out)]
+    _log.info("ext4magic recover: %s", " ".join(rec_cmd))
+    _, err = _run(rec_cmd, out)
+    if err is not None:
+        return None, err
+    return _match_target_in_dir(relpath, out), None
 
 
 def _run(cmd: list[str], out: Path) -> tuple[Path | None, str | None]:
@@ -176,7 +231,6 @@ def _record(
     tool: str,
     outcome: str,
     recovered_path: str | None = None,
-    high_fp_risk: bool = False,
     note: str | None = None,
     tool_version: str | None = None,
 ) -> dict[str, Any]:
@@ -187,7 +241,6 @@ def _record(
         "source_tool": tool,
         "recovery_outcome": outcome,
         "recovered_path": recovered_path,
-        "high_fp_risk": high_fp_risk,
         "note": note,
         "tool_version": tool_version,
     }
@@ -240,48 +293,31 @@ def run(
                 still.append(t)
         missing = still
 
-    # Level 2 -- ext4magic (ext4 only).
+    # Level 2 -- ext4magic (ext4 only, journal-based). Terminal: no carving level
+    # beyond this. Runs on a raw image of the ext4 partition (carved once from the
+    # full E01), not on the whole-disk E01 itself.
     if missing and partition_info.get("fs_type") == "ext4":
-        root, err = _run_ext4magic(image_path, partition_info, output_dir / "ext4magic")
-        still = []
+        ext4_base = output_dir / "ext4magic"
+        part_raw, prep_err = _prepare_partition_raw(image_path, partition_info, ext4_base)
         for t in missing:
+            if prep_err is not None:
+                results.append(_record(t, level=2, tool="ext4magic", outcome="tool_error",
+                                       note=prep_err, tool_version=versions["ext4magic"]))
+                continue
+            # ext4magic -f wants a filesystem-relative path (tmp/T1082.txt), not
+            # an absolute one. Recover each target into its own subdir so matches
+            # stay unambiguous.
+            relpath = t["entity_value"].lstrip("/")
+            out = ext4_base / "recovered" / relpath.replace("/", "_")
+            hit, err = _run_ext4magic(part_raw, partition_info, relpath, out)
             if err is not None:
                 results.append(_record(t, level=2, tool="ext4magic", outcome="tool_error",
                                        note=err, tool_version=versions["ext4magic"]))
-                still.append(t)
-                continue
-            hit = _match_target_in_dir(t["entity_value"], root)
-            if hit:
+            elif hit:
                 results.append(_record(t, level=2, tool="ext4magic", outcome="found",
                                        recovered_path=hit, tool_version=versions["ext4magic"]))
             else:
                 results.append(_record(t, level=2, tool="ext4magic", outcome="not_found",
                                        tool_version=versions["ext4magic"]))
-                still.append(t)
-        missing = still
-
-    # Level 3 -- signature carving (photorec preferred, scalpel fallback).
-    if missing:
-        tool = "photorec" if _which("photorec") else ("scalpel" if _which("scalpel") else None)
-        if tool is None:
-            for t in missing:
-                results.append(_record(t, level=3, tool="photorec", outcome="tool_error",
-                                       high_fp_risk=True,
-                                       note="no carving tool (photorec/scalpel) available; " + CARVE_NOTE))
-        else:
-            root, err = _run_carving(tool, image_path, output_dir / tool)
-            for t in missing:
-                if err is not None:
-                    results.append(_record(t, level=3, tool=tool, outcome="tool_error",
-                                           high_fp_risk=True, note=f"{err}; {CARVE_NOTE}",
-                                           tool_version=versions[tool]))
-                    continue
-                hit = _match_carved(t["entity_value"], root)
-                results.append(_record(
-                    t, level=3, tool=tool,
-                    outcome="found" if hit else "not_found",
-                    recovered_path=hit, high_fp_risk=True, note=CARVE_NOTE,
-                    tool_version=versions[tool],
-                ))
 
     return {"results": results, "tool_versions": versions}

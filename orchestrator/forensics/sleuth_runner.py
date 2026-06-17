@@ -72,13 +72,15 @@ class SleuthKitRunner:
             )
         console.ok(f"disk probe passed: filesystem readable ({disk_path.name})")
 
-    def partition_offset(self, disk_path: Path) -> int:
-        # Byte offset of the first Linux (ext2/3/4) filesystem in the image,
+    def partition_extent(self, disk_path: Path) -> tuple[int, int]:
+        # (start_sector, length_sectors) of the first Linux (ext2/3/4) filesystem,
         # located by walking the mmls partition table in order and probing each
-        # slot with fsstat. Thesis simplification (documented): ext-focused, we
-        # take the FIRST ext partition and do not handle multi-Linux-partition
-        # layouts. Shared by the tsk extractor and the deleted-file recovery so
-        # they always target the same partition.
+        # slot with fsstat. Sectors are 512 bytes. Thesis simplification
+        # (documented): ext-focused, we take the FIRST ext partition and do not
+        # handle multi-Linux-partition layouts. Shared by the tsk extractor and
+        # the deleted-file recovery so they always target the same partition. The
+        # length lets callers carve the exact partition (dd skip/count) for tools
+        # like ext4magic that cannot read a whole-disk or EWF image.
         cmd = [self._mmls_bin, *_image_type_flag(disk_path), str(disk_path)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
@@ -91,21 +93,29 @@ class SleuthKitRunner:
             parts = line.split()
             # mmls rows: Slot Start End Length Description. Skip headers and
             # meta/unallocated rows (slot "Meta" or "---"); real slots are numeric.
-            if len(parts) < 4:
+            if len(parts) < 5:
                 continue
             if not parts[1].replace("-", "").isdigit():
                 continue
             try:
                 start = int(parts[2])
+                length = int(parts[4])
             except (ValueError, IndexError):
                 continue
             offset = start * 512
             if self._verify_partition(disk_path, offset):  # fsstat says ext?
-                return offset
+                return start, length
 
         raise RuntimeError(
             f"no ext2/3/4 partition found in mmls output for {disk_path.name}"
         )
+
+    def partition_offset(self, disk_path: Path) -> int:
+        # Byte offset of the first ext partition. Thin wrapper over
+        # partition_extent so the start-only callers (tsk extractor, tsk_recover)
+        # stay unchanged.
+        start, _ = self.partition_extent(disk_path)
+        return start * 512
 
     def fls(self, disk_path: Path, offset: int, flags: str = "-r -l") -> list[str]:
         # fls expects -o in sectors, while callers carry offsets in bytes.

@@ -10,7 +10,7 @@
 # These findings self-report recovery_outcome, so the matcher excludes them from
 # entity matching and metrics.compute accounts for them in a dedicated recovery
 # breakdown (found -> TP, not_found-at-highest-level -> FN, not_applicable ->
-# excluded as unsupported_fs, Level 3 flagged high_fp_risk).
+# excluded as unsupported_fs).
 
 from __future__ import annotations
 
@@ -46,7 +46,6 @@ def detect(raw_outputs: dict[str, Any], rules_config: dict[str, Any]) -> Iterabl
             forensic_operation=_OP,
             recovery_level=int(level) if level is not None else None,
             recovery_outcome=outcome,
-            high_fp_risk=True if r.get("high_fp_risk") else None,
             note=r.get("note"),
             raw_ref=(
                 f"deleted_file:{tool}:L{level}:{r['recovered_path']}"

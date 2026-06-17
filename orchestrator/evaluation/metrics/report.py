@@ -117,20 +117,18 @@ def render_report(
         lines.append("## Deleted-file recovery (per level)")
         lines.append("")
         lines.append(
-            "Escalating recovery: L1 tsk_recover -> L2 ext4magic (ext4) -> "
-            "L3 carving. not_applicable rows (e.g. tmpfs) are a declared tool "
-            "limitation, excluded from recall (NIST CFTT / SWGDE). Level 3 is "
-            "flagged high_fp_risk: carving precision is unreliable.")
+            "Escalating recovery: L1 tsk_recover (metadata) -> L2 ext4magic "
+            "(journal, ext4). not_applicable rows (e.g. tmpfs) are a declared "
+            "tool limitation, excluded from recall (NIST CFTT / SWGDE).")
         lines.append("")
-        lines.append("| level | tool | found | not_found | tool_error | n/a | recall | high_fp_risk | scope |")
-        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+        lines.append("| level | tool | found | not_found | tool_error | n/a | recall | scope |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
         for rr in recovery:
             r = rr.values
             lines.append(
                 f"| {r['recovery_level']} | {r['source_tool']} | {r['found']} | "
                 f"{r['not_found']} | {r['tool_error']} | {r['not_applicable']} | "
-                f"{_pct(r['recall'])} | {r['high_fp_risk'] if r['high_fp_risk'] else '-'} | "
-                f"{r['scope']} |"
+                f"{_pct(r['recall'])} | {r['scope']} |"
             )
         lines.append("")
     lines.append("## Unique tool contribution (TP events found by exactly one tool)")

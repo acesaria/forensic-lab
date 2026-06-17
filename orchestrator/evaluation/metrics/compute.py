@@ -357,8 +357,7 @@ def write_breakdown_csv(rows: list[BreakdownRow], out_path: Any) -> Any:
 #   not_found      -> FN at the highest level attempted (the gap is real)
 #   tool_error     -> counted with the gap (FN), surfaced separately for triage
 #   not_applicable -> EXCLUDED from recall, reported as scope="unsupported_fs"
-# Level 3 (carving) rows are flagged high_fp_risk: their precision is structurally
-# unreliable and must not be mixed with the other levels' numbers.
+# Escalation is two levels: L1 tsk_recover (metadata) -> L2 ext4magic (journal).
 RECOVERY_COLS: tuple[str, ...] = (
     "recovery_level",
     "source_tool",
@@ -367,7 +366,6 @@ RECOVERY_COLS: tuple[str, ...] = (
     "tool_error",
     "not_applicable",
     "recall",
-    "high_fp_risk",
     "scope",
 )
 
@@ -433,7 +431,6 @@ def compute_recovery_breakdown(findings: list[Finding]) -> list[RecoveryRow]:
             "tool_error": c["tool_error"],
             "not_applicable": c["not_applicable"],
             "recall": None if (is_na or denom == 0) else c["found"] / denom,
-            "high_fp_risk": True if level == 3 else None,
             "scope": "unsupported_fs" if is_na else "applicable",
         }))
 
@@ -447,7 +444,6 @@ def compute_recovery_breakdown(findings: list[Finding]) -> list[RecoveryRow]:
         "tool_error": total["tool_error"],
         "not_applicable": total["not_applicable"],
         "recall": None if denom == 0 else total["found"] / denom,
-        "high_fp_risk": None,
         "scope": "applicable",
     }))
     return rows

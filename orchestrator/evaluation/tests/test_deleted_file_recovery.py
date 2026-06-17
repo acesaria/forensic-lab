@@ -14,13 +14,15 @@ from orchestrator.forensics import deleted_file_runner as dfr
 _PARTITION = {
     "fs_type": "ext4",
     "offset_bytes": 0,
+    "part_start_sector": 2048,
+    "part_count_sectors": 1000000,
     "is_tmpfs": False,
     "tmpfs_mounts": ["/tmp", "/dev/shm", "/run"],
 }
 _TARGETS = [
     {"entity_type": "path", "entity_value": "/etc/ld.so.preload"},   # found at L2
     {"entity_type": "path", "entity_value": "/tmp/T1574006.so"},     # tmpfs -> n/a
-    {"entity_type": "path", "entity_value": "/etc/cron.d/backdoor"}, # never found -> L3 gap
+    {"entity_type": "path", "entity_value": "/etc/cron.d/backdoor"}, # never found -> L2 gap
 ]
 
 
@@ -32,18 +34,21 @@ def _patch_tools(monkeypatch):
         out.mkdir(parents=True, exist_ok=True)  # recovers nothing of interest
         return out, None
 
-    def fake_ext4(image, pinfo, out):
-        (out / "etc").mkdir(parents=True, exist_ok=True)
-        (out / "etc" / "ld.so.preload").write_text("hooked")  # L2 recovers preload
-        return out, None
+    def fake_prep(image, pinfo, work_dir):
+        return Path("/fake/disk_part.raw"), None  # no real ewfexport/dd
 
-    def fake_carve(tool, image, out):
-        out.mkdir(parents=True, exist_ok=True)  # carves nothing matching
-        return out, None
+    def fake_ext4(part_raw, pinfo, relpath, out):
+        # L2 recovers only the preload target; ext4magic -f takes a relative path.
+        if relpath == "etc/ld.so.preload":
+            f = out / "etc" / "ld.so.preload"
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text("hooked")
+            return str(f), None
+        return None, None
 
     monkeypatch.setattr(dfr, "_run_tsk_recover", fake_tsk)
+    monkeypatch.setattr(dfr, "_prepare_partition_raw", fake_prep)
     monkeypatch.setattr(dfr, "_run_ext4magic", fake_ext4)
-    monkeypatch.setattr(dfr, "_run_carving", fake_carve)
 
 
 def _run(monkeypatch, tmp_path):
@@ -61,16 +66,14 @@ def test_runner_escalates_and_reports_outcomes(monkeypatch, tmp_path):
     assert not any(r["target"] == "/tmp/T1574006.so" and r["recovery_level"] in (2, 3)
                    for r in payload["results"])
 
-    # preload: L1 not_found then L2 found; no L3 attempt (stopped once found).
+    # preload: L1 not_found then L2 found (stopped once found).
     assert by[("/etc/ld.so.preload", 1)]["recovery_outcome"] == "not_found"
     assert by[("/etc/ld.so.preload", 2)]["recovery_outcome"] == "found"
-    assert ("/etc/ld.so.preload", 3) not in by
 
-    # cron backdoor: exhausts all three levels -> L3 gap, flagged high_fp_risk.
-    assert by[("/etc/cron.d/backdoor", 3)]["recovery_outcome"] == "not_found"
-    assert by[("/etc/cron.d/backdoor", 3)]["high_fp_risk"] is True
+    # cron backdoor: exhausts both levels -> L2 gap (terminal, no carving level).
+    assert by[("/etc/cron.d/backdoor", 2)]["recovery_outcome"] == "not_found"
 
-    assert set(payload["tool_versions"]) == {"tsk_recover", "ext4magic", "scalpel", "photorec"}
+    assert set(payload["tool_versions"]) == {"tsk_recover", "ext4magic"}
 
 
 def test_adapter_emits_valid_findings(monkeypatch, tmp_path):
@@ -82,8 +85,7 @@ def test_adapter_emits_valid_findings(monkeypatch, tmp_path):
     outcomes = {(f.source_tool, f.recovery_level, f.recovery_outcome) for f in findings}
     assert ("ext4magic", 2, "found") in outcomes
     assert ("tsk_recover", 1, "not_applicable") in outcomes
-    assert ("photorec", 3, "not_found") in outcomes  # photorec preferred over scalpel
-    assert all(f.high_fp_risk for f in findings if f.recovery_level == 3)
+    assert ("ext4magic", 2, "not_found") in outcomes  # terminal gap, no carving level
 
 
 def test_recovery_findings_excluded_from_matcher(monkeypatch, tmp_path):
@@ -110,9 +112,9 @@ def test_recovery_breakdown_per_level(monkeypatch, tmp_path):
             for _ in (r.values for r in compute_recovery_breakdown(findings))}
 
     assert rows[(2, "ext4magic")]["found"] == 1
-    assert rows[(2, "ext4magic")]["recall"] == 1.0
-    assert rows[(3, "photorec")]["not_found"] == 1
-    assert rows[(3, "photorec")]["high_fp_risk"] is True
+    # one target found at L2, one a terminal L2 gap -> ext4magic recall 0.5
+    assert rows[(2, "ext4magic")]["recall"] == 0.5
+    assert rows[(2, "ext4magic")]["not_found"] == 1
     assert rows[("n/a", "tsk_recover")]["not_applicable"] == 1
     assert rows[("n/a", "tsk_recover")]["scope"] == "unsupported_fs"
 
