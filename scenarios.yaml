@@ -13,3 +13,9 @@ scenario_01_ldpreload_cleanup:
 art_calibration:
   module: orchestrator.attacks.art_calibration
   run_cleanup: false
+
+# Declarative scenario: no attack module, runs attacks/scenarios/<...>/scenario.yml
+# over the guest via the canonical engine (see orchestrator.run_declarative_experiment).
+userland_father_ldpreload:
+  scenario_yml: attacks/scenarios/userland_father_ldpreload/scenario.yml
+  run_cleanup: false
