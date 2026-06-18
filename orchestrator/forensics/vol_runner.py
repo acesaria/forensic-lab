@@ -24,6 +24,11 @@ from orchestrator.core import console
 _log = logging.getLogger(__name__)
 
 
+def _isf_name(family: str, kernel_release: str) -> str:
+    # Mirrors orchestrator._isf_filename so build and resolve agree on the name.
+    return f"{family}_{kernel_release.replace('/', '_')}.json"
+
+
 def _run_vol_command(
     vol_bin: str,
     memory_path: Path,
@@ -97,8 +102,15 @@ class VolatilityRunner:
             isf_dir=isf_dir,
         )
 
-    def resolve_isf(self, distro_id: str) -> Path:
+    def resolve_isf(self, distro_id: str, kernel_release: str | None = None) -> Path:
         family = distro_id.split("-", 1)[0]
+        # An exact kernel match is required when several distros share a family
+        # prefix (ubuntu-22.04 and ubuntu-24.04 both glob as ubuntu_*); the
+        # lexically-last ISF would otherwise be the wrong kernel's symbols.
+        if kernel_release:
+            exact = self._isf_dir / _isf_name(family, kernel_release)
+            if exact.is_file():
+                return exact
         matches = sorted(self._isf_dir.glob(f"{family}_*.json"))
         if not matches:
             raise RuntimeError(
@@ -113,8 +125,9 @@ class VolatilityRunner:
         distro_id: str,
         plugin: str,
         extra_args: list[str] | None = None,
+        kernel_release: str | None = None,
     ) -> list[dict]:
-        isf_path = self.resolve_isf(distro_id)
+        isf_path = self.resolve_isf(distro_id, kernel_release)
         return _run_vol_command(
             self._vol_bin,
             memory_path,

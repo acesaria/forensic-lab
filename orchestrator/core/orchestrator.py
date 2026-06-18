@@ -294,7 +294,9 @@ class ForensicOrchestrator:
             ctx.write_reference_context(
                 guest=guest,
                 tool_versions=self._pipeline_versions(),
-                volatility=self._volatility_context(distro_id),
+                volatility=self._volatility_context(
+                    distro_id, (guest or {}).get("kernel")
+                ),
             )
 
         if not acquire:
@@ -307,7 +309,9 @@ class ForensicOrchestrator:
                 guest=guest,
                 acquisition=self._acquisition_context(manifest_path),
                 tool_versions=self._pipeline_versions(),
-                volatility=self._volatility_context(distro_id),
+                volatility=self._volatility_context(
+                    distro_id, (guest or {}).get("kernel")
+                ),
             )
         self._evaluate_declarative_run(run_id, scenario_id, distro_id, manifest_path)
         return manifest_path
@@ -348,6 +352,15 @@ class ForensicOrchestrator:
             return load_pipeline_config().get("versions", {})
         except Exception:
             return {}
+
+    def _guest_kernel(self, run_id: str) -> str | None:
+        ref = self.dumper.run_dir(run_id) / "reference_context.json"
+        if not ref.is_file():
+            return None
+        try:
+            return json.loads(ref.read_text(encoding="utf-8")).get("guest", {}).get("kernel")
+        except Exception:
+            return None
 
     @staticmethod
     def _acquisition_context(manifest_path: str | Path) -> dict[str, Any]:
@@ -438,10 +451,13 @@ class ForensicOrchestrator:
         memory_path = Path(manifest["memory_image"]["path"])
         disk_path = Path(manifest["disk_image"]["path"])
         versions = self._pipeline_versions()
+        kernel_release = self._guest_kernel(run_id)
         findings: list = []
 
         try:
-            vol_rows = extract_plugins(self._vol_runner, memory_path, distro_id)
+            vol_rows = extract_plugins(
+                self._vol_runner, memory_path, distro_id, kernel_release=kernel_release
+            )
             (analysis_dir / "vol3.json").write_text(
                 json.dumps(vol_rows, indent=2, default=str), encoding="utf-8"
             )
@@ -625,11 +641,13 @@ class ForensicOrchestrator:
         except Exception as exc:
             console.warn(f"canonical GT artifacts not written: {exc}")
 
-    def _volatility_context(self, distro_id: str | None) -> dict[str, Any]:
+    def _volatility_context(
+        self, distro_id: str | None, kernel_release: str | None = None
+    ) -> dict[str, Any]:
         if not distro_id:
             return {"symbols": None, "profile": None}
         try:
-            isf = self._vol_runner.resolve_isf(distro_id)
+            isf = self._vol_runner.resolve_isf(distro_id, kernel_release)
         except Exception:
             return {"symbols": None, "profile": None}
         return {"symbols": str(isf), "profile": isf.name}

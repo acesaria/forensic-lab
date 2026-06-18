@@ -28,11 +28,14 @@ def extract_plugins(
     memory_path: Path,
     distro_id: str,
     plugins: tuple[str, ...] = DEFAULT_PLUGINS,
+    kernel_release: str | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {}
     for plugin in plugins:
         try:
-            out[plugin] = vol.run_plugin(memory_path, distro_id, plugin)
+            out[plugin] = vol.run_plugin(
+                memory_path, distro_id, plugin, kernel_release=kernel_release
+            )
         except RuntimeError:
             # A plugin missing for this kernel build is not fatal: the heuristics
             # degrade gracefully to whatever plugins did run.
