@@ -70,8 +70,9 @@ from orchestrator.evaluation.contracts.validate import load_gt_manifest
 from orchestrator.evaluation.extract.vol3 import extract_plugins
 from orchestrator.evaluation.extract.tsk import extract_bodyfile
 from orchestrator.evaluation.provenance import build_provenance, write_provenance
+from orchestrator.canonical.legacy import write_canonical_from_legacy
 from orchestrator.forensics import deleted_file_runner, yara_runner
-from orchestrator.evaluation.pipeline import run_from_raw
+from orchestrator.evaluation.pipeline import load_pipeline_config, run_from_raw
 
 
 class ForensicOrchestrator:
@@ -221,6 +222,12 @@ class ForensicOrchestrator:
 
         if acquire:
             manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
+            self._write_canonical_artifacts(
+                run_id,
+                gt_manifest_path,
+                acquisition_manifest_path=manifest_path,
+                distro_id=distro_id,
+            )
             if evaluate:
                 self._evaluate_run_framework(
                     run_id, scenario_id, distro_id, gt_manifest_path, manifest_path
@@ -342,10 +349,42 @@ class ForensicOrchestrator:
         out = run_dir / "gt_manifest.json"
         try:
             gt_builder.write(out)
+            self._write_canonical_artifacts(run_id, out, distro_id=gt_builder.distro)
             console.ok(f"gt manifest written: {out}")
         except Exception as exc:
             console.warn(f"gt manifest not written: {exc}")
         return out
+
+    def _write_canonical_artifacts(
+        self,
+        run_id: str,
+        gt_manifest_path: Path,
+        *,
+        acquisition_manifest_path: str | Path | None = None,
+        distro_id: str | None = None,
+    ) -> None:
+        try:
+            tool_versions = load_pipeline_config().get("versions", {})
+            volatility_symbols = self._volatility_context(distro_id) if distro_id else None
+            write_canonical_from_legacy(
+                gt_manifest_path,
+                self.dumper.run_dir(run_id),
+                acquisition_manifest_path=acquisition_manifest_path,
+                repo_root=self.repo_root,
+                tool_versions=tool_versions,
+                volatility_symbols=volatility_symbols,
+            )
+        except Exception as exc:
+            console.warn(f"canonical GT artifacts not written: {exc}")
+
+    def _volatility_context(self, distro_id: str | None) -> dict[str, Any]:
+        if not distro_id:
+            return {"symbols": None, "profile": None}
+        try:
+            isf = self._vol_runner.resolve_isf(distro_id)
+        except Exception:
+            return {"symbols": None, "profile": None}
+        return {"symbols": str(isf), "profile": isf.name}
 
     def _evaluate_run_framework(
         self,
