@@ -1,0 +1,11 @@
+id: flab.filesystem.suspicious_shared_object
+name: Suspicious shared object in writable or lab-controlled path
+description: Flags Linux shared objects found in writable temporary locations or lab-defined suspicious paths.
+source_types: [disk, timeline]
+artifact_classes: [file, shared_object]
+attck: [T1574.006, T1014]
+confidence_default: 0.76
+parameters:
+  suffixes: [.so]
+  suspicious_prefixes: [/tmp/, /var/tmp/, /dev/shm/]
+  suspicious_tokens: [preload, father, rootkit]

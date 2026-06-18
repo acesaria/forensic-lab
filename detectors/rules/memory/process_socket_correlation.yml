@@ -1,0 +1,9 @@
+id: flab.memory.process_socket_correlation
+name: Memory process and socket correlation
+description: Correlates a memory socket with process evidence sharing the same PID.
+source_types: [memory]
+artifact_classes: [process, socket]
+attck: [T1059.004, T1071]
+confidence_default: 0.72
+parameters:
+  require_pid: true

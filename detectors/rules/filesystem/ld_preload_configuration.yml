@@ -1,0 +1,12 @@
+id: flab.filesystem.ld_preload_configuration
+name: LD_PRELOAD configuration artifact
+description: Flags preload configuration files or paths that reference ld.so.preload / LD_PRELOAD behavior.
+source_types: [disk, timeline]
+artifact_classes: [file, preload_configuration, shell_history_log_event]
+attck: [T1574.006, T1014]
+confidence_default: 0.86
+parameters:
+  tokens:
+    - ld.so.preload
+    - LD_PRELOAD
+    - preload

@@ -1,0 +1,18 @@
+id: flab.timeline.suspicious_shell_history
+name: Suspicious shell history or log event
+description: Flags shell history and log lines containing command execution, persistence, download, or cleanup indicators.
+source_types: [memory, timeline, disk]
+artifact_classes: [shell_history_log_event]
+attck: [T1059.004, T1105, T1070.004, T1574.006]
+confidence_default: 0.68
+parameters:
+  tokens:
+    - curl
+    - wget
+    - bash
+    - sh -c
+    - chmod
+    - rm -f
+    - crontab
+    - systemctl
+    - ld.so.preload

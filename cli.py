@@ -129,6 +129,36 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         help="Check pinned tool versions and print the ruleset hash",
     )
 
+    run_scenario = sub.add_parser(
+        "run-scenario",
+        help="Run a declarative scenario.yml with the minimal local scenario engine",
+    )
+    run_scenario.add_argument("scenario_yml")
+    run_scenario.add_argument("--out-dir", default=None)
+    run_scenario.add_argument("--run-id", default=None)
+
+    run_detectors = sub.add_parser(
+        "run-detectors",
+        help="Run GT-blind detector rule packs over canonical tool_findings.jsonl",
+    )
+    run_detectors.add_argument("--findings", required=True)
+    run_detectors.add_argument("--out", required=True)
+    run_detectors.add_argument(
+        "--rules-dir",
+        default=None,
+        help="Optional detector rules directory (default: detectors/rules)",
+    )
+
+    match_canonical = sub.add_parser(
+        "match-canonical",
+        help="GT-aware match + metrics over canonical cached JSONL artifacts",
+    )
+    match_canonical.add_argument("--expectations", required=True)
+    match_canonical.add_argument("--tool-findings", required=True)
+    match_canonical.add_argument("--detection-claims", default=None)
+    match_canonical.add_argument("--out-dir", required=True)
+    match_canonical.add_argument("--time-window-s", type=float, default=120.0)
+
     return parser
 
 
@@ -171,7 +201,14 @@ def _check_prerequisites() -> None:
 
 # --- offline evaluation handlers -----------------------------------------
 
-_OFFLINE_COMMANDS = ("score", "pipeline", "verify")
+_OFFLINE_COMMANDS = (
+    "score",
+    "pipeline",
+    "verify",
+    "run-scenario",
+    "run-detectors",
+    "match-canonical",
+)
 
 
 def _print_metric_row(row) -> None:
@@ -263,11 +300,61 @@ def _cmd_verify(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run_scenario(args: argparse.Namespace) -> int:
+    from orchestrator.scenarios import run_scenario
+
+    ctx = run_scenario(
+        args.scenario_yml,
+        out_dir=args.out_dir,
+        run_id=args.run_id,
+        repo_root=Path(__file__).resolve().parent,
+    )
+    print(f"scenario run written: {ctx.out_dir}")
+    print("  command_log.jsonl")
+    print("  execution_truth.jsonl")
+    print("  artifact_expectations.jsonl")
+    print("  reference_context.json")
+    return 0
+
+
+def _cmd_run_detectors(args: argparse.Namespace) -> int:
+    from detectors.engine import run_detectors_file, write_detection_claims
+
+    claims = run_detectors_file(args.findings, rules_dir=args.rules_dir)
+    out = write_detection_claims(args.out, claims)
+    print(f"wrote {len(claims)} detection claim(s): {out}")
+    return 0
+
+
+def _cmd_match_canonical(args: argparse.Namespace) -> int:
+    from matcher.engine import run_matcher_files
+
+    result = run_matcher_files(
+        expectations_path=args.expectations,
+        tool_findings_path=args.tool_findings,
+        detection_claims_path=args.detection_claims,
+        out_dir=args.out_dir,
+        time_window_s=args.time_window_s,
+    )
+    metrics = result["metrics"]["micro"]
+    print(
+        "micro: "
+        f"precision={metrics['precision']:.4f} "
+        f"recall={metrics['recall']:.4f} "
+        f"f1={metrics['f1']:.4f}"
+    )
+    print(f"wrote matches.jsonl + metrics.json + score_report.md to {args.out_dir}")
+    return 0
+
+
 def _run_offline_command(args: argparse.Namespace) -> int:
     handlers = {
         "score": _cmd_score,
         "pipeline": _cmd_pipeline,
         "verify": _cmd_verify,
+        "run-scenario": _cmd_run_scenario,
+        "run-detectors": _cmd_run_detectors,
+        "match-canonical": _cmd_match_canonical,
     }
     return handlers[args.command](args)
 
