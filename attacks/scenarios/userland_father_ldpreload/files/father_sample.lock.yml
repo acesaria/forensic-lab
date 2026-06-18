@@ -1,0 +1,33 @@
+schema: forensic-lab.external_sample.v1
+sample:
+  name: Father
+  repository: https://github.com/mav8557/Father
+  branch: master
+  upstream_commit: 4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
+  license: Unlicense
+  license_url: https://github.com/mav8557/Father/blob/master/LICENSE
+  pinned_at: "2026-06-18"
+  vendored_archive:
+    path: files/father-upstream-4eb2712.tar
+    sha256: 90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125
+    format: git-archive-tar
+use_in_this_scenario:
+  mode: lab-safe-harness
+  vendored_original_source: true
+  executed_original_source: false
+  local_source: files/father_lab_preload.c
+  note: >
+    The upstream repository is pinned and vendored as an inert source archive
+    for provenance, hashing, and DFIR sample-management artifacts. The scenario
+    does not execute the original Father rootkit. It compiles a controlled
+    LD_PRELOAD harness that preserves forensic artifacts relevant to a
+    Father-style userland rootkit while disabling offensive behavior.
+safety_disabled:
+  - remote_backdoor
+  - reverse_shell
+  - privilege_escalation
+  - gnupg_tampering
+  - logic_bomb
+  - destructive_anti_detection
+  - propagation
+  - exfiltration
