@@ -448,22 +448,54 @@ def compute_metrics(
     micro = _prf(len(tp), len(fp), len(fn))
     by_exp = {exp.ae_id: exp for exp in expectations}
     by_cand = {cand.candidate_id: cand for cand in candidates}
+    critical = _critical_recall(expectations, matches)
+
+    # The micro counts fold instance and class matches together. For thesis
+    # reporting we separate two distinct questions: did we recover the exact
+    # entity (instance) vs. did we recover the artifact class at all (class).
+    instance_tp = sum(1 for m in tp if m.match_level == MatchLevel.INSTANCE)
+    class_tp = sum(1 for m in tp if m.match_level == MatchLevel.CLASS)
+    total_exp = len(expectations)
+    # Instance-only treats a class-level hit as a miss: it is class coverage, not
+    # instance reconstruction, so it is folded into the negative bucket.
+    instance_only = _prf(instance_tp, len(fp), total_exp - instance_tp)
+
     metrics = {
-        "schema": "forensic-lab.matcher.metrics.v1",
+        "schema": "forensic-lab.matcher.metrics.v2",
         "counts": {"tp": len(tp), "fp": len(fp), "fn": len(fn)},
         "micro": micro,
+        "reconstruction": {
+            "instance_only_precision": instance_only["precision"],
+            "instance_only_recall": instance_only["recall"],
+            "instance_only_f1": instance_only["f1"],
+            "instance_only_tp": instance_tp,
+            "class_level_recall": round(
+                (instance_tp + class_tp) / total_exp, 4
+            ) if total_exp else 0.0,
+            "class_level_covered": instance_tp + class_tp,
+            "expectations_total": total_exp,
+            "critical_event_recall": critical["recall"],
+        },
+        "source_breakdown": _source_breakdown(tool_findings),
         "macro_f1_by_artifact_class": _macro_by_class(expectations, candidates, matches),
-        "critical_recall": _critical_recall(expectations, matches),
+        "critical_recall": critical,
         "per_source": _per_source(expectations, matches, by_exp, by_cand),
         "per_artifact_class": _per_artifact_class(expectations, candidates, matches),
         "temporal_quality": _temporal_summary(tool_findings, candidates, matches, by_cand),
         "false_positives_per_run": _false_positives_per_run(matches, by_cand),
         "match_levels": {
-            "instance": sum(1 for m in tp if m.match_level == MatchLevel.INSTANCE),
-            "class": sum(1 for m in tp if m.match_level == MatchLevel.CLASS),
+            "instance": instance_tp,
+            "class": class_tp,
         },
     }
     return metrics
+
+
+def _source_breakdown(tool_findings: list[ToolFinding]) -> dict[str, int]:
+    out = {source.value: 0 for source in EvidenceSource}
+    for finding in tool_findings:
+        out[finding.source_type.value] += 1
+    return out
 
 
 def _prf(tp: int, fp: int, fn: int) -> dict[str, float | int]:
@@ -575,10 +607,12 @@ def _false_positives_per_run(matches: list[MatchResult], by_cand: dict[str, Cand
 def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
     micro = metrics["micro"]
     critical = metrics["critical_recall"]
+    recon = metrics.get("reconstruction", {})
+    sources = metrics.get("source_breakdown", {})
     lines = [
         "# Score Report",
         "",
-        "## Summary",
+        "## Summary (combined instance + class)",
         "",
         f"- TP: {micro['tp']}",
         f"- FP: {micro['fp']}",
@@ -586,15 +620,42 @@ def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
         f"- Precision: {micro['precision']:.4f}",
         f"- Recall: {micro['recall']:.4f}",
         f"- F1: {micro['f1']:.4f}",
-        f"- Critical recall: {critical['recall']:.4f} ({critical['critical_matched']}/{critical['critical_total']})",
-        f"- Instance matches: {metrics['match_levels']['instance']}",
+        "",
+        "## Class-level coverage",
+        "",
+        "Did an expectation's artifact class show up at all (instance or class match)?",
+        "",
+        f"- Class-level recall: {recon.get('class_level_recall', 0.0):.4f} "
+        f"({recon.get('class_level_covered', 0)}/{recon.get('expectations_total', 0)})",
         f"- Class matches: {metrics['match_levels']['class']}",
+        "",
+        "## Instance-level reconstruction",
+        "",
+        "Did we recover the exact planted entity (class hits count as misses here)?",
+        "",
+        f"- Instance-only precision: {recon.get('instance_only_precision', 0.0):.4f}",
+        f"- Instance-only recall: {recon.get('instance_only_recall', 0.0):.4f}",
+        f"- Instance-only F1: {recon.get('instance_only_f1', 0.0):.4f}",
+        f"- Instance matches: {metrics['match_levels']['instance']}",
+        "",
+        "## Critical observables",
+        "",
+        f"- Critical-event recall: {critical['recall']:.4f} "
+        f"({critical['critical_matched']}/{critical['critical_total']})",
+        "",
+        "## Source breakdown (tool findings)",
+        "",
+    ]
+    for source in ("disk", "memory", "timeline", "log", "unknown"):
+        if source in sources:
+            lines.append(f"- {source}: {sources[source]}")
+    lines.extend([
         "",
         "## Per Source",
         "",
         "| source | TP | FP | FN | precision | recall | F1 |",
         "|---|---:|---:|---:|---:|---:|---:|",
-    ]
+    ])
     for source, row in metrics["per_source"].items():
         lines.append(
             f"| {source} | {row['tp']} | {row['fp']} | {row['fn']} | "
