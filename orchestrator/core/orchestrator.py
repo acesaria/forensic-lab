@@ -443,6 +443,7 @@ class ForensicOrchestrator:
         """Extract raw forensic outputs and adapt them to canonical ToolFinding
         records. Each channel is best-effort; a degraded tool contributes no
         findings rather than sinking the others."""
+        from orchestrator.adapters import filter_findings_to_window
         from orchestrator.adapters.plaso import adapt_plaso_events
         from orchestrator.adapters.sleuthkit import adapt_bodyfile
         from orchestrator.adapters.volatility3 import adapt_plugin_rows
@@ -452,6 +453,7 @@ class ForensicOrchestrator:
         disk_path = Path(manifest["disk_image"]["path"])
         versions = self._pipeline_versions()
         kernel_release = self._guest_kernel(run_id)
+        window = self._case_window_from_command_log(run_id)
         findings: list = []
 
         try:
@@ -471,11 +473,15 @@ class ForensicOrchestrator:
         except Exception as exc:
             console.warn(f"vol3 extraction degraded: {exc}")
 
+        # Disk and timeline findings are scoped to the run's case window so the
+        # GT-blind detectors see only artifacts touched during the scenario, not
+        # the entire baseline image. Memory is point-in-time and kept as-is.
+        disk_timeline: list = []
         try:
             tsk = extract_bodyfile(self._sleuth_runner, disk_path)
             bodyfile = tsk.get("bodyfile") or ""
             (analysis_dir / "bodyfile").write_text(bodyfile + "\n", encoding="utf-8")
-            findings.extend(
+            disk_timeline.extend(
                 adapt_bodyfile(
                     bodyfile.splitlines(),
                     run_id=run_id,
@@ -487,7 +493,7 @@ class ForensicOrchestrator:
 
         try:
             events = self._build_timeline(run_id, disk_path)
-            findings.extend(
+            disk_timeline.extend(
                 adapt_plaso_events(
                     events,
                     run_id=run_id,
@@ -497,7 +503,47 @@ class ForensicOrchestrator:
         except Exception as exc:
             console.warn(f"plaso timeline degraded: {exc}")
 
+        if window is not None:
+            before = len(disk_timeline)
+            disk_timeline = filter_findings_to_window(disk_timeline, window[0], window[1])
+            console.info(
+                f"case-window scoping: kept {len(disk_timeline)}/{before} "
+                "disk+timeline findings"
+            )
+        findings.extend(disk_timeline)
         return findings
+
+    def _case_window_from_command_log(
+        self, run_id: str, margin_s: float = 600.0
+    ) -> tuple[str, str] | None:
+        """Derive [start, end] from the scenario command_log step times, padded by
+        a margin. Returns None if the log is missing or has no usable times."""
+        from datetime import datetime, timezone
+        from orchestrator.forensics.timeutil import iso_utc_ms, parse_iso_utc
+
+        log_path = self.dumper.run_dir(run_id) / "command_log.jsonl"
+        if not log_path.is_file():
+            return None
+        times: list[float] = []
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            for key in ("started_at", "ended_at"):
+                value = row.get(key)
+                if value:
+                    try:
+                        times.append(parse_iso_utc(str(value)))
+                    except ValueError:
+                        pass
+        if not times:
+            return None
+        lo = datetime.fromtimestamp(min(times) - margin_s, timezone.utc)
+        hi = datetime.fromtimestamp(max(times) + margin_s, timezone.utc)
+        return iso_utc_ms(lo), iso_utc_ms(hi)
 
     def analyze_run(
         self, distro_id: str, scenario_id: str, run_id: str | None = None

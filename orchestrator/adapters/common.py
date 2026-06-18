@@ -8,10 +8,46 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding, write_jsonl
-from orchestrator.forensics.timeutil import epoch_us_to_iso_ms
+from orchestrator.forensics.timeutil import epoch_us_to_iso_ms, parse_iso_utc
 
 ADAPTER_VERSION = "canonical-adapters-v1"
 UNKNOWN_TIME = "unknown"
+
+
+def filter_findings_to_window(
+    findings: Iterable[ToolFinding],
+    start_iso: str,
+    end_iso: str,
+    *,
+    always_keep: tuple[EvidenceSource, ...] = (EvidenceSource.MEMORY,),
+) -> list[ToolFinding]:
+    """Scope time-stamped findings to a case window [start, end].
+
+    Drops findings whose timestamp falls outside the window -- on a full disk
+    image this removes baseline files created at image-build time, leaving the
+    artifacts created during the run. Findings with no usable timestamp, and
+    those from always_keep sources (memory is point-in-time, not on a
+    creation timeline), are kept regardless.
+    """
+    lo = parse_iso_utc(start_iso)
+    hi = parse_iso_utc(end_iso)
+    kept: list[ToolFinding] = []
+    for finding in findings:
+        if finding.source_type in always_keep:
+            kept.append(finding)
+            continue
+        time = finding.time
+        if not time or time == UNKNOWN_TIME:
+            kept.append(finding)
+            continue
+        try:
+            ts = parse_iso_utc(str(time))
+        except ValueError:
+            kept.append(finding)
+            continue
+        if lo <= ts <= hi:
+            kept.append(finding)
+    return kept
 
 
 def iso_from_epoch(value: Any) -> str | None:
@@ -20,6 +56,27 @@ def iso_from_epoch(value: Any) -> str | None:
     try:
         return epoch_us_to_iso_ms(int(float(value) * 1_000_000))
     except (TypeError, ValueError, OverflowError):
+        return None
+
+
+# Plaso's psort json_line stores a normalized top-level timestamp in
+# microseconds since the Unix epoch, but some sources/fixtures use seconds.
+# Disambiguate by magnitude: modern epoch-seconds are ~1e9, modern epoch-us are
+# ~1e15, so a value at or above this threshold is already microseconds.
+_PLASO_US_THRESHOLD = 1_000_000_000_000  # 1e12
+
+
+def iso_from_plaso_timestamp(value: Any) -> str | None:
+    if value in (None, "", 0, "0"):
+        return None
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        return None
+    us = v if abs(v) >= _PLASO_US_THRESHOLD else v * 1_000_000
+    try:
+        return epoch_us_to_iso_ms(us)
+    except (ValueError, OverflowError):
         return None
 
 
