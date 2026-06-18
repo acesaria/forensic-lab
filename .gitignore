@@ -67,3 +67,4 @@ RULES.md
 
 # Vendored third-party binary, fetched locally, not tracked
 dfir-tools/
+.codex/

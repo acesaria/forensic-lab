@@ -39,6 +39,9 @@ forensic-lab/
 │   ├── image_store.py           # download + verify base images
 │   └── provider.py              # libvirt-python: VM lifecycle, network, storage
 │
+├── attacks/
+│   └── art/                    # ART calibration catalog and selected atomics
+│
 ├── orchestrator/                # experiment pipeline layer
 │   ├── core/
 │   │   ├── orchestrator.py      # coordinates the full experiment lifecycle
@@ -191,11 +194,18 @@ This is handled automatically when a matching ISF file is missing. It only runs 
 source .venv/bin/activate
 ```
 
-That's the whole setup. No `atomic-operator`, no patched virtualenv — ART tests are driven by an in-tree runner (`orchestrator/attacks/art_runner.py`) that parses the technique YAML directly and runs the executor over SSH.
+That's the whole setup. No `atomic-operator`, no patched virtualenv. ART tests,
+when used for calibration, are driven by an in-tree runner
+(`orchestrator/attacks/art_runner.py`) that parses the technique YAML directly
+and runs the executor over SSH.
 
 ### Atomic Red Team test YAMLs
 
-ART YAMLs live under `vendor/atomic-red-team/atomics/`, vendored as a slimmed copy of the upstream repo (atomics + LICENSE only). `config.yaml` points `atomics_path` at that directory; the runner looks up tests by `T<id>/T<id>.yaml`.
+ART YAMLs live under `vendor/atomic-red-team/atomics/`, vendored as a slimmed
+copy of the upstream repo (atomics + LICENSE only). `config.yaml` points
+`atomics_path` at that directory; the runner looks up tests by
+`T<id>/T<id>.yaml`. The executable calibration subset is locked in
+`attacks/art/selected_tests.yml`.
 
 ---
 
@@ -236,6 +246,24 @@ A few things that guided the architecture choices:
 
 ## Atomic Red Team
 
-`vendor/atomic-red-team/atomics/` contains the ART technique YAMLs (plus `LICENSE.txt`), copied from [redcanaryco/atomic-red-team](https://github.com/redcanaryco/atomic-red-team). Only the `atomics/` tree and license are vendored — the rest of the upstream repo (gemspec, poetry config, bin scripts, etc.) is not used by this project and is intentionally excluded.
+ART is a calibration layer, not the base for complex scenarios. The thesis claim
+is: ART is used as an ATT&CK-mapped atomic baseline, while multi-step scenarios
+are controlled by this framework.
+
+`attacks/art/catalog.lock.yml` records the ART source repository, license,
+selected techniques, and the fact that the full corpus is not required.
+`attacks/art/selected_tests.yml` selects 3-5 simple Linux tests used by the
+`art_calibration` scenario. That scenario can be run through the normal
+orchestrator path and still emits the canonical run artifacts:
+
+- `execution_truth.jsonl`
+- `artifact_expectations.jsonl`
+- `reference_context.json`
+
+`vendor/atomic-red-team/atomics/` contains the ART technique YAMLs (plus
+`LICENSE.txt`), copied from
+[redcanaryco/atomic-red-team](https://github.com/redcanaryco/atomic-red-team).
+Only the selected tests are part of the calibration contract; custom multi-step
+scenarios must not depend on ART for their attack logic.
 
 To refresh against upstream, manually overwrite `vendor/atomic-red-team/atomics/` from a fresh clone of the upstream repo and commit the diff.
