@@ -133,20 +133,20 @@ role_defaults:
 ## Typical workflow
 
 ```bash
-# One-time setup — creates the libvirt network and storage pool
-python cli.py setup
+# One-time host setup — sudoers, system dirs, libvirt network + storage pool
+python cli.py init
 
-# Prepare a distro for experiments — downloads image, creates VM, takes baseline snapshot
-python cli.py prepare --distro ubuntu-22.04
+# Prepare a distro for experiments — downloads image, creates VM, builds ISF, takes baseline snapshot
+python cli.py setup --distro ubuntu-22.04
 
 # Run an experiment — reverts to baseline, runs the attack, acquires RAM + disk
-python cli.py run --distro ubuntu-22.04 --scenario father-rootkit
+python cli.py run --distro ubuntu-22.04 --scenario userland_father_ldpreload
 
 # Clean up a VM when you're done with a distro
 python cli.py destroy --distro ubuntu-22.04
 ```
 
-The `prepare` step is intentionally separate from `run`. You set up a distro once, snapshot it, and then run as many experiments as you want against that clean baseline.
+The `setup` step is intentionally separate from `run`. You set up a distro once, snapshot it, and then run as many experiments as you want against that clean baseline. Scenario keys come from `scenarios.yaml`.
 
 ---
 
