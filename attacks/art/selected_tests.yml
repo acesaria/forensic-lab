@@ -1,0 +1,98 @@
+schema: forensic-lab.art_selected_tests.v1
+description: >
+  Small Linux-only ART subset used for atomic ATT&CK-mapped calibration.
+  These tests are intentionally simple and bounded; they are not a scenario
+  corpus for realistic multi-stage intrusions.
+work_dir: /tmp/art_calibration
+tests:
+  - id: unix_shell_loop
+    technique: T1059.004
+    guid: b04ed73c-7d43-4dc8-b563-a2fc595cba1a
+    name: Command line scripts
+    calibration_goal: Unix shell command execution
+    timeout: 30
+    cleanup: false
+    truth:
+      event_class: process_exec
+      entity_type: process
+      entity_value: "for i in $(seq 1 5); do echo \"$i, Atomic Red Team was here!\"; sleep 1; done"
+      expected_sources: [disk_logs]
+      observables:
+        - operation: timeline
+          source_tool: plaso
+          entity_type: process
+          entity_value: "Atomic Red Team was here"
+
+  - id: file_create_modify_script
+    technique: T1059.004
+    guid: 7e7ac3ed-f795-4fa5-b711-09d6fbe9b873
+    name: Create and Execute Bash Shell Script
+    calibration_goal: file creation/modification plus script execution
+    timeout: 30
+    cleanup: true
+    input_arguments:
+      script_path: /tmp/art_calibration/art_shell.sh
+      host: 127.0.0.1
+    truth:
+      event_class: file_created
+      entity_type: path
+      entity_value: /tmp/art_calibration/art_shell.sh
+      expected_sources: [disk_fs, disk_logs]
+      observables:
+        - operation: timeline
+          source_tool: tsk
+          entity_type: path
+          entity_value: /tmp/art_calibration/art_shell.sh
+        - operation: timeline
+          source_tool: plaso
+          entity_type: process
+          entity_value: /tmp/art_calibration/art_shell.sh
+
+  - id: simulated_tool_transfer
+    technique: T1105
+    guid: bdc373c5-e9cf-4563-8a7b-a9ba720a90f3
+    name: Linux Download File and Run
+    calibration_goal: simulated tool transfer from a local file URL
+    timeout: 30
+    cleanup: true
+    pre_commands:
+      - "mkdir -p /tmp/art_calibration/source && printf '#!/bin/sh\\necho art calibration transfer\\n' > /tmp/art_calibration/source/art_transfer.sh"
+    input_arguments:
+      remote_url: file:///tmp/art_calibration/source/art_transfer.sh
+      payload_name: art_transfer.sh
+    truth:
+      event_class: file_created
+      entity_type: path
+      entity_value: /tmp/art_calibration/art_transfer.sh
+      expected_sources: [disk_fs, disk_logs]
+      observables:
+        - operation: timeline
+          source_tool: tsk
+          entity_type: path
+          entity_value: /tmp/art_calibration/art_transfer.sh
+        - operation: timeline
+          source_tool: plaso
+          entity_type: process
+          entity_value: "curl -sO file:///tmp/art_calibration/art_transfer.sh"
+
+  - id: controlled_file_deletion
+    technique: T1070.004
+    guid: 562d737f-2fc6-4b09-8c2a-7f8ff0828480
+    name: Delete a single file - FreeBSD/Linux/macOS
+    calibration_goal: controlled file deletion
+    timeout: 30
+    run_prerequisites: true
+    cleanup: true
+    input_arguments:
+      parent_folder: /tmp/art_calibration/delete/
+      file_to_delete: /tmp/art_calibration/delete/delete_me.txt
+    truth:
+      event_class: file_deleted
+      entity_type: path
+      entity_value: /tmp/art_calibration/delete/delete_me.txt
+      expected_sources: [disk_fs]
+      observables:
+        - operation: deleted_file
+          source_tool: tsk
+          entity_type: path
+          entity_value: /tmp/art_calibration/delete/delete_me.txt

@@ -9,3 +9,7 @@ scenario_01_ldpreload:
 scenario_01_ldpreload_cleanup:
   module: orchestrator.attacks.scenario_01_ldpreload
   run_cleanup: true
+
+art_calibration:
+  module: orchestrator.attacks.art_calibration
+  run_cleanup: false

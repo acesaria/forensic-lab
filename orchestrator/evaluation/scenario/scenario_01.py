@@ -1,6 +1,6 @@
 # orchestrator/evaluation/scenario/scenario_01.py
 #
-# Calibration ground truth for scenario_01 (LD_PRELOAD persistence + reverse
+# Ground truth for scenario_01 (LD_PRELOAD persistence + reverse
 # shell), expressed with observables. One logical attack, two scenario IDs:
 #
 #   scenario_01_ldpreload          no cleanup: every artifact left on disk.
@@ -34,11 +34,11 @@ SCENARIO_CLEANUP = "scenario_01_ldpreload_cleanup"
 
 # Planted artifact locators (defaults; the live run may randomize fifo/port).
 SO_PATH = "/tmp/T1574006.so"
-# The ART T1574.006 test drops the payload source under PathToAtomicsFolder
-# (fixed at /tmp/atomics) and compiles it to SO_PATH. The source persists the
-# sed-unhook cleanup, so tsk flags it as a temp file; it is a real attack
-# artifact and belongs in ground truth (otherwise it scores as a false positive).
-SRC_PATH = "/tmp/atomics/T1574.006/src/Linux/T1574.006.c"
+# The scenario writes the payload source under its own /tmp workspace and
+# compiles it to SO_PATH. The source persists the sed-unhook cleanup, so tsk
+# flags it as a temp file; it is a real attack artifact and belongs in ground
+# truth (otherwise it scores as a false positive).
+SRC_PATH = "/tmp/scenario_01_ldpreload/T1574.006.c"
 PRELOAD_PATH = "/etc/ld.so.preload"
 DISCOVERY_OUTPUT = "/tmp/T1082.txt"
 RS_FIFO = "/tmp/.rs_fifo"
@@ -96,10 +96,10 @@ def ldpreload_so_observables(
 ) -> list[Observable]:
     # E2 disk artifacts of the compiled payload: the .so output (so_path is a GT
     # entity here AND in E3, so a detection of it is always a TP, never an FP) and
-    # the .c source the ART test drops under /tmp/atomics. Both are recoverable on
-    # the timeline (tsk) and persist the sed-unhook cleanup; the yara signature
-    # locus needs the .so on disk, so it is no-cleanup only. The in-memory mapping
-    # is a SEPARATE event (E3).
+    # the .c source written by the scenario. Both are recoverable on the timeline
+    # (tsk) and persist the sed-unhook cleanup; the yara signature locus needs the
+    # .so on disk, so it is no-cleanup only. The in-memory mapping is a SEPARATE
+    # event (E3).
     obs = [
         _obs("timeline", "tsk", "path", so_path),
         _obs("timeline", "tsk", "path", src_path),
@@ -129,7 +129,7 @@ def reverse_shell_fifo_observables(
     fifo_path: str = RS_FIFO, *, cleanup: bool
 ) -> list[Observable]:
     # E4 disk artifact: the reverse-shell FIFO, recoverable on the timeline (tsk).
-    # The custom steps have no ART cleanup, so the FIFO persists on disk in both
+    # The reverse-shell step has no cleanup, so the FIFO persists on disk in both
     # variants.
     return [_obs("timeline", "tsk", "path", fifo_path)]
 
