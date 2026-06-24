@@ -12,7 +12,11 @@
       "technique": "T1082",
       "event_class": "file_created",
       "entity": {"type": "path", "value": "/tmp/T1082.txt"},
-      "expected_sources": ["disk_fs"]
+      "details": {"step": "E1_discovery_os_info"},
+      "expected_sources": ["disk_fs"],
+      "observables": [
+        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/T1082.txt"}
+      ]
     },
     {
       "gt_id": "G2",
@@ -20,7 +24,13 @@
       "technique": "T1574.006",
       "event_class": "persistence_installed",
       "entity": {"type": "path", "value": "/etc/ld.so.preload"},
-      "expected_sources": ["disk_fs", "disk_logs"]
+      "details": {"step": "E2_ldpreload_persistence"},
+      "expected_sources": ["disk_fs", "disk_logs"],
+      "observables": [
+        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/etc/ld.so.preload"},
+        {"operation": "timeline", "source_tool": "plaso", "entity_type": "process", "entity_value": "sudo sh -c 'echo /tmp/T1574006.so > /etc/ld.so.preload'"},
+        {"operation": "timeline", "source_tool": "plaso_sigma", "entity_type": "path", "entity_value": "/etc/ld.so.preload"}
+      ]
     },
     {
       "gt_id": "G3",
@@ -28,7 +38,12 @@
       "technique": "T1574.006",
       "event_class": "file_created",
       "entity": {"type": "path", "value": "/tmp/T1574006.so"},
-      "expected_sources": ["disk_fs", "memory"]
+      "details": {"step": "E2_ldpreload_payload"},
+      "expected_sources": ["disk_fs", "memory"],
+      "observables": [
+        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/T1574006.so"},
+        {"operation": "content_scan", "source_tool": "yara", "entity_type": "path", "entity_value": "/tmp/T1574006.so"}
+      ]
     },
     {
       "gt_id": "G4",
@@ -36,7 +51,11 @@
       "technique": "T1574.006",
       "event_class": "process_exec",
       "entity": {"type": "path", "value": "/tmp/T1574006.so"},
-      "expected_sources": ["memory"]
+      "details": {"step": "E3_ldpreload_triggered"},
+      "expected_sources": ["memory"],
+      "observables": [
+        {"operation": "memory_analysis", "source_tool": "vol3", "entity_type": "path", "entity_value": "/tmp/T1574006.so"}
+      ]
     },
     {
       "gt_id": "G5",
@@ -44,7 +63,11 @@
       "technique": "T1059.004",
       "event_class": "network_connection",
       "entity": {"type": "socket", "value": "192.168.100.1:4444"},
-      "expected_sources": ["memory"]
+      "details": {"step": "E4_reverse_shell"},
+      "expected_sources": ["memory"],
+      "observables": [
+        {"operation": "memory_analysis", "source_tool": "vol3", "entity_type": "socket", "entity_value": "192.168.100.1:4444"}
+      ]
     },
     {
       "gt_id": "G6",
@@ -52,7 +75,11 @@
       "technique": "T1059.004",
       "event_class": "file_created",
       "entity": {"type": "path", "value": "/tmp/.a1b2c3"},
-      "expected_sources": ["disk_fs"]
+      "details": {"step": "E4_reverse_shell_fifo"},
+      "expected_sources": ["disk_fs"],
+      "observables": [
+        {"operation": "timeline", "source_tool": "tsk", "entity_type": "path", "entity_value": "/tmp/.a1b2c3"}
+      ]
     }
   ]
 }

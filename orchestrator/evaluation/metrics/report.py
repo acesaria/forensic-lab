@@ -11,7 +11,12 @@ from pathlib import Path
 from typing import Any
 
 from orchestrator.evaluation.contracts.models import Finding, GtManifest, Matches
-from orchestrator.evaluation.metrics.compute import MetricRow, compute_row
+from orchestrator.evaluation.metrics.compute import (
+    MetricRow,
+    compute_breakdown,
+    compute_recovery_breakdown,
+    compute_row,
+)
 
 
 def _pct(v: float | None) -> str:
@@ -21,18 +26,19 @@ def _pct(v: float | None) -> str:
 def _recall_by_layer(
     manifest: GtManifest,
     findings: list[Finding],
+    matches: Matches,
     config: dict[str, Any] | None,
     config_path: str | Path | None,
 ) -> tuple[float | None, float | None]:
-    # Re-match with community-only findings vs all findings; report recall for
-    # each so the contribution of custom gap-filler rules is explicit.
+    # Community-vs-all recall, to show the contribution of custom gap-filler
+    # rules. The all-layer result is the matches we were already handed, so only
+    # the community-only view needs a re-match.
     from orchestrator.evaluation.match.matcher import match
 
     n = len(manifest.events) or 1
     community = [f for f in findings if f.rule_layer == "community"]
     m_comm = match(manifest, community, config=config, config_path=config_path)
-    m_all = match(manifest, findings, config=config, config_path=config_path)
-    return (len(m_comm.tp) / n, len(m_all.tp) / n)
+    return (len(m_comm.tp) / n, len(matches.tp) / n)
 
 
 def render_report(
@@ -50,7 +56,7 @@ def render_report(
     by_id = {f.finding_id: f for f in findings}
 
     comm_recall, all_recall = _recall_by_layer(
-        manifest, findings, config, config_path
+        manifest, findings, matches, config, config_path
     )
 
     order = v.get("order_pairwise")
@@ -59,9 +65,10 @@ def render_report(
     mae = v["time_mae_s"]
     mae_str = "n/a" if mae is None else f"{mae:.3f}"
 
-    # Precision is in claim-cluster units (matching.yaml precision_definition):
-    # true claims = clusters folded into a matched GT (primary + corroborators).
-    true_claims = sum(int(r.get("n_clusters", 1)) for r in matches.tp)
+    # Precision uses the standard event definition (matching.yaml
+    # precision_definition: standard_events): matched GT events over matched
+    # events + in-scope FP clusters. Corroboration is a secondary statistic.
+    supporting = sum(int(r.get("n_supporting_clusters", 0)) for r in matches.tp)
 
     lines: list[str] = []
     lines.append(f"# Scenario report: {v['scenario']} ({v['run_id']})")
@@ -77,11 +84,11 @@ def render_report(
     lines.append(f"| recall | {_pct(v['recall'])} | {v['tp']}/{v['gt_n']} events |")
     lines.append(
         f"| precision | {_pct(v['precision'])} | "
-        f"{true_claims}/{true_claims + v['fp']} claims |"
+        f"{v['tp']}/{v['tp'] + v['fp']} events |"
     )
     lines.append(f"| f1 | {_pct(f1)} | - |")
+    lines.append(f"| supporting clusters (corroboration) | {supporting} | secondary |")
     lines.append(f"| order_pairwise | {_pct(order)} | - |")
-    lines.append(f"| kendall_tau | {_pct(v['kendall_tau'])} | - |")
     lines.append(f"| time_mae_s | {mae_str} | - |")
     lines.append(
         f"| f1 * order_pairwise (DERIVED) | {_pct(derived)} | "
@@ -93,6 +100,37 @@ def render_report(
     lines.append(f"- community only: {_pct(comm_recall)}")
     lines.append(f"- community + custom: {_pct(all_recall)}")
     lines.append("")
+    lines.append("## Metrics by operation / source / layer")
+    lines.append("")
+    lines.append("| operation | source | layer | tp | fp | fn | precision | recall | f1 |")
+    lines.append("| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+    for br in compute_breakdown(manifest, matches, findings):
+        b = br.values
+        lines.append(
+            f"| {b['forensic_operation']} | {b['source_tool']} | {b['rule_layer']} | "
+            f"{b['tp']} | {b['fp']} | {b['fn']} | "
+            f"{_pct(b['precision'])} | {_pct(b['recall'])} | {_pct(b['f1'])} |"
+        )
+    lines.append("")
+    recovery = compute_recovery_breakdown(findings)
+    if recovery:
+        lines.append("## Deleted-file recovery (per level)")
+        lines.append("")
+        lines.append(
+            "Escalating recovery: L1 tsk_recover (metadata) -> L2 ext4magic "
+            "(journal, ext4). not_applicable rows (e.g. tmpfs) are a declared "
+            "tool limitation, excluded from recall (NIST CFTT / SWGDE).")
+        lines.append("")
+        lines.append("| level | tool | found | not_found | tool_error | n/a | recall | scope |")
+        lines.append("| --- | --- | --- | --- | --- | --- | --- | --- |")
+        for rr in recovery:
+            r = rr.values
+            lines.append(
+                f"| {r['recovery_level']} | {r['source_tool']} | {r['found']} | "
+                f"{r['not_found']} | {r['tool_error']} | {r['not_applicable']} | "
+                f"{_pct(r['recall'])} | {r['scope']} |"
+            )
+        lines.append("")
     lines.append("## Unique tool contribution (TP events found by exactly one tool)")
     lines.append("")
     lines.append(f"- tsk: {v['uniq_tsk']}")

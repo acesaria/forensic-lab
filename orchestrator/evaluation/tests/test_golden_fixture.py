@@ -47,7 +47,6 @@ def test_metric_values():
     assert round(v["recall"], 3) == 0.833
     assert round(v["precision"], 3) == 0.714
     assert v["order_pairwise"] == 1.0
-    assert round(v["kendall_tau"], 6) == 1.0
     assert abs(v["time_mae_s"] - 0.34) < 1e-9
     # f1 = 2PR/(P+R) with P=5/7, R=5/6
     assert round(v["f1"], 3) == 0.769

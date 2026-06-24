@@ -1,0 +1,11 @@
+id: flab.memory.process_library_correlation
+name: Process loading shared object from non-standard path
+description: Correlates a memory-observed process with a loaded shared object from a writable or lab-controlled path.
+source_types: [memory]
+artifact_classes: [process, library_mapping, shared_object]
+attck: [T1574.006, T1014]
+confidence_default: 0.80
+parameters:
+  path_prefixes: [/tmp/, /var/tmp/, /dev/shm/]
+  path_tokens: [preload, father, rootkit]
+  require_pid: true

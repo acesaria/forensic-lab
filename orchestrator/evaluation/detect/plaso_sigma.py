@@ -1,49 +1,60 @@
 # orchestrator/evaluation/detect/plaso_sigma.py
 #
-# Plaso Sigma detector (Phase 3.1, Detector A). Evaluates Sigma rules against the
-# psort JSON-L event stream. GT-blind: rules express behavioral patterns only;
-# the rule-leakage lint forbids any instance constant in a rule file.
+# Sigma detector over the Plaso timeline, evaluated with SQLite. No hand-written
+# rule engine: pySigma parses each vendored SigmaHQ Linux rule and compiles it,
+# then stdlib sqlite3 runs the result against an in-memory table built from the
+# Plaso event stream. GT-blind: rules express behavioral patterns only and never
+# see the manifest.
 #
-# pySigma is used when installed; otherwise a dependency-light evaluator handles
-# the common Linux Sigma subset (named selections with field modifiers
-# contains/startswith/endswith/re, and conditions built from and/or/not/
-# "all of them"/"1 of them"/"all of <prefix>*"). A field-mapping table per data
-# source bridges Plaso attributes to Sigma fields.
+# Two evaluation paths, both standard SQLite:
+#   1. field-bound rules (Image, CommandLine, TargetFilename, ...) -> pySigma's
+#      sqlite backend compiles them to a SQL WHERE clause over a columnar table.
+#   2. pure full-text "keyword" rules (no field; e.g. the ld.so.preload rule),
+#      which the sqlite backend cannot express -> evaluated with SQLite FTS5
+#      MATCH over a full-text column holding each event's text. Only rules whose
+#      whole detection is a single value-only selection take this path; rules
+#      mixing keywords with field selections or and/not logic are skipped (no
+#      condition engine here, by design).
+#
+# Rules whose fields Plaso does not emit (auditd: name/type/a*/exe/...) reference
+# a missing column and are skipped; an auditd parser would let them fire (future
+# work). FTS5 phrase matching tokenizes on punctuation, so a keyword like
+# "/etc/ld.so.preload" matches the same tokens in an event's text.
 
 from __future__ import annotations
 
 import re
+import sqlite3
 from pathlib import Path
 from typing import Any, Iterable
 
-import yaml
+from sigma.backends.sqlite import sqliteBackend
+from sigma.collection import SigmaCollection
+from sigma.exceptions import SigmaError
+from sigma.rule import SigmaRule
 
-from orchestrator.evaluation.detect.base import make_finding
 from orchestrator.evaluation.contracts.models import Finding
+from orchestrator.evaluation.detect.base import make_finding
+from orchestrator.forensics.sigma_runner import load_rules
+from orchestrator.forensics.timeutil import epoch_us_to_iso_ms
 
-_TOOL = "plaso"
+_TOOL = "plaso_sigma"
 
-# Sigma field -> ordered Plaso attributes to read for it, per data source. The
-# default applies when a more specific source mapping has no entry. message is
-# always the last-resort haystack so a rule still fires when a parser spells a
-# field unexpectedly.
-_FIELD_MAP: dict[str, dict[str, tuple[str, ...]]] = {
-    "default": {
-        "Image": ("executable", "Image", "filename", "display_name"),
-        "CommandLine": ("command", "CommandLine", "body", "message"),
-        "TargetFilename": ("filename", "TargetFilename", "display_name"),
-        "DestinationIp": ("dest_ip", "DestinationIp"),
-        "DestinationPort": ("dest_port", "DestinationPort"),
-        "User": ("username", "user", "User"),
-        "_msg": ("message", "body"),
-    },
-    "auth": {
-        "User": ("username", "user"),
-        "_msg": ("body", "message"),
-    },
-    "cron": {
-        "_msg": ("body", "message"),
-    },
+# Sigma field -> ordered Plaso attributes to fill it from. These columns are the
+# table schema; a rule referencing a field NOT here hits a missing column and is
+# skipped (the auditd case above).
+_COLUMNS: dict[str, tuple[str, ...]] = {
+    "Image": ("executable", "Image", "filename", "display_name"),
+    "CommandLine": ("command", "CommandLine", "body", "message"),
+    "ParentImage": ("parent_executable", "ParentImage"),
+    "ParentCommandLine": ("parent_command", "ParentCommandLine"),
+    "TargetFilename": ("filename", "TargetFilename", "display_name"),
+    "CurrentDirectory": ("cwd", "CurrentDirectory"),
+    "DestinationIp": ("dest_ip", "DestinationIp"),
+    "DestinationPort": ("dest_port", "DestinationPort"),
+    "DestinationHostname": ("hostname", "DestinationHostname"),
+    "User": ("username", "user", "User"),
+    "message": ("message", "body"),
 }
 
 _CATEGORY_TO_CLASS = {
@@ -54,9 +65,9 @@ _CATEGORY_TO_CLASS = {
     "network_connection": "network_connection",
 }
 
-# Event classes that legitimately derive from a filesystem-metadata (fs:stat)
-# event. A file existing under /tmp is not evidence it executed or opened a
-# socket, so process/network rules must not fire on bare filestat rows.
+# Event classes that may legitimately derive from a filesystem-metadata (fs:stat)
+# row. A process/network rule must not fire on a bare file-existence row (a file
+# under /tmp is not proof it executed), so those classes gate filestat out.
 _FILE_EVENT_CLASSES = frozenset(
     {
         "file_created",
@@ -69,107 +80,36 @@ _FILE_EVENT_CLASSES = frozenset(
 )
 
 
-def _is_filestat(event: dict[str, Any]) -> bool:
-    return event.get("data_type") == "fs:stat" or event.get("parser") == "filestat"
-
-
-def _event_value(event: dict[str, Any], sigma_field: str, source: str) -> str | None:
-    mapping = _FIELD_MAP.get(source, {})
-    keys = mapping.get(sigma_field) or _FIELD_MAP["default"].get(sigma_field, ())
-    for k in keys:
-        v = event.get(k)
+def _value(event: dict[str, Any], attrs: tuple[str, ...]) -> str | None:
+    for a in attrs:
+        v = event.get(a)
         if isinstance(v, (str, int)) and str(v) != "":
             return str(v)
     return None
 
 
-def _match_value(event_val: str, modifier: str, expected: Any) -> bool:
-    candidates = expected if isinstance(expected, list) else [expected]
-    ev = event_val
-    for exp in candidates:
-        exp_s = str(exp)
-        if modifier == "contains" and exp_s in ev:
-            return True
-        if modifier == "startswith" and ev.startswith(exp_s):
-            return True
-        if modifier == "endswith" and ev.endswith(exp_s):
-            return True
-        if modifier == "re" and re.search(exp_s, ev):
-            return True
-        if modifier == "" and ev == exp_s:
-            return True
-    return False
+def _is_filestat(event: dict[str, Any]) -> bool:
+    return event.get("data_type") == "fs:stat" or event.get("parser") == "filestat"
 
 
-def _eval_selection(sel: Any, event: dict[str, Any], source: str) -> bool:
-    # A selection is a mapping {field|modifier: value(s)} ANDed together, or a
-    # list of such maps ORed together.
-    if isinstance(sel, list):
-        return any(_eval_selection(s, event, source) for s in sel)
-    if not isinstance(sel, dict):
-        return False
-    for key, expected in sel.items():
-        field, _, modifier = key.partition("|")
-        ev = _event_value(event, field, source)
-        if ev is None:
-            # Unmapped field: fall back to scanning the message text so a rule is
-            # not silently dead when a parser omits the exact attribute.
-            ev = _event_value(event, "_msg", source) or ""
-        if not _match_value(ev, modifier, expected):
-            return False
-    return True
-
-
-def _eval_condition(condition: str, selections: dict[str, bool]) -> bool:
-    expr = condition.strip()
-    names = list(selections.keys())
-
-    def _join(sel_names: list[str], op: str) -> str:
-        return ("(" + f" {op} ".join(sel_names) + ")") if sel_names else "False"
-
-    expr = expr.replace("all of them", _join(names, "and"))
-    expr = re.sub(r"\b1 of them\b", _join(names, "or"), expr)
-    expr = re.sub(r"\bany of them\b", _join(names, "or"), expr)
-
-    def _of_prefix(m: re.Match) -> str:
-        op = "and" if m.group(1) == "all" else "or"
-        prefix = m.group(2)
-        matched = [n for n in names if n.startswith(prefix)]
-        return _join(matched, op)
-
-    expr = re.sub(r"\b(all|1|any) of (\w+)\*", _of_prefix, expr)
-
-    # Now a boolean expression over selection names + and/or/not/parens.
-    tokens = re.findall(r"\(|\)|\band\b|\bor\b|\bnot\b|[A-Za-z_][A-Za-z0-9_]*", expr)
-    py = []
-    for t in tokens:
-        if t in ("and", "or", "not", "(", ")"):
-            py.append(t)
-        elif t in ("True", "False"):
-            py.append(t)
-        else:
-            py.append("True" if selections.get(t, False) else "False")
-    try:
-        return bool(eval(" ".join(py), {"__builtins__": {}}, {}))  # noqa: S307
-    except Exception:
-        return False
-
-
-def _rule_source(rule: dict[str, Any]) -> str:
-    ls = rule.get("logsource", {}) or {}
-    return str(ls.get("service") or ls.get("category") or "default")
+def _ts(event: dict[str, Any]) -> str | None:
+    ts = event.get("timestamp")
+    if isinstance(ts, int) and ts > 0:
+        return epoch_us_to_iso_ms(ts)
+    return None
 
 
 def _rule_event_class(rule: dict[str, Any]) -> str:
-    if rule.get("event_class"):
-        return str(rule["event_class"])
     ls = rule.get("logsource", {}) or {}
     cat = ls.get("category")
     if cat in _CATEGORY_TO_CLASS:
         return _CATEGORY_TO_CLASS[cat]
     if ls.get("service") == "cron":
         return "persistence_installed"
-    return "process_exec"
+    # No category (keyword/IOC or generic linux rule): treat the hit as "artifact
+    # present on disk". file_created is bridged to persistence/file_modified by the
+    # matcher's equivalence table, and it is allowed on filestat rows.
+    return "file_created"
 
 
 def _rule_technique(rule: dict[str, Any]) -> str | None:
@@ -180,87 +120,195 @@ def _rule_technique(rule: dict[str, Any]) -> str | None:
     return None
 
 
-def _entity_for(event_class: str, event: dict[str, Any], source: str) -> tuple[str, str]:
-    if event_class in ("file_created", "file_modified", "file_deleted", "persistence_installed"):
-        v = _event_value(event, "TargetFilename", source) or _event_value(event, "Image", source)
+def _entity_for(event_class: str, event: dict[str, Any]) -> tuple[str, str]:
+    if event_class in _FILE_EVENT_CLASSES:
+        v = _value(event, _COLUMNS["TargetFilename"]) or _value(event, _COLUMNS["Image"])
         return "path", (v or "-")
     if event_class == "network_connection":
-        ip = _event_value(event, "DestinationIp", source) or "-"
-        port = _event_value(event, "DestinationPort", source)
+        ip = _value(event, _COLUMNS["DestinationIp"]) or "-"
+        port = _value(event, _COLUMNS["DestinationPort"])
         return "socket", (f"{ip}:{port}" if port else ip)
-    v = _event_value(event, "CommandLine", source) or _event_value(event, "Image", source)
+    v = _value(event, _COLUMNS["CommandLine"]) or _value(event, _COLUMNS["Image"])
     return "process", (v or "-")
 
 
-def _ts(event: dict[str, Any]) -> str | None:
-    from orchestrator.forensics.timeutil import epoch_us_to_iso_ms
+def _regexp(pattern: str, value: Any) -> bool:
+    # SQLite REGEXP hook: "<col> REGEXP <pat>" calls regexp(pat, col).
+    if value is None:
+        return False
+    try:
+        return re.search(pattern, str(value)) is not None
+    except re.error:
+        return False
 
-    ts = event.get("timestamp")
-    if isinstance(ts, int) and ts > 0:
-        return epoch_us_to_iso_ms(ts)
+
+def _event_fulltext(event: dict[str, Any]) -> str:
+    # Everything searchable in one string, so a keyword can match a value in any
+    # field (path, message, command, ...), like a full-text search over the event.
+    return " ".join(str(v) for v in event.values() if isinstance(v, (str, int)))
+
+
+def _keyword_selection(rule: dict[str, Any]) -> list[str] | None:
+    # A "pure keyword" rule: the condition is a single selection name and that
+    # selection is a plain list/string of values (no field, no and/or/not). Those
+    # values are OR-ed full-text terms. Anything more complex returns None and is
+    # left to the field-bound path (or skipped).
+    det = rule.get("detection", {}) or {}
+    cond = str(det.get("condition", "")).strip()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", cond):
+        return None
+    sel = det.get(cond)
+    if isinstance(sel, str):
+        return [sel]
+    if isinstance(sel, list) and all(isinstance(x, (str, int)) for x in sel):
+        return [str(x) for x in sel]
     return None
 
 
-def load_rules(rule_dirs: list[Path]) -> list[tuple[dict[str, Any], str, Path]]:
-    # Returns (rule, rule_layer, path). rule_layer is "custom" for rules under a
-    # .../custom/ directory, "community" otherwise.
-    rules: list[tuple[dict[str, Any], str, Path]] = []
-    for d in rule_dirs:
-        if not d.is_dir():
+def _fts_match_query(keywords: list[str]) -> str | None:
+    # Build an FTS5 MATCH expression: each keyword becomes AND-ed phrases (one per
+    # "*"-separated chunk, approximating Sigma's wildcard "contains"), OR-ed across
+    # keywords. Pure-punctuation chunks are dropped (FTS5 has no token for them).
+    terms: list[str] = []
+    for kw in keywords:
+        chunks = [c.strip() for c in str(kw).split("*")]
+        phrases = ['"' + c.replace('"', '""') + '"' for c in chunks if any(ch.isalnum() for ch in c)]
+        if not phrases:
             continue
-        for path in sorted(d.rglob("*.yml")) + sorted(d.rglob("*.yaml")):
-            try:
-                docs = list(yaml.safe_load_all(path.read_text(encoding="utf-8")))
-            except yaml.YAMLError:
-                continue
-            layer = "custom" if "custom" in path.parts else "community"
-            for doc in docs:
-                if isinstance(doc, dict) and "detection" in doc:
-                    rules.append((doc, layer, path))
+        terms.append("(" + " AND ".join(phrases) + ")" if len(phrases) > 1 else phrases[0])
+    return " OR ".join(terms) if terms else None
+
+
+def _build_db(events: list[dict[str, Any]]) -> sqlite3.Connection:
+    conn = sqlite3.connect(":memory:")
+    conn.create_function("regexp", 2, _regexp, deterministic=True)
+    cols = ", ".join(f'"{c}" TEXT' for c in _COLUMNS)
+    conn.execute(f"CREATE TABLE events (event_index INTEGER, {cols})")
+    conn.execute("CREATE VIRTUAL TABLE events_fts USING fts5(content)")
+    names = list(_COLUMNS)
+    placeholders = ",".join(["?"] * (len(names) + 1))
+    field_rows = []
+    fts_rows = []
+    for i, ev in enumerate(events):
+        if not isinstance(ev, dict):
+            continue
+        field_rows.append((i, *[_value(ev, _COLUMNS[c]) for c in names]))
+        fts_rows.append((i, _event_fulltext(ev)))
+    conn.executemany(f"INSERT INTO events VALUES ({placeholders})", field_rows)
+    conn.executemany("INSERT INTO events_fts(rowid, content) VALUES (?, ?)", fts_rows)
+    return conn
+
+
+def _rule_to_sql(rule: dict[str, Any]) -> list[str]:
+    clean = {k: v for k, v in rule.items() if k not in ("_path", "event_class")}
+    return sqliteBackend().convert(SigmaCollection([SigmaRule.from_dict(clean)]))
+
+
+def _field_match(conn: sqlite3.Connection, rule: dict[str, Any]) -> set[int] | None:
+    # Field-bound path. Returns matched event indices, or None when the backend
+    # cannot express the rule (full-text keyword rule) so the caller tries FTS5.
+    try:
+        sqls = _rule_to_sql(rule)
+    except SigmaError:
+        return None
+    indices: set[int] = set()
+    for sql in sqls:
+        if "WHERE" not in sql:
+            continue
+        where = sql.split("WHERE", 1)[1]
+        try:
+            rows = conn.execute(f"SELECT event_index FROM events WHERE{where}").fetchall()
+        except sqlite3.OperationalError:
+            return set()  # references a column Plaso does not emit -> skip rule
+        indices.update(i for (i,) in rows)
+    return indices
+
+
+def _keyword_hits(
+    conn: sqlite3.Connection, events: list[dict[str, Any]], rule: dict[str, Any]
+) -> list[tuple[int, str, str]]:
+    # FTS5 path for pure keyword rules. Returns (event_index, "path", ioc) tuples.
+    # The entity is the path-like keyword IOC the event text contains, NOT the
+    # event's own fields: a log line mentioning /etc/ld.so.preload must map to that
+    # IOC, not to the log file it appears in. Non-path keywords (commands, generic
+    # strings) carry no entity that GT matching can use, so they are dropped.
+    keywords = _keyword_selection(rule)
+    if not keywords:
+        return []
+    query = _fts_match_query(keywords)
+    if not query:
+        return []
+    try:
+        rows = conn.execute(
+            "SELECT rowid FROM events_fts WHERE events_fts MATCH ?", (query,)
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+    paths = [k for k in keywords if k.startswith("/") and "*" not in k]
+    hits: list[tuple[int, str, str]] = []
+    for idx in sorted(i for (i,) in rows):
+        text = _event_fulltext(events[idx])
+        for p in paths:
+            if p in text:
+                hits.append((idx, "path", p))
+    return hits
+
+
+def _load_rules(rules_config: dict[str, Any]) -> list[dict[str, Any]]:
+    dirs = rules_config.get("sigma_vendored_dirs")
+    if not dirs:
+        return load_rules()  # default vendor/sigma/rules/linux
+    rules: list[dict[str, Any]] = []
+    for d in dirs:
+        rules.extend(load_rules(Path(d)))
     return rules
-
-
-def evaluate_rule(rule: dict[str, Any], event: dict[str, Any]) -> bool:
-    detection = rule.get("detection", {})
-    condition = detection.get("condition", "")
-    source = _rule_source(rule)
-    selections = {
-        name: _eval_selection(sel, event, source)
-        for name, sel in detection.items()
-        if name != "condition"
-    }
-    return _eval_condition(str(condition), selections)
 
 
 def detect(raw_outputs: dict[str, Any], rules_config: dict[str, Any]) -> Iterable[Finding]:
     events = raw_outputs.get("plaso", [])
-    if not isinstance(events, list):
+    if not isinstance(events, list) or not events:
         return
-    rule_dirs = [Path(p) for p in rules_config.get("sigma_rule_dirs", [])]
-    rules = load_rules(rule_dirs)
-    for rule, layer, path in rules:
-        rule_id = rule.get("id") or rule.get("title") or path.stem
-        event_class = _rule_event_class(rule)
-        technique = _rule_technique(rule)
-        source = _rule_source(rule)
-        gate_filestat = event_class not in _FILE_EVENT_CLASSES
-        for i, event in enumerate(events):
-            if not isinstance(event, dict):
-                continue
-            if gate_filestat and _is_filestat(event):
-                continue
-            if evaluate_rule(rule, event):
-                etype, evalue = _entity_for(event_class, event, source)
+    rules = _load_rules(rules_config)
+    if not rules:
+        return
+
+    conn = _build_db(events)
+    try:
+        for rule in rules:
+            event_class = _rule_event_class(rule)
+            technique = _rule_technique(rule)
+            gate_filestat = event_class not in _FILE_EVENT_CLASSES
+            rule_id = rule.get("id") or rule.get("title") or Path(rule.get("_path", "rule")).stem
+
+            indices = _field_match(conn, rule)
+            if indices is None:  # keyword rule: FTS5 full-text path, entity = IOC
+                hits = _keyword_hits(conn, events, rule)
+            else:
+                hits = [
+                    (idx, *_entity_for(event_class, events[idx]))
+                    for idx in sorted(indices)
+                    if not (gate_filestat and _is_filestat(events[idx]))
+                ]
+
+            seen: set[tuple[str, str]] = set()
+            for idx, etype, evalue in hits:
+                if evalue == "-" or (etype, evalue) in seen:
+                    continue
+                seen.add((etype, evalue))
+                ts = _ts(events[idx])
                 yield make_finding(
                     source_tool=_TOOL,
                     detector=f"sigma:{rule_id}",
-                    rule_layer=layer,
+                    rule_layer="community",
                     event_class=event_class,
                     entity_type=etype,
                     entity_value=evalue,
-                    ts_quality="wallclock" if _ts(event) else "none",
+                    ts_quality="wallclock" if ts else "none",
+                    forensic_operation="timeline",
                     technique=technique,
-                    ts_utc=_ts(event),
-                    raw_ref=f"plaso:event:{i}",
+                    ts_utc=ts,
+                    raw_ref=f"plaso_sigma:event:{idx}",
                     confidence="medium",
                 )
+    finally:
+        conn.close()

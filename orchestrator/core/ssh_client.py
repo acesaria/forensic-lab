@@ -205,6 +205,32 @@ class SSHClient:
             else:
                 time.sleep(0.05)
 
+    def stream_command_to_file(
+        self, cmd: str, dest: Path, timeout: int = 3600
+    ) -> int:
+        """Run cmd on the VM and stream its raw stdout into dest.
+
+        Returns the number of bytes written; raises on a non-zero remote exit.
+        Reads in chunks so a large binary stream (e.g. a live disk image piped
+        from dd) is never buffered in memory the way run() would. The remote
+        command should keep stderr quiet (e.g. dd status=none) so the channel
+        carries only payload bytes; stderr is drained at the end for diagnostics.
+        """
+        if self._client is None:
+            raise RuntimeError("SSHClient not connected")
+        _, stdout, stderr = self._client.exec_command(cmd, timeout=timeout)
+        channel = stdout.channel
+        written = 0
+        with open(dest, "wb") as fh:
+            for chunk in iter(lambda: stdout.read(4 * 1024 * 1024), b""):
+                fh.write(chunk)
+                written += len(chunk)
+        err = stderr.read().decode(errors="replace").strip()
+        code = channel.recv_exit_status()
+        if code != 0:
+            raise RuntimeError(f"remote command failed (exit {code}): {cmd}\n{err}")
+        return written
+
     def put(self, local: Path, remote: str) -> None:
         """Upload a local file to the VM via SFTP."""
         if self._client is None:

@@ -1,0 +1,5 @@
+# Vendored subset of Neo23x0 signature-base
+# (https://github.com/Neo23x0/signature-base). Only a minimal set of Linux /
+# generic rules relevant to scenario_01 is included, under yara/.
+# Pinned upstream commit the subset was taken from:
+4a1f7e9c2b8d3a6f5e0c1b4d7a9e2f8c3b6d5a0e

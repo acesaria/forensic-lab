@@ -1,0 +1,132 @@
+artifact_expectations:
+  - ae_id: AE-father-upstream-archive
+    step_id: prepare_sample
+    artifact_class: file
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{upstream_archive_path}"
+      sha256: 90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125
+    critical: false
+    attck: [T1014]
+    notes: Pinned upstream Father source archive used as inert DFIR sample material.
+
+  - ae_id: AE-father-source-metadata
+    step_id: prepare_sample
+    artifact_class: file
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{metadata_path}"
+    critical: false
+    attck: [T1014]
+    notes: Father external-sample metadata copied into the VM workspace.
+
+  - ae_id: AE-father-source-file
+    step_id: prepare_sample
+    artifact_class: file
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{source_path}"
+    critical: false
+    attck: [T1014]
+    notes: Lab-safe source harness, not original Father operational code.
+
+  - ae_id: AE-father-shared-object
+    step_id: deploy_library
+    artifact_class: shared_object
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{library_path}"
+    critical: true
+    attck: [T1574.006, T1014]
+    notes: Compiled lab-safe LD_PRELOAD shared object.
+
+  - ae_id: AE-father-preload-config
+    step_id: modify_preload_config
+    artifact_class: preload_configuration
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{preload_config_path}"
+    critical: true
+    attck: [T1574.006]
+    notes: Lab-only preload configuration artifact containing the shared object path.
+
+  - ae_id: AE-father-benign-process
+    step_id: start_benign_process
+    artifact_class: process
+    observable_kind: process
+    source_eligibility: [memory]
+    persistence: volatile
+    observability: expected_if_acquired_live
+    instance_constraints:
+      process: sleep
+      argv_contains: "{process_duration_seconds}"
+    critical: true
+    attck: [T1059.004]
+    notes: Benign target process started with LD_PRELOAD in its environment.
+
+  - ae_id: AE-father-library-mapping
+    step_id: start_benign_process
+    artifact_class: library_mapping
+    observable_kind: memory_mapping
+    source_eligibility: [memory]
+    persistence: volatile
+    observability: expected_if_acquired_live
+    instance_constraints:
+      path: "{library_path}"
+    critical: true
+    attck: [T1574.006, T1014]
+    notes: Process memory mapping of the lab-safe shared object.
+
+  - ae_id: AE-father-hiding-marker
+    step_id: observe_or_mark_hiding_feature
+    artifact_class: file
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{hiding_marker_path}"
+    critical: false
+    attck: [T1014]
+    notes: Hiding concept marker; no stealth functionality is implemented.
+
+  - ae_id: AE-father-cleanup-deleted-marker
+    step_id: partial_cleanup
+    artifact_class: deleted_file_candidate
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: deleted
+    observability: recoverable_or_timeline
+    instance_constraints:
+      path: "{cleanup_marker_path}"
+    critical: true
+    attck: [T1070.004]
+    notes: Controlled deleted marker left for deleted-file/timeline analysis.
+
+  - ae_id: AE-father-shell-log
+    step_id: start_benign_process
+    artifact_class: shell_history_log_event
+    observable_kind: log_line
+    source_eligibility: [timeline, disk]
+    persistence: unknown
+    observability: opportunistic
+    instance_constraints:
+      command: LD_PRELOAD
+    critical: false
+    attck: [T1059.004, T1574.006]
+    notes: Shell/log trace of controlled LD_PRELOAD execution when captured.

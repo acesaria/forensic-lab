@@ -1,0 +1,13 @@
+artifact_expectations:
+  - ae_id: AE-toy-file
+    step_id: create_toy_file
+    artifact_class: toy_text_file
+    observable_kind: filesystem_path
+    source_eligibility: [disk, timeline]
+    persistence: until_deleted
+    observability: direct
+    instance_constraints:
+      path: "{work_dir}/{toy_name}"
+    critical: true
+    attck: []
+    notes: harmless local file used to validate scenario engine plumbing

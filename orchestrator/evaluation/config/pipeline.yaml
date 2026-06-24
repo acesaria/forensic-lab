@@ -2,13 +2,14 @@
 #
 # Reproducibility manifest (Phase 6). Pins tool versions, parser/plugin lists,
 # rule-set git refs, and paths. The runner verifies installed versions match
-# these and aborts on mismatch (framework/acquire/provenance.py + cli.py).
+# these and aborts on mismatch (orchestrator/evaluation/provenance.py + cli.py).
 
 versions:
   plaso: "20240826"          # log2timeline.py / psort.py
   volatility3: "2.7.0"
   sleuthkit: "4.12.1"        # fls/icat/istat
-  pysigma: "0.11.0"          # optional; dependency-light fallback otherwise
+  pysigma: "1.3.3"           # Sigma rule -> SQL compilation (required)
+  pysigma_backend_sqlite: "1.1.3"  # SQLite backend for the plaso_sigma detector
   yara_python: "4.5.0"       # optional; YARA scanning of icat-extracted files
 
 # Whether a version mismatch aborts (strict) or only warns. Strict is the
@@ -34,12 +35,16 @@ extract:
 
 rulesets:
   sigma_ref: "r2024-09-01"   # SigmaHQ/sigma git tag the community rules pin to
-  sigma_rule_dirs:
-    - orchestrator/evaluation/config/rules/sigma
-    - orchestrator/evaluation/config/rules/custom
+  # Vendored SigmaHQ Linux subset (pinned in vendor/sigma/COMMIT.txt). The
+  # plaso_sigma detector compiles each rule to SQL (pySigma sqlite backend) and
+  # runs it against the Plaso timeline.
+  sigma_vendored_dirs:
+    - vendor/sigma/rules/linux
   tagging_files:
     - orchestrator/evaluation/config/rules/tagging/project_tags.txt
-  yara_rules_dir: orchestrator/evaluation/config/rules/yara
+  # Vendored Neo23x0 signature-base subset (pinned in
+  # vendor/yara/signature-base/COMMIT.txt), compiled by the YARA runner.
+  yara_rules_dir: vendor/yara/signature-base
 
 # Detector tuning that is NOT a matching threshold (those live in matching.yaml).
 detect:

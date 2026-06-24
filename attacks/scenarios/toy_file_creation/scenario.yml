@@ -1,0 +1,23 @@
+scenario_id: toy_file_creation
+description: Innocuous demo scenario that creates and verifies one text file.
+attck: []
+parameters:
+  toy_name: toy.txt
+expected_observables_file: expected_observables.yml
+steps:
+  - id: create_toy_file
+    type: shell
+    command: "mkdir -p {work_dir} && printf 'forensic lab toy artifact\n' > {work_dir}/{toy_name}"
+    truth:
+      event_type: file_created
+      object_type: path
+      object_identity: "{work_dir}/{toy_name}"
+      action: create
+      actor: lab
+      evidence_basis: [disk]
+      attck: []
+      details:
+        purpose: harmless scenario-engine smoke test
+  - id: verify_toy_file
+    type: python
+    function: verify_toy_file

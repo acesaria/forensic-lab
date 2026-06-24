@@ -1,0 +1,40 @@
+scenario_id: userland_father_ldpreload
+name: Father LD_PRELOAD controlled rootkit case study
+description: Lab-safe userland LD_PRELOAD rootkit case study inspired by Father.
+category: userland
+platform: linux
+safety_mode: lab_safe
+attck: [T1574.006, T1014, T1070.004, T1059.004]
+parameters:
+  remote_root: /tmp/forensic-lab/father_ldpreload
+  upstream_archive_path: /tmp/forensic-lab/father_ldpreload/source/father-upstream-4eb2712.tar
+  source_path: /tmp/forensic-lab/father_ldpreload/source/father_lab_preload.c
+  metadata_path: /tmp/forensic-lab/father_ldpreload/source/father_sample.lock.yml
+  library_path: /tmp/forensic-lab/father_ldpreload/lib/libfather_lab_preload.so
+  preload_config_path: /tmp/forensic-lab/father_ldpreload/etc/ld.so.preload.lab
+  process_cwd: /tmp/forensic-lab/father_ldpreload/run
+  process_stdout_path: /tmp/forensic-lab/father_ldpreload/run/benign_process.out
+  process_pid_path: /tmp/forensic-lab/father_ldpreload/run/benign_process.pid
+  hiding_marker_path: /tmp/forensic-lab/father_ldpreload/markers/hiding_feature_marker.txt
+  cleanup_marker_path: /tmp/forensic-lab/father_ldpreload/markers/transient_cleanup_marker.txt
+  process_duration_seconds: 600
+expected_observables_file: expected_observables.yml
+steps:
+  - id: prepare_sample
+    type: python
+    function: prepare_sample
+  - id: deploy_library
+    type: python
+    function: deploy_library
+  - id: modify_preload_config
+    type: python
+    function: modify_preload_config
+  - id: start_benign_process
+    type: python
+    function: start_benign_process
+  - id: observe_or_mark_hiding_feature
+    type: python
+    function: observe_or_mark_hiding_feature
+  - id: partial_cleanup
+    type: python
+    function: partial_cleanup

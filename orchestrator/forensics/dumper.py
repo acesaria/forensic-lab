@@ -5,12 +5,9 @@ RAM and disk acquisition pipeline. Pure I/O -- no VM lifecycle management.
 
 Caller contract (enforced by orchestrator._run_acquisition):
   - acquire_memory: domain must be ON (virsh dump --live)
-  - acquire_disk:   disk_source must be safe to read at the host level. The
-                    orchestrator arranges this either by shutting the VM
-                    down ("offline" workflow) or by taking a live external
-                    disk snapshot so writes divert to an overlay
-                    ("external_snapshot" workflow). The dumper itself does
-                    no VM state transitions.
+  - acquire_disk:   host-side acquisition of the qcow2; the orchestrator shuts
+                    the VM down first so the image is read with no QEMU lock held.
+The dumper itself does no VM state transitions.
 """
 
 import glob
@@ -29,29 +26,6 @@ from orchestrator.core.paths import ProjectPaths
 # tmpfs staging area for the intermediate raw image produced by
 # qemu-img convert. RAM-backed on every distro the project targets.
 _RAW_STAGING_DIR = Path("/dev/shm")
-
-# Canonical labels used in manifests and across orchestration boundaries.
-# Legacy aliases ("shutdown", "suspend") are accepted for normalization
-# only -- they must never leak past normalize_disk_acquisition_mode().
-_CANONICAL_MODES = ("offline", "external_snapshot")
-_MODE_ALIASES = {
-    "shutdown": "offline",
-    "suspend": "external_snapshot",
-}
-
-
-def normalize_disk_acquisition_mode(mode: str) -> str:
-    if mode in _CANONICAL_MODES:
-        return mode
-    canonical = _MODE_ALIASES.get(mode)
-    if canonical is not None:
-        return canonical
-    raise ValueError(
-        f"unknown disk acquisition mode: {mode!r}. "
-        f"expected one of {_CANONICAL_MODES} "
-        f"(legacy aliases: {sorted(_MODE_ALIASES)})"
-    )
-
 
 _log = logging.getLogger(__name__)
 
@@ -98,15 +72,9 @@ class AcquisitionManifest:
     created_at: float
     memory_image: ImageMetadata
     disk_image: ImageMetadata
-    # Canonical mode label: "offline" or "external_snapshot".
-    # "offline"           = VM not actively using the disk during host-side
-    #                       acquisition (guest powered off first).
-    # "external_snapshot" = live external disk snapshot, used to avoid the
-    #                       active qcow2 lock and the filesystem noise that
-    #                       a guest shutdown would create.
+    # Acquisition provenance: the disk image is taken host-side from the
+    # powered-off guest's qcow2 (clean, no QEMU lock held).
     disk_acquisition_mode: str = "offline"
-    # Derived from disk_acquisition_mode; carried explicitly so downstream
-    # tools don't have to know the mapping.
     disk_preparation: str = "powered_off"
 
 
@@ -175,35 +143,44 @@ class Dumper:
 
     def acquire_disk(self, source_image_path: Path, dest: Path) -> ImageMetadata:
         """
-        Pure host-side disk acquisition: qemu-img convert -> raw, then
-        ewfacquire -> EWF. Assumes disk_source is safe to read (VM off, or
-        behind an external snapshot overlay so writes don't touch it).
+        Host-side disk acquisition (offline mode): qemu-img convert -> raw, then
+        ewfacquire -> EWF. Assumes the source qcow2 is safe to read (VM off).
         VM lifecycle preparation is the caller's responsibility.
         """
         ewf_prefix = str(dest.with_suffix(""))
         # Stage the raw intermediate on tmpfs so we don't pay a full second
         # write to spinning storage. /dev/shm is RAM-backed on systemd
-        # distros; ewfacquire reads it back compressed.
+        # distros; ewfacquire reads it back compressed. Safe here because a
+        # sparse qcow2 convert writes only its allocated bytes.
         raw_path = _RAW_STAGING_DIR / f"{dest.stem}-{os.getpid()}.raw"
-
         self._clean_previous_output(ewf_prefix, raw_path)
 
         started = time.time()
         virtual_size = self._qemu_virtual_size(source_image_path)
-        console.step(
-            f"acquiring disk from '{Path(source_image_path).stem}'..."
-        )
-
+        console.step(f"acquiring disk from '{Path(source_image_path).stem}'...")
         try:
             self._convert_to_raw(source_image_path, raw_path)
-            self._run_ewfacquire(raw_path, ewf_prefix)
+            return self._wrap_raw_to_ewf(
+                raw_path, ewf_prefix, started, virtual_size,
+                tool="qemu-img convert -O raw && ewfacquire -u -c empty-block",
+            )
         finally:
-            # Belt-and-braces: _run_ewfacquire already unlinks on its own
-            # finally, but a failure inside _convert_to_raw would otherwise
-            # leak a multi-GB file in tmpfs.
+            # _run_ewfacquire unlinks raw_path itself, but a failure inside
+            # _convert_to_raw would otherwise leak a multi-GB file in tmpfs.
             if raw_path.exists():
                 raw_path.unlink()
 
+    def _wrap_raw_to_ewf(
+        self,
+        raw_path: Path,
+        ewf_prefix: str,
+        started: float,
+        virtual_size: int | None,
+        tool: str,
+    ) -> ImageMetadata:
+        # Wrap the staged raw image to EWF, validate + chown the segments, and
+        # build the manifest metadata.
+        self._run_ewfacquire(raw_path, ewf_prefix)
         ewf_segments = sorted(glob.glob(f"{ewf_prefix}.E??"))
         self._validate_ewf_segments(ewf_segments, ewf_prefix)
         self._chown_segments(ewf_segments)
@@ -215,7 +192,7 @@ class Dumper:
         return ImageMetadata(
             path=str(Path(ewf_segments[0])),
             segments=[str(Path(s)) for s in ewf_segments],
-            tool="qemu-img convert -O raw && ewfacquire -u -c fast",
+            tool=tool,
             sha256=self._sha256(Path(ewf_segments[0])),
             size_bytes=Path(ewf_segments[0]).stat().st_size,
             timestamp=time.time(),
@@ -232,26 +209,14 @@ class Dumper:
         scenario_id: str,
         memory_meta: ImageMetadata,
         disk_meta: ImageMetadata,
-        disk_acquisition_mode: str = "offline",
     ) -> str:
         """Write AcquisitionManifest to disk. Returns the manifest path as str."""
-        # Defensive normalization: callers should already pass canonical
-        # labels, but accepting legacy aliases here means no manifest can
-        # accidentally record "shutdown" or "suspend".
-        canonical_mode = normalize_disk_acquisition_mode(disk_acquisition_mode)
-        preparation = (
-            "external_snapshot"
-            if canonical_mode == "external_snapshot"
-            else "powered_off"
-        )
         manifest = AcquisitionManifest(
             run_id=run_id,
             scenario_id=scenario_id,
             created_at=time.time(),
             memory_image=memory_meta,
             disk_image=disk_meta,
-            disk_acquisition_mode=canonical_mode,
-            disk_preparation=preparation,
         )
         manifest_path = self.run_dir(run_id) / "manifest.json"
         with open(manifest_path, "w") as f:

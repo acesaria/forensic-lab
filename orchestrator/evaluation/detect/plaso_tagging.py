@@ -81,6 +81,7 @@ def detect(raw_outputs: dict[str, Any], rules_config: dict[str, Any]) -> Iterabl
                 entity_type=etype,
                 entity_value=evalue,
                 ts_quality="wallclock" if _ts(event) else "none",
+                forensic_operation="timeline",
                 technique=technique,
                 ts_utc=_ts(event),
                 raw_ref=f"plaso:tagged:{i}",

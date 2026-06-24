@@ -25,10 +25,8 @@ VM power-state contract
 prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM destroyed)
 _reset_lab         ends ON + SSH ready
-_run_acquisition   end state depends on mode: "offline" -> OFF,
-                   "external_snapshot" -> ON (guest never stopped)
-run_experiment     mirrors _run_acquisition when acquire=True; ends ON when
-                   acquire=False
+_run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
+run_experiment     ends OFF when acquire=True; ends ON when acquire=False
 """
 
 from datetime import datetime
@@ -55,10 +53,6 @@ from orchestrator.core.vm_manager import VMManager
 from orchestrator.attacks import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
-from orchestrator.forensics.dumper import (
-    ImageMetadata,
-    normalize_disk_acquisition_mode,
-)
 from orchestrator.forensics.plaso_runner import (
     default_linux_filter,
     read_timeline,
@@ -75,7 +69,10 @@ from orchestrator.evaluation.contracts.models import GtManifest
 from orchestrator.evaluation.contracts.validate import load_gt_manifest
 from orchestrator.evaluation.extract.vol3 import extract_plugins
 from orchestrator.evaluation.extract.tsk import extract_bodyfile
-from orchestrator.evaluation.pipeline import run_from_raw
+from orchestrator.evaluation.provenance import build_provenance, write_provenance
+from orchestrator.canonical.legacy import write_canonical_from_legacy
+from orchestrator.forensics import deleted_file_runner, yara_runner
+from orchestrator.evaluation.pipeline import load_pipeline_config, run_from_raw
 
 
 class ForensicOrchestrator:
@@ -189,10 +186,9 @@ class ForensicOrchestrator:
         3. Acquire RAM + disk (unless acquire=False)
         4. Detect IOCs + score per-step metrics (unless evaluate=False)
 
-        End VM state mirrors the acquisition mode: "offline" leaves the
-        VM OFF, "external_snapshot" leaves it ON. When acquire=False the
-        VM is left ON. Evaluation needs the acquired images, so it only
-        runs when acquire is True.
+        The VM ends OFF after acquisition (host-side disk acquisition needs it
+        powered down). When acquire=False the VM is left ON. Evaluation needs the
+        acquired images, so it only runs when acquire is True.
         Returns manifest path if acquired, else None.
         """
         console.section(f"experiment: {scenario_id} on {distro_id}")
@@ -225,11 +221,12 @@ class ForensicOrchestrator:
             gt_manifest_path = self._persist_gt_manifest(run_id, gt_builder)
 
         if acquire:
-            manifest_path = self._run_acquisition(
-                vm_name,
+            manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
+            self._write_canonical_artifacts(
                 run_id,
-                scenario_id,
-                disk_acquisition_mode="offline",
+                gt_manifest_path,
+                acquisition_manifest_path=manifest_path,
+                distro_id=distro_id,
             )
             if evaluate:
                 self._evaluate_run_framework(
@@ -352,10 +349,42 @@ class ForensicOrchestrator:
         out = run_dir / "gt_manifest.json"
         try:
             gt_builder.write(out)
+            self._write_canonical_artifacts(run_id, out, distro_id=gt_builder.distro)
             console.ok(f"gt manifest written: {out}")
         except Exception as exc:
             console.warn(f"gt manifest not written: {exc}")
         return out
+
+    def _write_canonical_artifacts(
+        self,
+        run_id: str,
+        gt_manifest_path: Path,
+        *,
+        acquisition_manifest_path: str | Path | None = None,
+        distro_id: str | None = None,
+    ) -> None:
+        try:
+            tool_versions = load_pipeline_config().get("versions", {})
+            volatility_symbols = self._volatility_context(distro_id) if distro_id else None
+            write_canonical_from_legacy(
+                gt_manifest_path,
+                self.dumper.run_dir(run_id),
+                acquisition_manifest_path=acquisition_manifest_path,
+                repo_root=self.repo_root,
+                tool_versions=tool_versions,
+                volatility_symbols=volatility_symbols,
+            )
+        except Exception as exc:
+            console.warn(f"canonical GT artifacts not written: {exc}")
+
+    def _volatility_context(self, distro_id: str | None) -> dict[str, Any]:
+        if not distro_id:
+            return {"symbols": None, "profile": None}
+        try:
+            isf = self._vol_runner.resolve_isf(distro_id)
+        except Exception:
+            return {"symbols": None, "profile": None}
+        return {"symbols": str(isf), "profile": isf.name}
 
     def _evaluate_run_framework(
         self,
@@ -401,14 +430,44 @@ class ForensicOrchestrator:
             except Exception as exc:
                 console.warn(f"tsk extraction degraded: {exc}")
 
+            # External-tool channels (best-effort, like vol3/tsk). YARA needs a
+            # mounted/extracted FS root, provided per-distro by self._fs_scan_root
+            # (None -> skipped). The plaso_sigma detector runs automatically over
+            # raw_outputs["plaso"].
+            scan_root = self._fs_scan_root(distro_id)
+            if scan_root is not None:
+                try:
+                    raw_outputs["yara"] = yara_runner.run(scan_root)
+                except Exception as exc:
+                    console.warn(f"yara scan degraded: {exc}")
+
+            # Escalating deleted-file recovery. Targets are the GT deleted_file
+            # observables, passed as plain dicts so the runner stays GT-blind.
+            analysis_dir = self._paths.run_analysis_dir(run_id)
             case_window = self._case_window(gt)
+            recovery_versions: dict[str, Any] = {}
+            targets = self._deleted_file_targets(gt)
+            if targets:
+                try:
+                    payload = deleted_file_runner.run(
+                        disk_path,
+                        self._partition_info(distro_id, disk_path, case_window),
+                        targets,
+                        analysis_dir / "deleted_file",
+                        run_id,
+                    )
+                    raw_outputs["deleted_file"] = payload
+                    recovery_versions = payload.get("tool_versions", {})
+                except Exception as exc:
+                    console.warn(f"deleted-file recovery degraded: {exc}")
+
             row = run_from_raw(
                 gt,
                 raw_outputs,
-                self._paths.run_analysis_dir(run_id),
+                analysis_dir,
                 case_window=case_window,
-                legacy=True,
             )
+            self._write_recovery_provenance(run_id, analysis_dir, recovery_versions)
         except Exception as exc:
             console.warn(f"evaluation failed (acquisition is intact): {exc}")
             console.section_end()
@@ -438,6 +497,96 @@ class ForensicOrchestrator:
         lo = datetime.fromtimestamp(min(times) - margin, timezone.utc)
         hi = datetime.fromtimestamp(max(times) + margin, timezone.utc)
         return {"start": iso_utc_ms(lo), "end": iso_utc_ms(hi)}
+
+    def _fs_scan_root(self, distro_id: str) -> Path | None:
+        # Root of a mounted/extracted filesystem for YARA to walk (/tmp, /etc
+        # under it). The current acquisition flow does not mount the E01, so this
+        # is opt-in: set host.fs_scan_root (or role default) to a directory where
+        # the image is mounted/extracted, else YARA is skipped.
+        # TODO: mount the read-only E01 (ewfmount + loop) here so YARA runs
+        # automatically without an externally provided root.
+        root = self._role_defaults.get("fs_scan_root")
+        if not root:
+            return None
+        p = Path(root)
+        return p if p.is_dir() else None
+
+    @staticmethod
+    def _deleted_file_targets(gt: GtManifest) -> list[dict[str, Any]]:
+        # Artifacts to attempt recovery for: the GT observables whose operation is
+        # deleted_file, deduped by value. Read from GT here (orchestrator is
+        # GT-aware) and handed to the runner as plain dicts to keep it blind.
+        targets: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for ev in gt.events:
+            for o in ev.observables:
+                if o.operation == "deleted_file" and o.entity_value not in seen:
+                    seen.add(o.entity_value)
+                    targets.append(
+                        {"entity_type": o.entity_type, "entity_value": o.entity_value}
+                    )
+        return targets
+
+    def _partition_info(
+        self,
+        distro_id: str,
+        disk_path: Path,
+        case_window: dict[str, str] | None = None,
+    ) -> dict[str, Any]:
+        # Filesystem context for the recovery runner. fs_type gates ext4magic;
+        # tmpfs_mounts mark volatile paths (deletions there are unrecoverable).
+        # offset_bytes locates the ext partition for tsk_recover (start-only);
+        # part_start_sector/part_count_sectors additionally let the runner carve
+        # the exact ext partition (dd skip/count) into a raw image for ext4magic,
+        # which cannot read the whole-disk E01. All best-effort.
+        from orchestrator.forensics.timeutil import parse_iso_utc
+
+        try:
+            start_sector, count_sectors = self._sleuth_runner.partition_extent(disk_path)
+        except Exception:
+            start_sector, count_sectors = 0, 0
+        # ext4magic -a/-b bound the journal scan to the case window (unix epoch
+        # seconds), reusing the same padded span the tsk heuristic uses.
+        window_start = window_end = None
+        if case_window:
+            try:
+                window_start = int(parse_iso_utc(case_window["start"]))
+                window_end = int(parse_iso_utc(case_window["end"]))
+            except Exception:
+                window_start = window_end = None
+        return {
+            "fs_type": self._role_defaults.get("root_fs_type", "ext4"),
+            "offset_bytes": start_sector * 512,
+            "part_start_sector": start_sector,
+            "part_count_sectors": count_sectors,
+            "window_start_epoch": window_start,
+            "window_end_epoch": window_end,
+            "is_tmpfs": False,
+            # Only genuinely volatile mounts. On Ubuntu 22.04 cloud images /tmp is
+            # disk-backed ext4 (NOT tmpfs), so deletions there ARE recoverable;
+            # listing /tmp here wrongly made the recovery skip /tmp targets as
+            # unsupported_fs (the scenario_01 cleanup G1/G7 false negatives).
+            "tmpfs_mounts": self._role_defaults.get(
+                "tmpfs_mounts", ["/dev/shm", "/run"]
+            ),
+        }
+
+    def _write_recovery_provenance(
+        self, run_id: str, analysis_dir: Path, tool_versions: dict[str, Any]
+    ) -> None:
+        # Record the recovery tool versions actually used in provenance.json so the
+        # run is reproducible (which of tsk_recover/ext4magic ran).
+        if not tool_versions:
+            return
+        try:
+            prov = build_provenance(
+                run_id,
+                artifacts={"findings": analysis_dir / "findings.jsonl"},
+                extra={"recovery_tool_versions": tool_versions},
+            )
+            write_provenance(prov, analysis_dir / "provenance.json")
+        except Exception as exc:
+            console.warn(f"provenance write degraded: {exc}")
 
     def _build_timeline(
         self, run_id: str, disk_path: Path, reuse_cached: bool = False
@@ -611,19 +760,11 @@ class ForensicOrchestrator:
         vm_name: str,
         run_id: str,
         scenario_id: str,
-        disk_acquisition_mode: str = "offline",
     ) -> str:
         """
-        Acquire memory (VM ON) then disk via the chosen workflow:
-          - "offline":           shut down VM, then host-side acquire qcow2.
-          - "external_snapshot": take a live external disk snapshot so writes
-                                 divert to an overlay, host-side acquire the
-                                 quiesced base, then blockcommit + pivot.
-
-        Returns manifest path. The canonical mode label is recorded in the
-        manifest under disk_acquisition_mode.
+        Acquire memory (VM ON), then shut the guest down and acquire its disk
+        host-side from the released qcow2. Returns the manifest path.
         """
-        mode = normalize_disk_acquisition_mode(disk_acquisition_mode)
         vm_disk_path = self.vm_manager.get_disk_path(vm_name)
 
         run_dir = self.dumper.run_dir(run_id)
@@ -632,82 +773,15 @@ class ForensicOrchestrator:
 
         console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)
-        disk_meta = self._acquire_disk_for_mode(
-            vm_name, vm_disk_path, disk_dump_path, mode
-        )
+        # qemu-img convert needs the qcow2 not held by QEMU; a clean guest
+        # shutdown is the simplest way to release the lock.
+        console.step(f"acquiring disk from '{vm_name}'...")
+        self.vm_manager.shutdown_vm(vm_name)
+        disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
 
         console.section_end()
 
-        return self.dumper.write_manifest(
-            run_id,
-            scenario_id,
-            memory_meta,
-            disk_meta,
-            disk_acquisition_mode=mode,
-        )
-
-    def _acquire_disk_for_mode(
-        self,
-        vm_name: str,
-        vm_disk_path: Path,
-        dump_path: Path,
-        mode: str,
-    ) -> ImageMetadata:
-        # Mode dispatch lives here, not in the dumper: VM lifecycle and
-        # snapshot prepare/finalize are orchestration concerns, while the
-        # dumper is pure host-side I/O.
-        console.step(f"acquiring disk from '{vm_name} (mode={mode})'...")
-
-        if mode == "offline":
-            # qemu-img convert needs the qcow2 not held by QEMU; a clean
-            # guest shutdown is the simplest way to release the lock.
-            self.vm_manager.shutdown_vm(vm_name)
-            return self.dumper.acquire_disk(vm_disk_path, dump_path)
-
-        if mode == "external_snapshot":
-            # Live external disk snapshot diverts guest writes to an overlay,
-            # leaving the VM disk stable for host-side acquisition without the
-            # shutdown noise that would otherwise alter guest-visible artifacts.
-            overlay_path = vm_disk_path.parent / (
-                f"{vm_name}-acq-{int(datetime.now().timestamp())}.overlay.qcow2"
-            )
-
-            self.vm_manager.prepare_disk_acquisition_external(vm_name, overlay_path)
-
-            acq_exc: BaseException | None = None
-            disk_meta: ImageMetadata | None = None
-
-            try:
-                disk_meta = self.dumper.acquire_disk(vm_disk_path, dump_path)
-            except BaseException as exc:
-                acq_exc = exc
-
-            try:
-                self.vm_manager.finalize_disk_acquisition_external(
-                    vm_name, overlay_path
-                )
-            except Exception as fin_exc:
-                if acq_exc is not None:
-                    raise RuntimeError(
-                        "disk acquisition failed AND snapshot finalize failed; "
-                        "qcow2 chain needs manual cleanup.\n"
-                        f"  acquisition: {acq_exc}\n"
-                        f"  finalize:    {fin_exc}\n"
-                        f"  overlay:     {overlay_path}"
-                    ) from acq_exc
-                raise RuntimeError(
-                    "disk acquisition succeeded but snapshot finalize failed; "
-                    "qcow2 chain may need manual cleanup.\n"
-                    f"  overlay: {overlay_path}"
-                ) from fin_exc
-
-            if acq_exc is not None:
-                raise acq_exc
-
-            assert disk_meta is not None
-            return disk_meta
-
-        raise ValueError(f"unknown disk acquisition mode: {mode!r}")
+        return self.dumper.write_manifest(run_id, scenario_id, memory_meta, disk_meta)
 
 
 # --- module helpers ------------------------------------------------------
