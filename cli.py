@@ -454,15 +454,24 @@ def main() -> None:
                 scenario_cfg = scenarios.get(args.scenario)
                 if not scenario_cfg:
                     raise RuntimeError(f"Unknown scenario '{args.scenario}'")
+                # The --cleanup/--no-cleanup flag overrides the scenario's
+                # run_cleanup default; unset falls back to the registry value.
+                run_cleanup = (
+                    args.cleanup
+                    if args.cleanup is not None
+                    else bool(scenario_cfg.get("run_cleanup", False))
+                )
                 if "module" in scenario_cfg:
-                    # The --cleanup/--no-cleanup flag overrides the scenario's
-                    # run_cleanup default; unset falls back to the registry value.
-                    run_cleanup = (
-                        args.cleanup
-                        if args.cleanup is not None
-                        else bool(scenario_cfg.get("run_cleanup", False))
-                    )
                     orchestrator.run_experiment(
+                        distro_id,
+                        scenario_id,
+                        scenario_cfg,
+                        acquire=args.acquire,
+                        run_cleanup=run_cleanup,
+                        seed=args.seed,
+                    )
+                elif "scenario_yml" in scenario_cfg:
+                    orchestrator.run_declarative_experiment(
                         distro_id,
                         scenario_id,
                         scenario_cfg,

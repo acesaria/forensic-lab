@@ -8,6 +8,7 @@ hash/path values.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -293,6 +294,33 @@ def _process_library_correlation(rule: Rule, findings: list[ToolFinding]) -> Ite
                 )
 
 
+def _is_remote_connection(finding: ToolFinding) -> bool:
+    # A process holding a socket is only suspicious when the socket is an active
+    # remote network connection: a real peer IP (not loopback/unspecified) and a
+    # non-zero port. Every daemon owns unix, netlink and listening sockets, and
+    # the upstream adapter records their paths in the address field, so correlating
+    # on any socket would flag the whole system. Requiring a parseable, routable IP
+    # rejects all of those.
+    remote = finding.entity.get("remote")
+    addr = port = ""
+    if isinstance(remote, dict):
+        addr = str(remote.get("address") or "").strip()
+        port = str(remote.get("port") or "").strip()
+    if not addr:
+        value = str(finding.entity.get("value") or "")
+        if ":" in value:
+            addr, _, port = value.rpartition(":")
+            addr, port = addr.strip(), port.strip()
+    addr = addr.strip("[]")
+    if not port or port == "0":
+        return False
+    try:
+        ip = ipaddress.ip_address(addr)
+    except ValueError:
+        return False
+    return not (ip.is_loopback or ip.is_unspecified or ip.is_link_local or ip.is_multicast)
+
+
 def _process_socket_correlation(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
     by_run_pid: dict[tuple[str, Any], dict[str, list[ToolFinding]]] = {}
     for finding in findings:
@@ -300,6 +328,8 @@ def _process_socket_correlation(rule: Rule, findings: list[ToolFinding]) -> Iter
             continue
         pid = _pid(finding)
         if pid in (None, ""):
+            continue
+        if finding.artifact_class == "socket" and not _is_remote_connection(finding):
             continue
         bucket = by_run_pid.setdefault((finding.run_id, str(pid)), {"process": [], "socket": []})
         if finding.artifact_class in bucket:

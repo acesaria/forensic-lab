@@ -142,12 +142,16 @@ def start_benign_process(ctx, step):
     stdout_path = _param(ctx, "process_stdout_path")
     pid_path = _param(ctx, "process_pid_path")
     duration = str(_param(ctx, "process_duration_seconds"))
+    # nohup + redirected stdin/stdout detaches the benign process from the SSH
+    # exec channel so it survives the channel closing and stays alive through the
+    # memory-acquisition window. This is the documented keep-after-logout idiom,
+    # not stealth: the process remains a plainly visible child of init.
     cmd = (
         f"mkdir -p {shlex.quote(cwd)} && "
         f"cd {shlex.quote(cwd)} && "
-        f"(env LD_PRELOAD={shlex.quote(library_path)} /bin/sleep {shlex.quote(duration)} "
-        f"> {shlex.quote(stdout_path)} 2>&1 & echo $! > {shlex.quote(pid_path)}) && "
-        f"pid=$(cat {shlex.quote(pid_path)}) && "
+        f"(nohup env LD_PRELOAD={shlex.quote(library_path)} /bin/sleep {shlex.quote(duration)} "
+        f"</dev/null > {shlex.quote(stdout_path)} 2>&1 & echo $! > {shlex.quote(pid_path)}) && "
+        f"sleep 0.3 && pid=$(cat {shlex.quote(pid_path)}) && "
         f"ps -o pid=,ppid=,uid=,args= -p \"$pid\""
     )
     result = _run_checked(ctx, cmd)

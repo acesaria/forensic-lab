@@ -119,27 +119,39 @@ class RunContext:
             notes=str(rendered.get("notes") or ""),
         )
 
-    def write_reference_context(self, *, acquisition_method: str = "none") -> None:
+    def write_reference_context(
+        self,
+        *,
+        acquisition_method: str = "none",
+        guest: dict[str, Any] | None = None,
+        acquisition: dict[str, Any] | None = None,
+        tool_versions: dict[str, Any] | None = None,
+        volatility: dict[str, Any] | None = None,
+    ) -> None:
+        guest_block = {
+            "distro": None,
+            "kernel": None,
+            "timezone": "UTC",
+            "hostname": None,
+            "user": None,
+        }
+        guest_block.update(guest or {})
+        acquisition_block = {
+            "method": acquisition_method,
+            "disk_preparation": None,
+            "created_at": None,
+            "memory_image": None,
+            "disk_image": None,
+        }
+        acquisition_block.update(acquisition or {})
         data = {
             "schema": "forensic-lab.reference_context.v1",
             "run_id": self.run_id,
             "scenario_id": self.scenario_id,
-            "guest": {
-                "distro": None,
-                "kernel": None,
-                "timezone": "UTC",
-                "hostname": None,
-                "user": None,
-            },
-            "acquisition": {
-                "method": acquisition_method,
-                "disk_preparation": None,
-                "created_at": None,
-                "memory_image": None,
-                "disk_image": None,
-            },
-            "tool_versions": {},
-            "volatility": {"symbols": None, "profile": None},
+            "guest": guest_block,
+            "acquisition": acquisition_block,
+            "tool_versions": tool_versions or {},
+            "volatility": volatility or {"symbols": None, "profile": None},
             "git_commit": _git_commit(self.repo_root),
         }
         self.reference_context_path.write_text(

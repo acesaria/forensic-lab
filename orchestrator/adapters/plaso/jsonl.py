@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from orchestrator.adapters.common import iso_from_epoch, make_tool_finding
+from orchestrator.adapters.common import iso_from_plaso_timestamp, make_tool_finding
 from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding
 
 
@@ -27,7 +27,7 @@ def adapt_plaso_events(
         timestamp = event.get("timestamp")
         if timestamp is None and isinstance(event.get("date_time"), dict):
             timestamp = event["date_time"].get("timestamp")
-        time = iso_from_epoch(timestamp)
+        time = iso_from_plaso_timestamp(timestamp)
         artifact_class, entity_type = _classify(event, entity_value)
         findings.append(
             make_tool_finding(
