@@ -1,63 +1,41 @@
-You are auditing the forensic-lab Python project at acesaria/forensic-lab.
+Read PROJECT_CONTEXT.md and AGENTS.md first.
+
+You are auditing the forensic-lab Python project. This command is an optional
+task helper, not an independent source of project truth.
 
 ## Your task
 
-Perform a two-part review: bug finding and refactoring planning.
+Perform a focused review for the scope the user requested.
 
-## Context
+The audit output is a report/plan unless the user explicitly requests edits.
 
-Project layout:
-- cli.py               CLI entry point
-- orchestrator/core/   config.py, orchestrator.py, vm_manager.py, ssh_client.py, console.py, bootstrap.py
-- orchestrator/attacks/ art_runner.py, scenario_01_ldpreload.py (and stubs)
-- orchestrator/forensics/ dumper.py, vol_runner.py, sleuth_runner.py, ioc_detector.py
-- infra/               provider.py, image_store.py, profiles/
-- scenarios.yaml       scenario registry
+## Method
 
-Coding conventions (non-negotiable):
-- No fancy unicode, emojis, decorative symbols, or LLM-style verbose comments
-- Comments explain why, not what
-- No complex regex without documentation
+- Inspect only the files needed for the requested audit scope.
+- Confirm current behavior from code, config, and tests before making claims.
+- Preserve the VM power-state contract and GT-blindness boundaries.
+- Treat YAML rules and DetectionClaim records as candidate evidence, not final verdicts.
+- Do not run VM-facing commands unless the user explicitly approves it.
+- Do not edit files unless the user explicitly asks for implementation changes.
 
-Known planned refactoring (from TODO.md, do not re-propose these unless you find a concrete bug in them):
-- Consolidate constants into config.py
-- Merge bootstrap.py into cli.py
-- Move build VM lifecycle from Orchestrator into VMManager
-- Strip Orchestrator of direct Provider references
-- Migrate to libvirt-python API
-- Replace ssh_client.py wrapper with direct paramiko
+## Report Format
 
-## Part 1: Bug Report
+Include:
 
-Read all source files. For each bug found, report:
+- inspected files
+- findings, ordered by severity
+- proposed minimal changes
+- intentionally unchanged areas
+- open questions or human-review TODOs
+
+For each bug or risk, use:
+
 FILE: <path>
 FUNCTION: <name>
 SEVERITY: critical | warning | minor
 DESCRIPTION: one clear sentence describing the bug
-FIX: concrete fix (code snippet or specific change)
-Focus on:
-- Race conditions in VM lifecycle (start/stop/snapshot timing)
-- SSH connection handling (unclosed connections, exception paths that skip close)
-- Subprocess error handling (missing check=True, ignored returncode, stderr swallowed)
-- Incorrect assumptions about VM state (calling SSH on a stopped VM, etc.)
-- Resource leaks (temp files in /dev/shm not cleaned on failure, EWF segments left on disk)
-- ground_truth.json data loss (exception between scenario run and _persist_ground_truth)
-- Argument substitution edge cases in art_runner._build_command
+FIX: concrete minimal fix or next check
 
-## Part 2: Refactoring Plan
+End by answering:
 
-Produce a prioritized list of refactoring tasks NOT already in TODO.md. For each:
-PRIORITY: high | medium | low
-FILE(S): affected files
-TITLE: short name
-RATIONALE: why this reduces complexity or fixes a structural problem
-EFFORT: small (< 30 lines) | medium (30-100 lines) | large (> 100 lines)
-
-Focus on:
-- Dead code (empty stubs, unreachable branches)
-- Duplicated logic across files
-- Unnecessary abstraction layers
-- Functions that do more than one thing
-- Places where fewer lines would be clearer
-
-End with a one-paragraph summary of the project's overall health and the single highest-impact change.
+"This system may work, but is it too complex for the thesis deadline? Which part can be removed, flattened, or made explicit?"
