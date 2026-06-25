@@ -21,7 +21,11 @@ from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
 def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forensic-lab",
-        description="Reproducible Linux attack reconstruction lab.",
+        description=(
+            "Linux post-mortem forensic reconstruction lab. Primary thesis path: "
+            "declarative Father_LDPRELOAD -> canonical tool findings -> "
+            "DetectionClaim candidate evidence -> GT-aware matching/metrics."
+        ),
     )
     parser.add_argument(
         "--debug",
@@ -47,7 +51,11 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     # run: execute an experiment
     run = sub.add_parser(
         "run",
-        help="Run a full experiment: revert, attack, acquire",
+        help=(
+            "Run a VM experiment. Primary thesis scenario is "
+            "userland_father_ldpreload; scenario_01_* and art_calibration are "
+            "legacy/calibration."
+        ),
     )
     run.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
     run.add_argument(
@@ -108,7 +116,10 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
 
     score = sub.add_parser(
         "score",
-        help="Match + metrics from an existing findings.jsonl + gt_manifest.json",
+        help=(
+            "LEGACY/CALIBRATION: match + metrics from findings.jsonl + "
+            "gt_manifest.json"
+        ),
     )
     score.add_argument("--manifest", required=True)
     score.add_argument("--findings", required=True)
@@ -117,7 +128,10 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
 
     pipeline = sub.add_parser(
         "pipeline",
-        help="Detect from cached raw outputs in a run dir, then match + metrics",
+        help=(
+            "LEGACY/CALIBRATION: detect from cached raw outputs, then match + "
+            "metrics"
+        ),
     )
     pipeline.add_argument("--run-dir", required=True)
     pipeline.add_argument("--out-dir", default=None)
@@ -131,7 +145,10 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
 
     run_scenario = sub.add_parser(
         "run-scenario",
-        help="Run a declarative scenario.yml with the minimal local scenario engine",
+        help=(
+            "Run a declarative scenario.yml and write canonical execution truth "
+            "and artifact expectations"
+        ),
     )
     run_scenario.add_argument("scenario_yml")
     run_scenario.add_argument("--out-dir", default=None)
@@ -151,13 +168,28 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
 
     match_canonical = sub.add_parser(
         "match-canonical",
-        help="GT-aware match + metrics over canonical cached JSONL artifacts",
+        help=(
+            "PRIMARY THESIS: GT-aware claim-level match + metrics over canonical "
+            "JSONL artifacts"
+        ),
     )
     match_canonical.add_argument("--expectations", required=True)
     match_canonical.add_argument("--tool-findings", required=True)
-    match_canonical.add_argument("--detection-claims", default=None)
+    match_canonical.add_argument(
+        "--detection-claims",
+        default=None,
+        help="Canonical DetectionClaim JSONL; required for thesis metric reporting",
+    )
     match_canonical.add_argument("--out-dir", required=True)
     match_canonical.add_argument("--time-window-s", type=float, default=120.0)
+    match_canonical.add_argument(
+        "--debug-raw-findings",
+        action="store_true",
+        help=(
+            "DEBUG ONLY: score raw ToolFinding records when no detection claims "
+            "are supplied; not for thesis metric reporting"
+        ),
+    )
 
     return parser
 
@@ -329,12 +361,22 @@ def _cmd_run_detectors(args: argparse.Namespace) -> int:
 def _cmd_match_canonical(args: argparse.Namespace) -> int:
     from matcher.engine import run_matcher_files
 
+    if not args.detection_claims and not args.debug_raw_findings:
+        print(
+            "error: match-canonical requires --detection-claims for claim-level "
+            "thesis scoring; use --debug-raw-findings only for debug raw "
+            "ToolFinding fallback",
+            file=sys.stderr,
+        )
+        return 2
+
     result = run_matcher_files(
         expectations_path=args.expectations,
         tool_findings_path=args.tool_findings,
         detection_claims_path=args.detection_claims,
         out_dir=args.out_dir,
         time_window_s=args.time_window_s,
+        allow_raw_finding_fallback=args.debug_raw_findings,
     )
     metrics = result["metrics"]["micro"]
     print(

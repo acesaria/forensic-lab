@@ -62,20 +62,29 @@ def run_matcher_files(
     detection_claims_path: str | Path | None,
     out_dir: str | Path,
     time_window_s: float = 120.0,
+    allow_raw_finding_fallback: bool = False,
 ) -> dict[str, Any]:
     expectations = load_jsonl(expectations_path, ArtifactExpectation)
     tool_findings = load_jsonl(tool_findings_path, ToolFinding)
-    claims = (
-        load_jsonl(detection_claims_path, DetectionClaim)
-        if detection_claims_path and Path(detection_claims_path).is_file()
-        else []
-    )
+    if detection_claims_path:
+        claims_path = Path(detection_claims_path)
+        if not claims_path.is_file():
+            raise FileNotFoundError(f"detection claims not found: {claims_path}")
+        claims = load_jsonl(claims_path, DetectionClaim)
+    elif allow_raw_finding_fallback:
+        claims = []
+    else:
+        raise ValueError(
+            "canonical claim-level scoring requires --detection-claims; "
+            "use --debug-raw-findings only for debug raw ToolFinding fallback"
+        )
     return run_matcher(
         expectations,
         tool_findings,
         claims,
         out_dir=out_dir,
         time_window_s=time_window_s,
+        allow_raw_finding_fallback=allow_raw_finding_fallback,
     )
 
 
@@ -86,12 +95,23 @@ def run_matcher(
     *,
     out_dir: str | Path,
     time_window_s: float = 120.0,
+    allow_raw_finding_fallback: bool = False,
 ) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    candidates = _build_candidates(tool_findings, detection_claims)
+    candidates = _build_candidates(
+        tool_findings,
+        detection_claims,
+        allow_raw_finding_fallback=allow_raw_finding_fallback,
+    )
     matches = _match(expectations, candidates, time_window_s=time_window_s)
     metrics = compute_metrics(expectations, candidates, matches, tool_findings)
+    if allow_raw_finding_fallback and not detection_claims:
+        metrics["candidate_input"] = "debug_raw_tool_findings"
+        metrics["debug_only"] = True
+    else:
+        metrics["candidate_input"] = "detection_claims"
+        metrics["debug_only"] = False
     write_jsonl(out / "matches.jsonl", matches)
     (out / "metrics.json").write_text(
         json.dumps(metrics, indent=2, sort_keys=True) + "\n",
@@ -113,10 +133,14 @@ def run_matcher(
 def _build_candidates(
     tool_findings: list[ToolFinding],
     claims: list[DetectionClaim],
+    *,
+    allow_raw_finding_fallback: bool = False,
 ) -> list[Candidate]:
     by_id = {finding.finding_id: finding for finding in tool_findings}
     if claims:
         return [_candidate_from_claim(claim, by_id) for claim in claims]
+    if not allow_raw_finding_fallback:
+        return []
     return [_candidate_from_finding(finding) for finding in tool_findings]
 
 
@@ -612,6 +636,15 @@ def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
     lines = [
         "# Score Report",
         "",
+        f"Candidate input: {metrics.get('candidate_input', 'detection_claims')}",
+        "",
+    ]
+    if metrics.get("debug_only"):
+        lines.extend([
+            "Debug-only raw ToolFinding fallback was used; exclude this report from thesis metric reporting.",
+            "",
+        ])
+    lines.extend([
         "## Summary (combined instance + class)",
         "",
         f"- TP: {micro['tp']}",
@@ -645,7 +678,7 @@ def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
         "",
         "## Source breakdown (tool findings)",
         "",
-    ]
+    ])
     for source in ("disk", "memory", "timeline", "log", "unknown"):
         if source in sources:
             lines.append(f"- {source}: {sources[source]}")
