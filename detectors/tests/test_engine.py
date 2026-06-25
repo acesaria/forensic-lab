@@ -3,8 +3,8 @@ from pathlib import Path
 
 import yaml
 
-from detectors.engine import load_rules, run_detectors_file, write_detection_claims
-from orchestrator.canonical import DetectionClaim, load_jsonl
+from detectors.engine import load_rules, run_detectors, run_detectors_file, write_detection_claims
+from orchestrator.canonical import DetectionClaim, EvidenceSource, TemporalQuality, ToolFinding, load_jsonl
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -77,6 +77,86 @@ def test_run_detectors_cli_writes_claims(tmp_path: Path):
     assert claims
 
 
+def test_duplicate_process_library_memory_claims_collapse_to_logical_candidate():
+    findings = [
+        _memory_finding(
+            "tf-proc-pslist",
+            "process",
+            {"type": "process", "value": "payload", "pid": 4321, "path": "/tmp/payload"},
+        ),
+        _memory_finding(
+            "tf-proc-psscan",
+            "process",
+            {"type": "process", "value": "payload", "pid": 4321, "path": "/tmp/payload"},
+        ),
+        _memory_finding(
+            "tf-map-1",
+            "library_mapping",
+            {"type": "path", "value": "/tmp/libpayload.so", "path": "/tmp/libpayload.so", "pid": 4321},
+        ),
+        _memory_finding(
+            "tf-map-2",
+            "library_mapping",
+            {"type": "path", "value": "/tmp/libpayload.so", "path": "/tmp/libpayload.so", "pid": 4321},
+        ),
+    ]
+
+    claims = [
+        claim for claim in run_detectors(findings)
+        if claim.rule_id == "flab.memory.process_library_correlation"
+    ]
+
+    assert len(claims) == 1
+    assert claims[0].entity["collapsed_candidate_count"] == 4
+    assert claims[0].entity["source_finding_count"] == 4
+    assert set(claims[0].source_findings) == {finding.finding_id for finding in findings}
+
+
+def test_duplicate_process_socket_memory_claims_collapse_to_logical_candidate():
+    findings = [
+        _memory_finding(
+            "tf-proc-pslist",
+            "process",
+            {"type": "process", "value": "payload", "pid": 4321, "path": "/tmp/payload"},
+        ),
+        _memory_finding(
+            "tf-proc-psscan",
+            "process",
+            {"type": "process", "value": "payload", "pid": 4321, "path": "/tmp/payload"},
+        ),
+        _memory_finding(
+            "tf-sock-1",
+            "socket",
+            {
+                "type": "socket",
+                "value": "198.51.100.2:4444",
+                "pid": 4321,
+                "remote": {"address": "198.51.100.2", "port": 4444},
+            },
+        ),
+        _memory_finding(
+            "tf-sock-2",
+            "socket",
+            {
+                "type": "socket",
+                "value": "198.51.100.2:4444",
+                "pid": 4321,
+                "remote": {"address": "198.51.100.2", "port": 4444},
+            },
+        ),
+    ]
+
+    claims = [
+        claim for claim in run_detectors(findings)
+        if claim.rule_id == "flab.memory.process_socket_correlation"
+    ]
+
+    assert len(claims) == 1
+    assert claims[0].entity["collapsed_candidate_count"] == 4
+    assert claims[0].entity["source_finding_count"] == 4
+    assert set(claims[0].source_findings) == {finding.finding_id for finding in findings}
+
+
 def test_detectors_do_not_import_ground_truth_modules():
     combined = "\n".join(
         path.read_text(encoding="utf-8")
@@ -87,3 +167,20 @@ def test_detectors_do_not_import_ground_truth_modules():
     assert "ground_truth" not in combined
     assert "evaluation.scenario" not in combined
     assert "ArtifactExpectation" not in combined
+
+
+def _memory_finding(finding_id: str, artifact_class: str, entity: dict) -> ToolFinding:
+    return ToolFinding(
+        finding_id=finding_id,
+        run_id="run-memory-dedupe",
+        tool="volatility3",
+        tool_version="fixture",
+        adapter_version="fixture",
+        source_type=EvidenceSource.MEMORY,
+        artifact_class=artifact_class,
+        entity=entity,
+        time="unknown",
+        raw_ref=f"vol3:{finding_id}",
+        provenance={"adapter": "fixture"},
+        temporal_quality=TemporalQuality.NONE,
+    )

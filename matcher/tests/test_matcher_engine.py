@@ -32,10 +32,42 @@ def test_matcher_outputs_matches_metrics_and_report(tmp_path: Path):
     assert metrics["critical_recall"]["recall"] == 0.6667
     assert metrics["match_levels"]["instance"] >= 2
     assert metrics["match_levels"]["class"] >= 1
+    assert metrics["final_reconstruction"]["strong_instance_matches"] == metrics["match_levels"]["instance"]
+    assert metrics["final_reconstruction"]["class_only_support"] == metrics["match_levels"]["class"]
+    assert metrics["final_reconstruction"]["precision"] < metrics["candidate_diagnostics"]["precision"]
     assert any(m.match_level == MatchLevel.INSTANCE for m in matches)
     assert any(m.match_level == MatchLevel.CLASS for m in matches)
     assert "# Score Report" in report
+    assert "Final Reconstruction Summary" in report
+    assert "Candidate-Level Diagnostics" in report
+    assert "Raw ToolFinding Counts by Source/Type" in report
+    assert "Candidate Evidence / DetectionClaim Counts" in report
+    assert "Memory Aggregation/Deduplication Summary" in report
+    assert "Matched Expectations / Reconstruction Evidence" in report
+    assert "Strong Instance Matches" in report
+    assert "Class-Only / Support Matches" in report
+    assert "Unmatched Candidate Claims" in report
     assert "Per Artifact Class" in report
+
+
+def test_class_only_support_is_not_headline_reconstruction_quality(tmp_path: Path):
+    result = run_matcher_files(
+        expectations_path=FIXTURES / "artifact_expectations.jsonl",
+        tool_findings_path=Path("detectors/tests/fixtures/tool_findings.jsonl"),
+        detection_claims_path=FIXTURES / "detection_claims.jsonl",
+        out_dir=tmp_path,
+        time_window_s=30,
+    )
+
+    metrics = result["metrics"]
+
+    assert metrics["match_levels"]["class"] >= 1
+    assert metrics["candidate_diagnostics"]["tp"] == metrics["counts"]["tp"]
+    assert metrics["final_reconstruction"]["tp"] == metrics["match_levels"]["instance"]
+    assert metrics["final_reconstruction"]["fp"] == (
+        metrics["counts"]["fp"] + metrics["match_levels"]["class"]
+    )
+    assert metrics["final_reconstruction"]["recall"] < metrics["candidate_diagnostics"]["recall"]
 
 
 def test_matcher_requires_claims_for_canonical_scoring(tmp_path: Path):

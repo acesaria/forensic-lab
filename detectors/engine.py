@@ -44,7 +44,7 @@ def run_detectors(findings: Iterable[ToolFinding], rules_dir: str | Path | None 
         if detector is None:
             continue
         claims.extend(detector(rule, items))
-    return assign_claim_ids(claims)
+    return prepare_detection_claims(claims)
 
 
 def run_detectors_file(
@@ -56,7 +56,7 @@ def run_detectors_file(
 
 
 def write_detection_claims(path: str | Path, claims: Iterable[DetectionClaim]) -> Path:
-    return write_jsonl(path, assign_claim_ids(claims))
+    return write_jsonl(path, prepare_detection_claims(claims))
 
 
 def load_rules(rules_dir: str | Path | None = None) -> list[Rule]:
@@ -89,6 +89,113 @@ def assign_claim_ids(claims: Iterable[DetectionClaim]) -> list[DetectionClaim]:
         ).hexdigest()[:10]
         claim.claim_id = f"dc-{idx:06d}-{digest}"
     return items
+
+
+def prepare_detection_claims(claims: Iterable[DetectionClaim]) -> list[DetectionClaim]:
+    return assign_claim_ids(_dedupe_memory_correlation_claims(claims))
+
+
+def _dedupe_memory_correlation_claims(claims: Iterable[DetectionClaim]) -> list[DetectionClaim]:
+    passthrough: list[DetectionClaim] = []
+    groups: dict[tuple[Any, ...], list[DetectionClaim]] = {}
+    for claim in claims:
+        key = _memory_correlation_key(claim)
+        if key is None:
+            passthrough.append(claim)
+        else:
+            groups.setdefault(key, []).append(claim)
+    return [*passthrough, *(_collapse_memory_group(group) for group in groups.values())]
+
+
+def _memory_correlation_key(claim: DetectionClaim) -> tuple[Any, ...] | None:
+    entity = claim.entity
+    if claim.rule_id == "flab.memory.process_library_correlation":
+        process = _entity_dict(entity, "process")
+        library = _entity_dict(entity, "library")
+        return (
+            claim.run_id,
+            claim.rule_id,
+            claim.artifact_class,
+            entity.get("type"),
+            _normalized_scalar(entity.get("pid")),
+            _process_identity(process),
+            _path_identity(library),
+            _normalized_scalar(entity.get("expectation_class") or entity.get("artifact_class")),
+        )
+    if claim.rule_id == "flab.memory.process_socket_correlation":
+        process = _entity_dict(entity, "process")
+        socket = _entity_dict(entity, "socket")
+        return (
+            claim.run_id,
+            claim.rule_id,
+            claim.artifact_class,
+            entity.get("type"),
+            _normalized_scalar(entity.get("pid")),
+            _process_identity(process),
+            _endpoint_identity(_entity_dict(socket, "local")),
+            _endpoint_identity(_entity_dict(socket, "remote")),
+            _normalized_scalar(socket.get("value")),
+            _normalized_scalar(socket.get("protocol") or entity.get("protocol")),
+            _normalized_scalar(entity.get("expectation_class") or entity.get("artifact_class")),
+        )
+    return None
+
+
+def _collapse_memory_group(group: list[DetectionClaim]) -> DetectionClaim:
+    representative = min(group, key=_claim_sort_key)
+    if len(group) == 1:
+        return representative
+
+    source_findings = sorted({fid for claim in group for fid in claim.source_findings})
+    entity = dict(representative.entity)
+    entity["collapsed_candidate_count"] = len(group)
+    entity["source_finding_count"] = len(source_findings)
+    entity["representative_source_findings"] = source_findings[:8]
+    notes = representative.notes
+    marker = f"collapsed_from={len(group)} memory-correlation candidates"
+    if marker not in notes:
+        notes = f"{notes}; {marker}" if notes else marker
+    return DetectionClaim(
+        claim_id=representative.claim_id,
+        run_id=representative.run_id,
+        rule_id=representative.rule_id,
+        artifact_class=representative.artifact_class,
+        entity=entity,
+        confidence=max(float(claim.confidence) for claim in group),
+        source_findings=source_findings,
+        attck=list(representative.attck),
+        notes=notes,
+    )
+
+
+def _entity_dict(entity: dict[str, Any], key: str) -> dict[str, Any]:
+    value = entity.get(key)
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _normalized_scalar(value: Any) -> str:
+    return str(value or "").strip().lower()
+
+
+def _process_identity(process: dict[str, Any]) -> str:
+    return _normalized_scalar(
+        process.get("name")
+        or process.get("comm")
+        or process.get("value")
+        or process.get("path")
+        or process.get("argv")
+    )
+
+
+def _path_identity(entity: dict[str, Any]) -> str:
+    return _normalized_scalar(entity.get("path") or entity.get("value"))
+
+
+def _endpoint_identity(endpoint: dict[str, Any]) -> tuple[str, str]:
+    return (
+        _normalized_scalar(endpoint.get("address") or endpoint.get("ip")),
+        _normalized_scalar(endpoint.get("port")),
+    )
 
 
 def _claim(

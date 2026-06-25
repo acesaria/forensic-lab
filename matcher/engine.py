@@ -19,6 +19,7 @@ import hashlib
 import json
 import math
 import posixpath
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -118,7 +119,12 @@ def run_matcher(
         encoding="utf-8",
     )
     (out / "score_report.md").write_text(
-        render_report(metrics, matches),
+        render_report(
+            metrics,
+            matches,
+            tool_findings=tool_findings,
+            detection_claims=detection_claims,
+        ),
         encoding="utf-8",
     )
     return {
@@ -483,11 +489,24 @@ def compute_metrics(
     # Instance-only treats a class-level hit as a miss: it is class coverage, not
     # instance reconstruction, so it is folded into the negative bucket.
     instance_only = _prf(instance_tp, len(fp), total_exp - instance_tp)
+    final_reconstruction = _prf(instance_tp, len(fp) + class_tp, total_exp - instance_tp)
 
     metrics = {
         "schema": "forensic-lab.matcher.metrics.v2",
         "counts": {"tp": len(tp), "fp": len(fp), "fn": len(fn)},
         "micro": micro,
+        "candidate_diagnostics": {
+            "description": "candidate-level diagnostics; class-only support is counted with instance matches",
+            **micro,
+        },
+        "final_reconstruction": {
+            "description": "headline reconstruction quality; class-only support is not counted as strong instance reconstruction",
+            "strong_instance_matches": instance_tp,
+            "class_only_support": class_tp,
+            "unmatched_candidates": len(fp),
+            "missed_expected_after_strong_matching": total_exp - instance_tp,
+            **final_reconstruction,
+        },
         "reconstruction": {
             "instance_only_precision": instance_only["precision"],
             "instance_only_recall": instance_only["recall"],
@@ -628,11 +647,26 @@ def _false_positives_per_run(matches: list[MatchResult], by_cand: dict[str, Cand
     return out
 
 
-def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
+def render_report(
+    metrics: dict[str, Any],
+    matches: list[MatchResult],
+    *,
+    tool_findings: list[ToolFinding] | None = None,
+    detection_claims: list[DetectionClaim] | None = None,
+) -> str:
     micro = metrics["micro"]
+    final = metrics.get("final_reconstruction", {})
     critical = metrics["critical_recall"]
     recon = metrics.get("reconstruction", {})
     sources = metrics.get("source_breakdown", {})
+    tool_findings = tool_findings or []
+    detection_claims = detection_claims or []
+    claims_by_id = {claim.claim_id: claim for claim in detection_claims}
+    finding_sources = {finding.finding_id: finding.source_type.value for finding in tool_findings}
+    strong = [m for m in matches if m.relation == "tp" and m.match_level == MatchLevel.INSTANCE]
+    support = [m for m in matches if m.relation == "tp" and m.match_level == MatchLevel.CLASS]
+    unmatched = [m for m in matches if m.relation == "fp"]
+    missed = [m for m in matches if m.relation == "fn"]
     lines = [
         "# Score Report",
         "",
@@ -645,7 +679,21 @@ def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
             "",
         ])
     lines.extend([
-        "## Summary (combined instance + class)",
+        "## Final Reconstruction Summary",
+        "",
+        "Headline thesis metrics count strong instance-level reconstruction only; class-only matches remain supporting context.",
+        "",
+        f"- Strong instance matches: {final.get('strong_instance_matches', 0)}",
+        f"- Class-only/support matches: {final.get('class_only_support', 0)}",
+        f"- Unmatched candidate claims: {final.get('unmatched_candidates', 0)}",
+        f"- Missed expected artifacts after strong matching: {final.get('missed_expected_after_strong_matching', 0)}",
+        f"- Final precision: {final.get('precision', 0.0):.4f}",
+        f"- Final recall: {final.get('recall', 0.0):.4f}",
+        f"- Final F1: {final.get('f1', 0.0):.4f}",
+        "",
+        "## Candidate-Level Diagnostics",
+        "",
+        "Diagnostic only: combines strong instance matches and class-only support against candidate evidence.",
         "",
         f"- TP: {micro['tp']}",
         f"- FP: {micro['fp']}",
@@ -676,12 +724,88 @@ def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
         f"- Critical-event recall: {critical['recall']:.4f} "
         f"({critical['critical_matched']}/{critical['critical_total']})",
         "",
-        "## Source breakdown (tool findings)",
+        "## Raw ToolFinding Counts by Source/Type",
         "",
     ])
-    for source in ("disk", "memory", "timeline", "log", "unknown"):
-        if source in sources:
-            lines.append(f"- {source}: {sources[source]}")
+    if tool_findings:
+        lines.extend(["| source | artifact class | count |", "|---|---|---:|"])
+        for (source, artifact_class), count in _tool_finding_counts(tool_findings).items():
+            lines.append(f"| {source} | {artifact_class} | {count} |")
+    else:
+        for source in ("disk", "memory", "timeline", "log", "unknown"):
+            if source in sources:
+                lines.append(f"- {source}: {sources[source]}")
+    lines.extend([
+        "",
+        "## Candidate Evidence / DetectionClaim Counts",
+        "",
+    ])
+    if detection_claims:
+        lines.extend(["| rule | source | count |", "|---|---|---:|"])
+        for (rule_id, source), count in _claim_counts_by_rule_source(detection_claims, finding_sources).items():
+            lines.append(f"| {rule_id} | {source} | {count} |")
+    else:
+        lines.append("No DetectionClaim records were provided.")
+    lines.extend([
+        "",
+        "## Memory Aggregation/Deduplication Summary",
+        "",
+        "| rule | before | after | collapsed |",
+        "|---|---:|---:|---:|",
+    ])
+    for row in _memory_aggregation_summary(detection_claims):
+        lines.append(
+            f"| {row['rule_id']} | {row['before']} | {row['after']} | {row['collapsed']} |"
+        )
+    lines.extend([
+        "",
+        "## Matched Expectations / Reconstruction Evidence",
+        "",
+        "| strength | expectation | candidate | sources | score | fields |",
+        "|---|---|---|---|---:|---|",
+    ])
+    for match in [*strong, *support]:
+        lines.append(_match_evidence_row(match, claims_by_id, finding_sources))
+    lines.extend([
+        "",
+        "## Strong Instance Matches",
+        "",
+        "| expectation | candidate | sources | score | fields |",
+        "|---|---|---|---:|---|",
+    ])
+    for match in strong:
+        lines.append(_match_evidence_row(match, claims_by_id, finding_sources, include_strength=False))
+    lines.extend([
+        "",
+        "## Class-Only / Support Matches",
+        "",
+        "| expectation | candidate | sources | score | fields |",
+        "|---|---|---|---:|---|",
+    ])
+    for match in support:
+        lines.append(_match_evidence_row(match, claims_by_id, finding_sources, include_strength=False))
+    lines.extend([
+        "",
+        "## Unmatched Candidate Claims",
+        "",
+        f"- Total: {len(unmatched)}",
+        "",
+    ])
+    if detection_claims:
+        lines.extend(["| rule | artifact class | count |", "|---|---|---:|"])
+        for (rule_id, artifact_class), count in _unmatched_claim_counts(unmatched, claims_by_id).items():
+            lines.append(f"| {rule_id} | {artifact_class} | {count} |")
+    lines.extend([
+        "",
+        "## Missed Expected Artifacts",
+        "",
+    ])
+    if missed:
+        lines.extend(["| expectation |", "|---|"])
+        for match in missed:
+            lines.append(f"| {match.target_id} |")
+    else:
+        lines.append("No unmatched expected artifacts at candidate level.")
     lines.extend([
         "",
         "## Per Source",
@@ -704,3 +828,77 @@ def render_report(metrics: dict[str, Any], matches: list[MatchResult]) -> str:
             f"{match.finding_or_claim_id} | {match.score:.4f} | {', '.join(match.fields_matched)} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _tool_finding_counts(tool_findings: list[ToolFinding]) -> dict[tuple[str, str], int]:
+    counts: Counter[tuple[str, str]] = Counter(
+        (finding.source_type.value, finding.artifact_class) for finding in tool_findings
+    )
+    return dict(sorted(counts.items()))
+
+
+def _claim_counts_by_rule_source(
+    claims: list[DetectionClaim],
+    finding_sources: dict[str, str],
+) -> dict[tuple[str, str], int]:
+    counts: Counter[tuple[str, str]] = Counter()
+    for claim in claims:
+        source = "+".join(sorted({finding_sources.get(fid, "unknown") for fid in claim.source_findings}))
+        counts[(claim.rule_id, source or "unknown")] += 1
+    return dict(sorted(counts.items()))
+
+
+def _memory_aggregation_summary(claims: list[DetectionClaim]) -> list[dict[str, Any]]:
+    rule_ids = [
+        "flab.memory.process_library_correlation",
+        "flab.memory.process_socket_correlation",
+    ]
+    rows: list[dict[str, Any]] = []
+    for rule_id in rule_ids:
+        rule_claims = [claim for claim in claims if claim.rule_id == rule_id]
+        before = sum(int(claim.entity.get("collapsed_candidate_count") or 1) for claim in rule_claims)
+        after = len(rule_claims)
+        rows.append({"rule_id": rule_id, "before": before, "after": after, "collapsed": before - after})
+    return rows
+
+
+def _match_evidence_row(
+    match: MatchResult,
+    claims_by_id: dict[str, DetectionClaim],
+    finding_sources: dict[str, str],
+    *,
+    include_strength: bool = True,
+) -> str:
+    claim = claims_by_id.get(match.finding_or_claim_id)
+    sources = "-"
+    if claim:
+        sources = "+".join(sorted({finding_sources.get(fid, "unknown") for fid in claim.source_findings}))
+    fields = ", ".join(match.fields_matched)
+    if include_strength:
+        return (
+            f"| {_match_strength(match)} | {match.target_id} | {match.finding_or_claim_id} | "
+            f"{sources} | {match.score:.4f} | {fields} |"
+        )
+    return f"| {match.target_id} | {match.finding_or_claim_id} | {sources} | {match.score:.4f} | {fields} |"
+
+
+def _match_strength(match: MatchResult) -> str:
+    if match.relation == "tp" and match.match_level == MatchLevel.INSTANCE:
+        return "strong_instance_match"
+    if match.relation == "tp" and match.match_level == MatchLevel.CLASS:
+        return "class_only_support"
+    if match.relation == "fp":
+        return "unmatched_candidate"
+    return match.match_level.value
+
+
+def _unmatched_claim_counts(
+    unmatched: list[MatchResult],
+    claims_by_id: dict[str, DetectionClaim],
+) -> dict[tuple[str, str], int]:
+    counts: Counter[tuple[str, str]] = Counter()
+    for match in unmatched:
+        claim = claims_by_id.get(match.finding_or_claim_id)
+        if claim:
+            counts[(claim.rule_id, claim.artifact_class)] += 1
+    return dict(sorted(counts.items()))
