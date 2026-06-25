@@ -113,3 +113,28 @@ findings and other approved non-GT inputs.
 
 Keep changes small unless a task explicitly asks for a larger refactor. Prefer
 the current codebase's structure and naming over inventing a new architecture.
+
+## Current Short-Term Priority
+
+The current priority is not to tune detector rules until Father_LDPRELOAD metrics look good. The priority is to make the post-mortem reconstruction pipeline defensible and generalizable:
+
+1. keep `ToolFinding` as broad raw evidence;
+2. keep `DetectionClaim` as GT-blind candidate/supporting evidence;
+3. prevent weak candidates from becoming final thesis results directly;
+4. derive final reconstruction from matched expectations / matched evidence;
+5. compute simple metrics over the reconstruction layer, not over raw detector noise.
+
+The current Father_LDPRELOAD cached result is:
+
+* 7608 `ToolFinding` records
+* 266 `DetectionClaim` records
+* TP: 10
+* FP: 256
+* FN: 0
+* precision: 0.0376
+* recall: 1.0
+* F1: 0.0725
+
+This poor precision is mostly architectural: broad candidate evidence is being scored too directly, timeline findings dominate false positives, baseline-diff evidence is missing as a canonical source, memory findings need aggregation, and class-level matching is too permissive for headline thesis metrics.
+
+Coding agents tend to over-engineer. During planning and after every few implementation patches, perform an explicit simplification review: identify unused paths, legacy code, boilerplate tests, duplicated abstractions, and places where the design can be flattened or made more explicit. Prefer KISS changes that support the thesis deliverable over new frameworks, new tools, or broad refactors.
