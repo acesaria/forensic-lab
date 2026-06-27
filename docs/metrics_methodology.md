@@ -4,6 +4,26 @@ This document reviews current metric semantics in the canonical/declarative
 pipeline. It is intentionally critical: the current metrics are useful, but not
 all of them are final thesis-quality definitions.
 
+## Evidence Layers and Metric Roles
+
+Keep these layers distinct. Every metric must name which layer it scores.
+
+- Raw findings: `ToolFinding` records. Broad raw evidence. Never a headline
+  metric.
+- Candidate evidence: `DetectionClaim` records. GT-blind candidate/supporting
+  evidence. Scored only by diagnostics.
+- Class-only support: class-level matches. Useful context, reported separately,
+  not counted as strong reconstruction.
+- Strong instance reconstruction: instance-level matches between an expected
+  artifact and a candidate. This is the thesis reconstruction signal.
+- Thesis headline metrics: computed over strong instance reconstruction, with
+  class-only support reported separately.
+- Diagnostic metrics: candidate-level precision/recall and per-source/per-class
+  breakdowns. Useful for tuning, not headline claims.
+
+Headline metrics must not silently score raw findings or all candidate claims as
+final reconstruction.
+
 ## Current Matching Outcomes
 
 ```mermaid
@@ -124,9 +144,9 @@ fields.
 
 ## Source Coverage
 
-No pinned `source_coverage` key is currently emitted.
-
-Closest current fields:
+A pinned `source_coverage` key is now emitted (schema
+`forensic-lab.matcher.metrics.v2`): its numerator is strong-reconstruction
+sources and its denominator is available raw-finding sources. Related fields:
 
 - `source_breakdown`: raw `ToolFinding` counts by source.
 - `per_source`: candidate-level precision/recall/F1 grouped by source.
@@ -157,9 +177,10 @@ expectations and linked `source_findings`, not over raw detector output alone.
 
 ## Noise Reduction Ratio
 
-No pinned `noise_reduction_ratio` key is currently emitted.
-
-A simple diagnostic value is derivable:
+A pinned `noise_reduction` key is now emitted (schema
+`forensic-lab.matcher.metrics.v2`). It reports raw-to-candidate and
+raw-to-strong-reconstruction count reduction only and is explicitly not
+baseline-aware. The derivation is:
 
 - raw findings = 7608
 - candidate claims = 255
@@ -245,3 +266,24 @@ Recommended next metric cleanup:
 3. Add explicit pinned metric keys only after definitions are stable.
 4. Add source/evidence coverage over strong instance matches first.
 5. Leave baseline-aware filtering for a separate implementation patch.
+
+## Thesis Headline Metrics (Next Implementation)
+
+The next implementation should prioritize these headline metrics, all computed
+over strong instance reconstruction unless stated otherwise:
+
+1. strong instance reconstruction recall / coverage;
+2. class-only support coverage, reported separately (not folded into headline
+   recall);
+3. source coverage over strong instance matches;
+4. multi-source corroboration over strong instance matches;
+5. noise reduction;
+6. pipeline runtime only if explicitly measured (do not infer from file
+   timestamps).
+
+Claim precision is postponed. Until there is a real final-claim selection layer,
+claim precision is undefined as a headline metric: unmatched candidate claims are
+detector noise rather than rejected final claims. Current candidate
+precision/recall stay diagnostics only, and `final_reconstruction.precision`, if
+still emitted, is not a clean thesis headline metric because unmatched candidate
+claims remain in its denominator.

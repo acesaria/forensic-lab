@@ -29,6 +29,14 @@ reduce baseline noise, but it does not emit baseline-diff findings.
 as final reconstruction claims. Final reconstruction is the GT-aware
 `MatchResult` relation between an `ArtifactExpectation` and a candidate claim.
 
+> Superseded note (2026-06-27): The architecture review now treats claim
+> precision as postponed/undefined until a real final-claim selection layer
+> exists, and headline metrics are scored over strong instance reconstruction —
+> not over all candidate claims. Where this document still recommends a pinned
+> `claim_precision` metric (see the Metrics Input Gap Table), defer to
+> `docs/metrics_methodology.md` and `PROJECT_CONTEXT.md`. Treat the rest of this
+> document as a point-in-time snapshot.
+
 ## Inspected Files
 
 - `AGENTS.md`

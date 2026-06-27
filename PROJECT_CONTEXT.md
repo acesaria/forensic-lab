@@ -26,10 +26,18 @@ LKM, eBPF, CopyFail, ptrace/process injection, broader Sigma expansion, and
 other advanced scenarios are future or secondary work until they are registered,
 working end to end, and producing useful evaluation artifacts.
 
-Before adding Timesketch, HashR, THOR Lite, Velociraptor, broader Sigma
-coverage, or any new forensic tool, simplify the existing Father_LDPRELOAD
-pipeline. A Timesketch Claude skill exists under `.claude/skills/`, but
-Timesketch is not part of the active thesis pipeline until explicitly adopted.
+forensic-lab owns RAM, disk, baseline comparison, ground truth, matching, and
+metrics. Keep it post-mortem, simple, and thesis-deliverable.
+
+Timesketch is an optional timeline sidecar only. It is not the active core and
+must not become the primary metric backend. A Timesketch Claude skill exists
+under `.claude/skills/`, but Timesketch is not part of the active thesis pipeline
+until a task explicitly adopts it.
+
+Do not add Timesketch, Sigma, YARA, baseline tooling, HashR, THOR Lite,
+Velociraptor, OpenRelik, Dissect, FTK, package-DB integrity checks, or any other
+external tool unless a task explicitly asks for it. Before adding any new tool,
+simplify the existing Father_LDPRELOAD pipeline first.
 
 Repeat this review question during planning:
 
@@ -65,6 +73,12 @@ scenario objective was reconstructed.
 GT-blind rules. It is not a final verdict. The GT-aware matcher and metrics
 layer decide how candidate evidence relates to ground truth/artifact
 expectations.
+
+Do not create a persisted `FinalClaim` model or a large final-claim architecture
+unless a task explicitly requests it. Until a final-claim selection layer is
+explicitly introduced, final reconstruction is derived from matched expected
+artifacts / strong instance matches, and `DetectionClaim` stays candidate
+evidence.
 
 GT-blind rules, detectors, adapters, and candidate-evidence generation must not
 read ground truth, scenario target paths, expected hashes, step names, or
@@ -123,6 +137,18 @@ The current priority is not to tune detector rules until Father_LDPRELOAD metric
 3. prevent weak candidates from becoming final thesis results directly;
 4. derive final reconstruction from matched expectations / matched evidence;
 5. compute simple metrics over the reconstruction layer, not over raw detector noise.
+
+Headline metrics must not silently score raw findings or all candidate claims as
+final reconstruction. Candidate precision/recall are diagnostics only. See
+`docs/metrics_methodology.md` for the headline-vs-diagnostic split.
+
+Next delivery sequence (do these in order; do not jump ahead to a second
+scenario or to new tools):
+
+1. metric semantics cleanup (headline vs diagnostic; postpone claim precision);
+2. baseline-aware evidence/filtering;
+3. generic rule cleanup (remove scenario-flavored tokens such as `father`);
+4. only then a second scenario.
 
 The current Father_LDPRELOAD cached result is:
 

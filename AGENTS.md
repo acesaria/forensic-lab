@@ -18,6 +18,22 @@ Treat YAML rules and `DetectionClaim` records as candidate evidence, not final
 verdicts. Reports should distinguish raw findings, candidate evidence, matched
 reconstruction, and metric results.
 
+## Scope Guards
+
+forensic-lab owns RAM, disk, baseline comparison, ground truth, matching, and
+metrics. Keep it post-mortem, simple, and thesis-deliverable.
+
+- Timesketch is an optional timeline sidecar only. It is not the active core and
+  must not become the primary metric backend.
+- Do not add Timesketch, Sigma, YARA, baseline tooling, or any other external
+  tool unless a task explicitly asks for it.
+- Do not create a persisted `FinalClaim` model (or a large final-claim
+  architecture) unless a task explicitly requests it. `DetectionClaim` stays
+  candidate/supporting evidence.
+- Headline metrics must not silently score raw findings or all candidate claims
+  as final reconstruction. Reconstruction is derived from matched expected
+  artifacts / strong instance matches.
+
 For audits, produce a structured report with:
 
 - inspected files

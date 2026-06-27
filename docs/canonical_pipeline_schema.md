@@ -174,6 +174,19 @@ Interpretation:
 - `false_positives_per_run`: unmatched candidate count by run.
 - `match_levels`: count of instance and class matches.
 - `candidate_input` and `debug_only`: identify normal claim mode vs debug raw-finding fallback.
+- `schema`: metric schema version (`forensic-lab.matcher.metrics.v2`).
+- `reconstruction_summary`: expected-artifact-denominated reconstruction (strong
+  instance recall, class-only support coverage, strong-or-supported coverage,
+  critical strong instance recall).
+- `source_coverage`: strong-reconstruction sources over available raw sources.
+- `multi_source_corroboration`: distinct linked source types per strong match.
+- `noise_reduction`: raw-to-candidate and raw-to-strong count reduction; not
+  baseline-aware.
+- `strict_candidate_stream_precision`: relabeled candidate-stream precision;
+  retained for backward compatibility, not a headline metric.
+- `methodology_warnings`: explicit notes on diagnostics and unavailable metrics
+  (e.g. `pipeline_runtime_seconds`, `evidence_latency`).
+- `macro_f1_by_artifact_class`: candidate-level macro F1 over artifact classes.
 
 `score_report.md` renders the same information in layered form:
 
