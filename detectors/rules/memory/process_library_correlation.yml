@@ -7,5 +7,5 @@ attck: [T1574.006, T1014]
 confidence_default: 0.80
 parameters:
   path_prefixes: [/tmp/, /var/tmp/, /dev/shm/]
-  path_tokens: [preload, father, rootkit]
+  path_tokens: [preload, rootkit]
   require_pid: true

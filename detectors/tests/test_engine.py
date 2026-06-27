@@ -162,11 +162,13 @@ def test_detectors_do_not_import_ground_truth_modules():
         path.read_text(encoding="utf-8")
         for path in [Path("detectors/engine.py"), *Path("detectors/rules").rglob("*.yml")]
     )
+    lower = combined.lower()
 
-    assert "gt_manifest" not in combined
-    assert "ground_truth" not in combined
-    assert "evaluation.scenario" not in combined
-    assert "ArtifactExpectation" not in combined
+    assert "gt_manifest" not in lower
+    assert "ground_truth" not in lower
+    assert "evaluation.scenario" not in lower
+    assert "artifactexpectation" not in lower
+    assert "father" not in lower
 
 
 def _memory_finding(finding_id: str, artifact_class: str, entity: dict) -> ToolFinding:

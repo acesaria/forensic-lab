@@ -8,4 +8,4 @@ confidence_default: 0.76
 parameters:
   suffixes: [.so]
   suspicious_prefixes: [/tmp/, /var/tmp/, /dev/shm/]
-  suspicious_tokens: [preload, father, rootkit]
+  suspicious_tokens: [preload, rootkit]
