@@ -501,6 +501,25 @@ def compute_metrics(
         candidate_claim_count=len(candidates),
         strong_instance_match_count=instance_tp,
     )
+    baseline_comparison = _baseline_comparison_summary(candidates)
+    methodology_warnings = [
+        "candidate_diagnostics are detector/candidate-stream diagnostics, "
+        "not final thesis reconstruction metrics",
+        "final_reconstruction.precision is retained only as "
+        "strict_candidate_stream_precision for backward compatibility; "
+        "unmatched candidate claims remain in its denominator",
+        "pipeline_runtime_seconds is not emitted because the canonical full "
+        "pipeline runtime is not explicitly measured in cached artifacts",
+        "evidence_latency is not emitted because reliable GT action timestamps "
+        "and artifact timestamps are not paired here",
+        "noise_reduction is raw-to-candidate and raw-to-strong-count reduction "
+        "only; it is not baseline-aware",
+    ]
+    if not baseline_comparison.get("available"):
+        methodology_warnings.append(
+            "baseline comparison is unavailable because no verified clean "
+            "baseline tool_findings input was linked to the candidate stream"
+        )
 
     metrics = {
         "schema": "forensic-lab.matcher.metrics.v2",
@@ -546,19 +565,8 @@ def compute_metrics(
         "source_coverage": source_coverage,
         "multi_source_corroboration": corroboration,
         "noise_reduction": noise_reduction,
-        "methodology_warnings": [
-            "candidate_diagnostics are detector/candidate-stream diagnostics, "
-            "not final thesis reconstruction metrics",
-            "final_reconstruction.precision is retained only as "
-            "strict_candidate_stream_precision for backward compatibility; "
-            "unmatched candidate claims remain in its denominator",
-            "pipeline_runtime_seconds is not emitted because the canonical full "
-            "pipeline runtime is not explicitly measured in cached artifacts",
-            "evidence_latency is not emitted because reliable GT action timestamps "
-            "and artifact timestamps are not paired here",
-            "noise_reduction is raw-to-candidate and raw-to-strong-count reduction "
-            "only; it is not baseline-aware",
-        ],
+        "baseline_comparison": baseline_comparison,
+        "methodology_warnings": methodology_warnings,
         "source_breakdown": _source_breakdown(tool_findings),
         "macro_f1_by_artifact_class": _macro_by_class(expectations, candidates, matches),
         "critical_recall": critical,
@@ -726,6 +734,53 @@ def _noise_reduction(
     }
 
 
+def _baseline_comparison_summary(candidates: list[Candidate]) -> dict[str, Any]:
+    rows = [
+        cand.entity.get("baseline")
+        for cand in candidates
+        if isinstance(cand.entity.get("baseline"), dict)
+    ]
+    if not rows:
+        return {
+            "available": False,
+            "filtering_applied": False,
+            "baseline_input": None,
+            "baseline_path_count": 0,
+            "compromised_path_count": 0,
+            "status_counts": {
+                "new_vs_baseline": 0,
+                "changed_vs_baseline": 0,
+                "present_in_baseline": 0,
+                "unknown_baseline_status": 0,
+            },
+            "candidate_status_counts": {},
+            "candidate_downgrades": 0,
+            "candidate_suppressions": 0,
+            "limitations": [
+                "No verified clean baseline canonical tool_findings input was supplied."
+            ],
+        }
+    first = rows[0]
+    candidate_status_counts = Counter(str(row.get("status") or "unknown_baseline_status") for row in rows)
+    action_counts = Counter(str(row.get("filter_action") or "none") for row in rows)
+    return {
+        "available": True,
+        "filtering_applied": action_counts.get("confidence_downgraded", 0) > 0,
+        "baseline_input": first.get("identity"),
+        "baseline_path_count": int(first.get("baseline_path_count") or 0),
+        "compromised_path_count": int(first.get("compromised_path_count") or 0),
+        "status_counts": dict(first.get("status_counts") or {}),
+        "candidate_status_counts": dict(sorted(candidate_status_counts.items())),
+        "candidate_downgrades": action_counts.get("confidence_downgraded", 0),
+        "candidate_suppressions": action_counts.get("suppressed", 0),
+        "limitations": [
+            "Path-only baseline comparison is candidate support, not a maliciousness verdict.",
+            "Present-in-baseline timeline-only candidates are confidence-downgraded, not removed.",
+            "Baseline metadata does not affect matcher formulas or strong reconstruction by itself.",
+        ],
+    }
+
+
 def _source_breakdown(tool_findings: list[ToolFinding]) -> dict[str, int]:
     out = {source.value: 0 for source in EvidenceSource}
     for finding in tool_findings:
@@ -854,6 +909,7 @@ def render_report(
     source_coverage = metrics.get("source_coverage", {})
     corroboration = metrics.get("multi_source_corroboration", {})
     noise = metrics.get("noise_reduction", {})
+    baseline = metrics.get("baseline_comparison", {})
     warnings = metrics.get("methodology_warnings", [])
     sources = metrics.get("source_breakdown", {})
     tool_findings = tool_findings or []
@@ -928,6 +984,25 @@ def render_report(
         f"- Strong instance matches: {noise.get('strong_instance_match_count', 0)}",
         f"- Raw-to-candidate reduction: {_fmt_optional_float(noise.get('raw_to_candidate_reduction'))}",
         f"- Raw-to-strong-reconstruction reduction: {_fmt_optional_float(noise.get('raw_to_strong_reconstruction_reduction'))}",
+        "",
+        "## Baseline Comparison",
+        "",
+        "Clean-baseline comparison is conservative support metadata. It does not infer maliciousness and does not change matcher formulas.",
+        "",
+        f"- Baseline available: {bool(baseline.get('available'))}",
+        f"- Baseline input: {baseline.get('baseline_input') or 'n/a'}",
+        f"- Baseline paths: {baseline.get('baseline_path_count', 0)}",
+        f"- Compromised paths compared: {baseline.get('compromised_path_count', 0)}",
+        f"- New vs baseline paths: {baseline.get('status_counts', {}).get('new_vs_baseline', 0)}",
+        f"- Changed vs baseline paths: {baseline.get('status_counts', {}).get('changed_vs_baseline', 0)}",
+        f"- Present in baseline paths: {baseline.get('status_counts', {}).get('present_in_baseline', 0)}",
+        f"- Unknown baseline status paths: {baseline.get('status_counts', {}).get('unknown_baseline_status', 0)}",
+        f"- Candidate downgrades: {baseline.get('candidate_downgrades', 0)}",
+        f"- Candidate suppressions: {baseline.get('candidate_suppressions', 0)}",
+        "",
+        "Limitations:",
+        "",
+        *[f"- {item}" for item in baseline.get('limitations', [])],
         "",
         "## Methodological Warnings / Unavailable Metrics",
         "",

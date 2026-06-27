@@ -43,6 +43,7 @@ def test_matcher_outputs_matches_metrics_and_report(tmp_path: Path):
     assert "Source Coverage" in report
     assert "Multi-Source Corroboration" in report
     assert "Noise Reduction" in report
+    assert "Baseline Comparison" in report
     assert "Methodological Warnings / Unavailable Metrics" in report
     assert "Raw ToolFinding Counts by Source/Type" in report
     assert "Candidate Evidence / DetectionClaim Counts" in report
@@ -131,6 +132,50 @@ def test_source_coverage_uses_strong_instance_matches_not_raw_counts_only(tmp_pa
     assert coverage["available_sources"] == ["disk", "log", "memory"]
     assert coverage["strong_reconstruction_sources"] == ["disk", "memory"]
     assert coverage["source_coverage_ratio"] == 0.6667
+    assert "baseline" not in coverage["available_sources"]
+    assert "baseline" not in coverage["strong_reconstruction_sources"]
+
+
+def test_baseline_metadata_is_reported_without_changing_source_coverage(tmp_path: Path):
+    claims_path = tmp_path / "detection_claims.jsonl"
+    rows = []
+    for line in (FIXTURES / "detection_claims.jsonl").read_text(encoding="utf-8").splitlines():
+        row = json.loads(line)
+        row["entity"]["baseline"] = {
+            "identity": "lab-ubuntu-22.04:baseline",
+            "status": "present_in_baseline",
+            "path": row["entity"].get("value"),
+            "compared_fields": [],
+            "baseline_record_count": 1,
+            "baseline_path_count": 2,
+            "compromised_path_count": 3,
+            "status_counts": {
+                "new_vs_baseline": 1,
+                "changed_vs_baseline": 0,
+                "present_in_baseline": 2,
+                "unknown_baseline_status": 0,
+            },
+            "filter_action": "confidence_downgraded",
+        }
+        rows.append(json.dumps(row, sort_keys=True))
+    claims_path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+    result = run_matcher_files(
+        expectations_path=FIXTURES / "artifact_expectations.jsonl",
+        tool_findings_path=Path("detectors/tests/fixtures/tool_findings.jsonl"),
+        detection_claims_path=claims_path,
+        out_dir=tmp_path / "out",
+        time_window_s=30,
+    )
+
+    baseline = result["metrics"]["baseline_comparison"]
+    coverage = result["metrics"]["source_coverage"]
+
+    assert baseline["available"] is True
+    assert baseline["baseline_input"] == "lab-ubuntu-22.04:baseline"
+    assert baseline["candidate_downgrades"] == 5
+    assert baseline["status_counts"]["present_in_baseline"] == 2
+    assert "baseline" not in coverage["available_sources"]
 
 
 def test_noise_reduction_metrics_use_raw_candidate_and_strong_counts(tmp_path: Path):

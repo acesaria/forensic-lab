@@ -38,6 +38,7 @@ from typing import Any, Callable
 
 from orchestrator.core.config import (
     BASELINE_DISK_FILENAME,
+    BASELINE_SNAPSHOT,
     MEMORY_DUMP_FILENAME,
     BUILD_VM_PREFIX,
     ISF_BUILD_PLAYBOOK,
@@ -291,11 +292,12 @@ class ForensicOrchestrator:
         # The engine wrote a null-filled reference_context before the steps ran;
         # rewrite it now that the guest facts are known.
         if ctx is not None:
-            ctx.write_reference_context(
-                guest=guest,
-                tool_versions=self._pipeline_versions(),
-                volatility=self._volatility_context(
-                    distro_id, (guest or {}).get("kernel")
+                ctx.write_reference_context(
+                    guest=guest,
+                    baseline=self._baseline_context(distro_id),
+                    tool_versions=self._pipeline_versions(),
+                    volatility=self._volatility_context(
+                        distro_id, (guest or {}).get("kernel")
                 ),
             )
 
@@ -308,6 +310,7 @@ class ForensicOrchestrator:
             ctx.write_reference_context(
                 guest=guest,
                 acquisition=self._acquisition_context(manifest_path),
+                baseline=self._baseline_context(distro_id),
                 tool_versions=self._pipeline_versions(),
                 volatility=self._volatility_context(
                     distro_id, (guest or {}).get("kernel")
@@ -352,6 +355,17 @@ class ForensicOrchestrator:
             return load_pipeline_config().get("versions", {})
         except Exception:
             return {}
+
+    @staticmethod
+    def _baseline_context(distro_id: str) -> dict[str, Any]:
+        vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
+        return {
+            "identity": f"{vm_name}:{BASELINE_SNAPSHOT}",
+            "vm_name": vm_name,
+            "snapshot": BASELINE_SNAPSHOT,
+            "clean_tool_findings": None,
+            "status": "snapshot_reverted_before_run",
+        }
 
     def _guest_kernel(self, run_id: str) -> str | None:
         ref = self.dumper.run_dir(run_id) / "reference_context.json"
