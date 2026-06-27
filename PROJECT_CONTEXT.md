@@ -150,17 +150,35 @@ scenario or to new tools):
 3. generic rule cleanup (remove scenario-flavored tokens such as `father`);
 4. only then a second scenario.
 
-The current Father_LDPRELOAD cached result is:
+The Father_LDPRELOAD raw cached run is still the same experiment:
 
 * 7608 `ToolFinding` records
-* 266 `DetectionClaim` records
-* TP: 10
-* FP: 256
-* FN: 0
-* precision: 0.0376
-* recall: 1.0
-* F1: 0.0725
+* 10 `ArtifactExpectation` records
 
-This poor precision is mostly architectural: broad candidate evidence is being scored too directly, timeline findings dominate false positives, baseline-diff evidence is missing as a canonical source, memory findings need aggregation, and class-level matching is too permissive for headline thesis metrics.
+The ignored generated analysis artifacts under
+`shared/experiments/ubuntu-22.04_userland_father_ldpreload_20260618-183143/analysis/`
+may still contain the original pre-memory-dedup candidate stream:
+
+* 266 `DetectionClaim` records
+* 256 candidate FP
+
+Current code regenerates the canonical Father detector/matcher output with:
+
+* 255 `DetectionClaim` records
+* TP: 10
+* FP: 245
+* FN: 0
+* candidate precision: 0.0392
+* recall: 1.0
+* candidate F1: 0.0755
+* strong instance matches: 7
+* class-only/support matches: 3
+
+Use current regenerated detector/matcher output for thesis-relevant numbers, not
+stale ignored generated files in `shared/experiments/`. Candidate precision
+remains poor mostly for architectural reasons: broad candidate evidence is being
+scored too directly, timeline findings dominate false positives, baseline-diff
+evidence is missing as a canonical source, and class-level matching remains
+separate from strong instance reconstruction.
 
 Coding agents tend to over-engineer. During planning and after every few implementation patches, perform an explicit simplification review: identify unused paths, legacy code, boilerplate tests, duplicated abstractions, and places where the design can be flattened or made more explicit. Prefer KISS changes that support the thesis deliverable over new frameworks, new tools, or broad refactors.

@@ -59,9 +59,17 @@ as final reconstruction claims. Final reconstruction is the GT-aware
 - `matcher/tests/test_matcher_engine.py`
 - `orchestrator/adapters/tests/test_tool_adapters.py`
 
-Generated run sampled for current output shape:
+Generated run sampled for output shape:
 
 - `shared/experiments/ubuntu-22.04_userland_father_ldpreload_20260618-183143`
+
+> Refresh note (2026-06-27): generated files under `shared/experiments/` are
+> ignored disposable artifacts. The cached Father `analysis/detection_claims.jsonl`
+> on disk can still contain the original pre-memory-dedup output with 266
+> candidate claims and 256 candidate false positives. Current code regenerates
+> 255 candidate claims, 255 matches, and 245 candidate false positives from the
+> same 7608 raw `ToolFinding` records. Thesis-relevant numbers should use the
+> regenerated detector/matcher output.
 
 ## Current Canonical Outputs
 
@@ -81,15 +89,15 @@ The VM-backed declarative evaluator writes canonical analysis artifacts in
 - `analysis/metrics.json`
 - `analysis/score_report.md`
 
-The sampled run contained:
+The current regenerated Father output contains:
 
 | Artifact | Count |
 |---|---:|
 | `execution_truth.jsonl` | 7 |
 | `artifact_expectations.jsonl` | 10 |
 | `tool_findings.jsonl` | 7608 |
-| `detection_claims.jsonl` | 266 |
-| `matches.jsonl` | 266 |
+| `detection_claims.jsonl` | 255 |
+| `matches.jsonl` | 255 |
 
 Sampled `ToolFinding` counts by source/type:
 
@@ -110,17 +118,17 @@ Sampled `ToolFinding` counts by source/type:
 | disk | shell_history_log_event | 1 |
 | disk | shared_object | 1 |
 
-Sampled `DetectionClaim` counts by rule/category:
+Current regenerated `DetectionClaim` counts by rule/category:
 
 | Rule | Artifact Class | Count |
 |---|---|---:|
 | `flab.filesystem.suspicious_temp_path` | file | 95 |
 | `flab.filesystem.userland_persistence` | service_unit_file | 81 |
 | `flab.filesystem.ld_preload_configuration` | preload_configuration | 69 |
-| `flab.memory.process_library_correlation` | library_mapping | 10 |
-| `flab.memory.process_socket_correlation` | process_socket_correlation | 4 |
 | `flab.filesystem.deleted_artifact_cleanup` | deleted_file_candidate | 3 |
 | `flab.filesystem.userland_persistence` | file | 3 |
+| `flab.memory.process_socket_correlation` | process_socket_correlation | 2 |
+| `flab.memory.process_library_correlation` | library_mapping | 1 |
 | `flab.filesystem.suspicious_shared_object` | shared_object | 1 |
 
 Sampled `MatchResult` counts:
@@ -129,7 +137,7 @@ Sampled `MatchResult` counts:
 |---|---|---:|
 | tp | instance | 7 |
 | tp | class | 3 |
-| fp | none | 256 |
+| fp | none | 245 |
 
 ## Adapter and Extractor Coverage
 
@@ -462,4 +470,3 @@ Tests that may overfit implementation details:
 - Matcher algorithms and metric formulas.
 - README and scenario README.
 - Generated `shared/` outputs.
-

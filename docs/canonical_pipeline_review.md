@@ -75,6 +75,13 @@ The offline commands are:
 `--debug-raw-findings`. That mode is explicitly debug-only and not a thesis
 metric path.
 
+The ignored cached `analysis/detection_claims.jsonl` from the original Father
+experiment may still contain the pre-memory-dedup stream with 266 candidate
+claims and 256 candidate false positives. Current code regenerates 255 candidate
+claims and 245 candidate false positives from the same cached `tool_findings`
+input. Use the regenerated detector/matcher outputs for thesis-relevant
+numbers.
+
 ## Files Produced
 
 Scenario and acquisition outputs:

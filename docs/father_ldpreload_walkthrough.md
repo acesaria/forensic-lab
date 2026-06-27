@@ -13,6 +13,11 @@ examples reflect the current code:
 - `/tmp/flab-doc-review/father-current/match/metrics.json`
 - `/tmp/flab-doc-review/father-current/match/score_report.md`
 
+The ignored cached `analysis/detection_claims.jsonl` from the original
+experiment can still show the older pre-memory-dedup output: 266 candidate
+claims and 256 candidate false positives. The thesis-relevant regenerated output
+is the current 255-claim, 245-FP result shown below.
+
 ## Current Counts
 
 | item | count |
