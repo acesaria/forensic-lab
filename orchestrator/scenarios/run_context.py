@@ -125,6 +125,7 @@ class RunContext:
         acquisition_method: str = "none",
         guest: dict[str, Any] | None = None,
         acquisition: dict[str, Any] | None = None,
+        baseline: dict[str, Any] | None = None,
         tool_versions: dict[str, Any] | None = None,
         volatility: dict[str, Any] | None = None,
     ) -> None:
@@ -144,12 +145,21 @@ class RunContext:
             "disk_image": None,
         }
         acquisition_block.update(acquisition or {})
+        baseline_block = {
+            "identity": None,
+            "vm_name": None,
+            "snapshot": None,
+            "clean_tool_findings": None,
+            "status": "not_recorded",
+        }
+        baseline_block.update(baseline or {})
         data = {
             "schema": "forensic-lab.reference_context.v1",
             "run_id": self.run_id,
             "scenario_id": self.scenario_id,
             "guest": guest_block,
             "acquisition": acquisition_block,
+            "baseline": baseline_block,
             "tool_versions": tool_versions or {},
             "volatility": volatility or {"symbols": None, "profile": None},
             "git_commit": _git_commit(self.repo_root),

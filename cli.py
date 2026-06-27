@@ -165,6 +165,22 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         default=None,
         help="Optional detector rules directory (default: detectors/rules)",
     )
+    run_detectors.add_argument(
+        "--baseline-findings",
+        default=None,
+        help=(
+            "Optional clean baseline canonical tool_findings.jsonl. Filtering is "
+            "applied only when --baseline-identity is also supplied."
+        ),
+    )
+    run_detectors.add_argument(
+        "--baseline-identity",
+        default=None,
+        help=(
+            "Verified clean baseline identity, using existing VM/snapshot names "
+            "such as lab-ubuntu-22.04:baseline."
+        ),
+    )
 
     match_canonical = sub.add_parser(
         "match-canonical",
@@ -352,7 +368,18 @@ def _cmd_run_scenario(args: argparse.Namespace) -> int:
 def _cmd_run_detectors(args: argparse.Namespace) -> int:
     from detectors.engine import run_detectors_file, write_detection_claims
 
-    claims = run_detectors_file(args.findings, rules_dir=args.rules_dir)
+    if args.baseline_findings and not args.baseline_identity:
+        print(
+            "warning: --baseline-findings supplied without --baseline-identity; "
+            "baseline filtering disabled",
+            file=sys.stderr,
+        )
+    claims = run_detectors_file(
+        args.findings,
+        rules_dir=args.rules_dir,
+        baseline_findings_path=args.baseline_findings,
+        baseline_identity=args.baseline_identity,
+    )
     out = write_detection_claims(args.out, claims)
     print(f"wrote {len(claims)} detection claim(s): {out}")
     return 0

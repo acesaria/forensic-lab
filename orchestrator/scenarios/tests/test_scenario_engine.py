@@ -35,6 +35,7 @@ def test_toy_file_creation_scenario_outputs_canonical_files(tmp_path: Path):
     assert expectations[0].artifact_class == "toy_text_file"
     assert context["run_id"] == "toy-run"
     assert context["scenario_id"] == "toy_file_creation"
+    assert context["baseline"]["status"] == "not_recorded"
 
 
 def test_ssh_client_executor_adapts_existing_ssh_client_api():
