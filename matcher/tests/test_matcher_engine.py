@@ -38,8 +38,12 @@ def test_matcher_outputs_matches_metrics_and_report(tmp_path: Path):
     assert any(m.match_level == MatchLevel.INSTANCE for m in matches)
     assert any(m.match_level == MatchLevel.CLASS for m in matches)
     assert "# Score Report" in report
-    assert "Final Reconstruction Summary" in report
-    assert "Candidate-Level Diagnostics" in report
+    assert "Candidate Diagnostics" in report
+    assert "Reconstruction over Expected Artifacts" in report
+    assert "Source Coverage" in report
+    assert "Multi-Source Corroboration" in report
+    assert "Noise Reduction" in report
+    assert "Methodological Warnings / Unavailable Metrics" in report
     assert "Raw ToolFinding Counts by Source/Type" in report
     assert "Candidate Evidence / DetectionClaim Counts" in report
     assert "Memory Aggregation/Deduplication Summary" in report
@@ -48,6 +52,8 @@ def test_matcher_outputs_matches_metrics_and_report(tmp_path: Path):
     assert "Class-Only / Support Matches" in report
     assert "Unmatched Candidate Claims" in report
     assert "Per Artifact Class" in report
+    assert "Final precision" not in report
+    assert "Instance-only precision" not in report
 
 
 def test_class_only_support_is_not_headline_reconstruction_quality(tmp_path: Path):
@@ -67,7 +73,82 @@ def test_class_only_support_is_not_headline_reconstruction_quality(tmp_path: Pat
     assert metrics["final_reconstruction"]["fp"] == (
         metrics["counts"]["fp"] + metrics["match_levels"]["class"]
     )
-    assert metrics["final_reconstruction"]["recall"] < metrics["candidate_diagnostics"]["recall"]
+    assert metrics["reconstruction_summary"]["strong_instance_matched_expected"] == metrics["match_levels"]["instance"]
+    assert metrics["reconstruction_summary"]["class_only_supported_expected"] == metrics["match_levels"]["class"]
+    assert metrics["reconstruction_summary"]["strong_instance_recall"] < metrics["candidate_diagnostics"]["recall"]
+    assert metrics["reconstruction_summary"]["strong_instance_recall"] == 0.6
+    assert metrics["reconstruction_summary"]["strong_or_supported_coverage"] == 0.8
+
+
+def test_candidate_precision_is_labeled_diagnostic(tmp_path: Path):
+    result = run_matcher_files(
+        expectations_path=FIXTURES / "artifact_expectations.jsonl",
+        tool_findings_path=Path("detectors/tests/fixtures/tool_findings.jsonl"),
+        detection_claims_path=FIXTURES / "detection_claims.jsonl",
+        out_dir=tmp_path,
+        time_window_s=30,
+    )
+
+    metrics = result["metrics"]
+
+    assert "detector/candidate-layer diagnostics" in metrics["candidate_diagnostics"]["description"]
+    assert metrics["strict_candidate_stream_precision"] == metrics["final_reconstruction"]["precision"]
+    assert metrics["final_reconstruction"]["precision_label"] == "strict_candidate_stream_precision"
+    assert "not the thesis headline metric" in metrics["final_reconstruction"]["description"]
+    assert any("pipeline_runtime_seconds is not emitted" in warning for warning in metrics["methodology_warnings"])
+    assert any("evidence_latency is not emitted" in warning for warning in metrics["methodology_warnings"])
+
+
+def test_source_coverage_uses_strong_instance_matches_not_raw_counts_only(tmp_path: Path):
+    tool_findings_path = tmp_path / "tool_findings.jsonl"
+    original = Path("detectors/tests/fixtures/tool_findings.jsonl").read_text(encoding="utf-8")
+    extra_log = {
+        "adapter_version": "canonical-adapters-v1",
+        "artifact_class": "log_event",
+        "entity": {"type": "message", "value": "unlinked log noise"},
+        "finding_id": "tf-unlinked-log",
+        "provenance": {"adapter": "fixture"},
+        "raw_ref": "log:fixture:line=1",
+        "run_id": "run-detector-fixture",
+        "source_type": "log",
+        "temporal_quality": "none",
+        "time": "unknown",
+        "tool": "fixture-log",
+        "tool_version": "fixture",
+    }
+    tool_findings_path.write_text(original + json.dumps(extra_log, sort_keys=True) + "\n", encoding="utf-8")
+
+    result = run_matcher_files(
+        expectations_path=FIXTURES / "artifact_expectations.jsonl",
+        tool_findings_path=tool_findings_path,
+        detection_claims_path=FIXTURES / "detection_claims.jsonl",
+        out_dir=tmp_path / "out",
+        time_window_s=30,
+    )
+
+    coverage = result["metrics"]["source_coverage"]
+
+    assert coverage["available_sources"] == ["disk", "log", "memory"]
+    assert coverage["strong_reconstruction_sources"] == ["disk", "memory"]
+    assert coverage["source_coverage_ratio"] == 0.6667
+
+
+def test_noise_reduction_metrics_use_raw_candidate_and_strong_counts(tmp_path: Path):
+    result = run_matcher_files(
+        expectations_path=FIXTURES / "artifact_expectations.jsonl",
+        tool_findings_path=Path("detectors/tests/fixtures/tool_findings.jsonl"),
+        detection_claims_path=FIXTURES / "detection_claims.jsonl",
+        out_dir=tmp_path,
+        time_window_s=30,
+    )
+
+    noise = result["metrics"]["noise_reduction"]
+
+    assert noise["raw_findings_count"] == 10
+    assert noise["candidate_claim_count"] == 5
+    assert noise["strong_instance_match_count"] == 3
+    assert noise["raw_to_candidate_reduction"] == 0.5
+    assert noise["raw_to_strong_reconstruction_reduction"] == 0.7
 
 
 def test_matcher_requires_claims_for_canonical_scoring(tmp_path: Path):

@@ -489,24 +489,48 @@ def compute_metrics(
     # Instance-only treats a class-level hit as a miss: it is class coverage, not
     # instance reconstruction, so it is folded into the negative bucket.
     instance_only = _prf(instance_tp, len(fp), total_exp - instance_tp)
+    # Backward-compatible diagnostic: this is not a final-claim precision. Its
+    # denominator is still the candidate stream, with class-only support demoted
+    # out of the numerator.
     final_reconstruction = _prf(instance_tp, len(fp) + class_tp, total_exp - instance_tp)
+    reconstruction_summary = _reconstruction_summary(expectations, matches)
+    source_coverage = _source_coverage(tool_findings, candidates, matches)
+    corroboration = _multi_source_corroboration(candidates, matches)
+    noise_reduction = _noise_reduction(
+        raw_findings_count=len(tool_findings),
+        candidate_claim_count=len(candidates),
+        strong_instance_match_count=instance_tp,
+    )
 
     metrics = {
         "schema": "forensic-lab.matcher.metrics.v2",
         "counts": {"tp": len(tp), "fp": len(fp), "fn": len(fn)},
         "micro": micro,
         "candidate_diagnostics": {
-            "description": "candidate-level diagnostics; class-only support is counted with instance matches",
+            "description": (
+                "detector/candidate-layer diagnostics only; "
+                "not final thesis reconstruction metrics"
+            ),
             **micro,
         },
         "final_reconstruction": {
-            "description": "headline reconstruction quality; class-only support is not counted as strong instance reconstruction",
+            "description": (
+                "backward-compatible diagnostic only; precision uses the "
+                "candidate stream denominator and is not the thesis headline metric"
+            ),
             "strong_instance_matches": instance_tp,
             "class_only_support": class_tp,
             "unmatched_candidates": len(fp),
             "missed_expected_after_strong_matching": total_exp - instance_tp,
+            "precision_label": "strict_candidate_stream_precision",
+            "precision_warning": (
+                "denominator includes unmatched candidate claims and class-only "
+                "support; do not present as final reconstruction precision"
+            ),
             **final_reconstruction,
         },
+        "strict_candidate_stream_precision": final_reconstruction["precision"],
+        "reconstruction_summary": reconstruction_summary,
         "reconstruction": {
             "instance_only_precision": instance_only["precision"],
             "instance_only_recall": instance_only["recall"],
@@ -519,6 +543,22 @@ def compute_metrics(
             "expectations_total": total_exp,
             "critical_event_recall": critical["recall"],
         },
+        "source_coverage": source_coverage,
+        "multi_source_corroboration": corroboration,
+        "noise_reduction": noise_reduction,
+        "methodology_warnings": [
+            "candidate_diagnostics are detector/candidate-stream diagnostics, "
+            "not final thesis reconstruction metrics",
+            "final_reconstruction.precision is retained only as "
+            "strict_candidate_stream_precision for backward compatibility; "
+            "unmatched candidate claims remain in its denominator",
+            "pipeline_runtime_seconds is not emitted because the canonical full "
+            "pipeline runtime is not explicitly measured in cached artifacts",
+            "evidence_latency is not emitted because reliable GT action timestamps "
+            "and artifact timestamps are not paired here",
+            "noise_reduction is raw-to-candidate and raw-to-strong-count reduction "
+            "only; it is not baseline-aware",
+        ],
         "source_breakdown": _source_breakdown(tool_findings),
         "macro_f1_by_artifact_class": _macro_by_class(expectations, candidates, matches),
         "critical_recall": critical,
@@ -532,6 +572,158 @@ def compute_metrics(
         },
     }
     return metrics
+
+
+def _reconstruction_summary(
+    expectations: list[ArtifactExpectation],
+    matches: list[MatchResult],
+) -> dict[str, Any]:
+    total = len(expectations)
+    instance_ids = {
+        m.target_id
+        for m in matches
+        if m.relation == "tp" and m.match_level == MatchLevel.INSTANCE
+    }
+    class_ids = {
+        m.target_id
+        for m in matches
+        if m.relation == "tp" and m.match_level == MatchLevel.CLASS
+    }
+    critical_ids = {exp.ae_id for exp in expectations if exp.critical}
+    observable_total = sum(
+        1
+        for exp in expectations
+        if str(exp.observability).lower()
+        not in {"", "none", "not_observable", "unobservable"}
+    )
+    strong = len(instance_ids)
+    supported = len(class_ids)
+    covered = strong + supported
+    out: dict[str, Any] = {
+        "expected_total": total,
+        "observable_expected_total": observable_total,
+        "strong_instance_matched_expected": strong,
+        "class_only_supported_expected": supported,
+        "missed_expected": max(0, total - covered),
+        "strong_instance_recall": round(strong / total, 4) if total else 0.0,
+        "class_support_coverage": round(supported / total, 4) if total else 0.0,
+        "strong_or_supported_coverage": round(covered / total, 4) if total else 0.0,
+    }
+    if critical_ids:
+        out["critical_strong_instance_recall"] = round(
+            len(instance_ids & critical_ids) / len(critical_ids), 4
+        )
+    return out
+
+
+def _source_coverage(
+    tool_findings: list[ToolFinding],
+    candidates: list[Candidate],
+    matches: list[MatchResult],
+) -> dict[str, Any]:
+    by_cand = {cand.candidate_id: cand for cand in candidates}
+    available_sources = sorted({finding.source_type.value for finding in tool_findings})
+    candidate_sources = sorted(
+        {
+            source.value
+            for cand in candidates
+            for source in cand.source_types
+            if source != EvidenceSource.UNKNOWN
+        }
+    )
+    strong_sources = sorted(
+        {
+            source.value
+            for match in matches
+            if match.relation == "tp" and match.match_level == MatchLevel.INSTANCE
+            for source in _candidate_sources(match, by_cand)
+            if source != EvidenceSource.UNKNOWN
+        }
+    )
+    out: dict[str, Any] = {
+        "available_sources": available_sources,
+        "candidate_sources": candidate_sources,
+        "strong_reconstruction_sources": strong_sources,
+        "available_source_count": len(available_sources),
+        "candidate_source_count": len(candidate_sources),
+        "strong_reconstruction_source_count": len(strong_sources),
+        "denominator": "available_sources from raw ToolFinding records",
+    }
+    out["source_coverage_ratio"] = (
+        round(len(strong_sources) / len(available_sources), 4) if available_sources else None
+    )
+    if not available_sources:
+        out["note"] = (
+            "source coverage ratio unavailable because no raw finding sources "
+            "were available"
+        )
+    return out
+
+
+def _candidate_sources(
+    match: MatchResult,
+    by_cand: dict[str, Candidate],
+) -> set[EvidenceSource]:
+    cand = by_cand.get(match.finding_or_claim_id)
+    return set(cand.source_types) if cand else set()
+
+
+def _multi_source_corroboration(
+    candidates: list[Candidate],
+    matches: list[MatchResult],
+) -> dict[str, Any]:
+    by_cand = {cand.candidate_id: cand for cand in candidates}
+    strong = [m for m in matches if m.relation == "tp" and m.match_level == MatchLevel.INSTANCE]
+    two_plus = 0
+    per_expected: dict[str, int] = {}
+    insufficient: list[str] = []
+    for match in strong:
+        cand = by_cand.get(match.finding_or_claim_id)
+        source_count = 0
+        if cand:
+            source_count = len(
+                {source for source in cand.source_types if source != EvidenceSource.UNKNOWN}
+            )
+        per_expected[match.target_id] = source_count
+        if source_count >= 2:
+            two_plus += 1
+        if source_count == 0:
+            insufficient.append(match.target_id)
+    total = len(strong)
+    out: dict[str, Any] = {
+        "strong_reconstructed_with_2plus_sources": two_plus,
+        "strong_reconstructed_total": total,
+        "multi_source_corroboration_rate": round(two_plus / total, 4) if total else 0.0,
+        "source_type_count_by_expected": dict(sorted(per_expected.items())),
+    }
+    if insufficient:
+        out["limitation"] = (
+            "some strong matches have no linked non-unknown source findings; "
+            "they are counted as not multi-source corroborated"
+        )
+        out["insufficient_source_expected"] = sorted(insufficient)
+    return out
+
+
+def _noise_reduction(
+    *,
+    raw_findings_count: int,
+    candidate_claim_count: int,
+    strong_instance_match_count: int,
+) -> dict[str, Any]:
+    def reduction(after: int) -> float | None:
+        if raw_findings_count == 0:
+            return None
+        return round(1 - (after / raw_findings_count), 4)
+
+    return {
+        "raw_findings_count": raw_findings_count,
+        "candidate_claim_count": candidate_claim_count,
+        "strong_instance_match_count": strong_instance_match_count,
+        "raw_to_candidate_reduction": reduction(candidate_claim_count),
+        "raw_to_strong_reconstruction_reduction": reduction(strong_instance_match_count),
+        "note": "count reduction only; not baseline-aware",
+    }
 
 
 def _source_breakdown(tool_findings: list[ToolFinding]) -> dict[str, int]:
@@ -658,6 +850,11 @@ def render_report(
     final = metrics.get("final_reconstruction", {})
     critical = metrics["critical_recall"]
     recon = metrics.get("reconstruction", {})
+    recon_summary = metrics.get("reconstruction_summary", {})
+    source_coverage = metrics.get("source_coverage", {})
+    corroboration = metrics.get("multi_source_corroboration", {})
+    noise = metrics.get("noise_reduction", {})
+    warnings = metrics.get("methodology_warnings", [])
     sources = metrics.get("source_breakdown", {})
     tool_findings = tool_findings or []
     detection_claims = detection_claims or []
@@ -679,28 +876,64 @@ def render_report(
             "",
         ])
     lines.extend([
-        "## Final Reconstruction Summary",
+        "## Candidate Diagnostics",
         "",
-        "Headline thesis metrics count strong instance-level reconstruction only; class-only matches remain supporting context.",
+        "Detector/candidate-layer diagnostics only. These are not final thesis reconstruction metrics.",
         "",
-        f"- Strong instance matches: {final.get('strong_instance_matches', 0)}",
-        f"- Class-only/support matches: {final.get('class_only_support', 0)}",
-        f"- Unmatched candidate claims: {final.get('unmatched_candidates', 0)}",
-        f"- Missed expected artifacts after strong matching: {final.get('missed_expected_after_strong_matching', 0)}",
-        f"- Final precision: {final.get('precision', 0.0):.4f}",
-        f"- Final recall: {final.get('recall', 0.0):.4f}",
-        f"- Final F1: {final.get('f1', 0.0):.4f}",
+        f"- Candidate TP: {micro['tp']}",
+        f"- Candidate FP: {micro['fp']}",
+        f"- Candidate FN: {micro['fn']}",
+        f"- Candidate precision: {micro['precision']:.4f}",
+        f"- Candidate recall: {micro['recall']:.4f}",
+        f"- Candidate F1: {micro['f1']:.4f}",
         "",
-        "## Candidate-Level Diagnostics",
+        "## Reconstruction over Expected Artifacts",
         "",
-        "Diagnostic only: combines strong instance matches and class-only support against candidate evidence.",
+        "Headline thesis reconstruction uses expected artifacts as the denominator. Class-only support is reported separately and does not increase strong instance recall.",
         "",
-        f"- TP: {micro['tp']}",
-        f"- FP: {micro['fp']}",
-        f"- FN: {micro['fn']}",
-        f"- Precision: {micro['precision']:.4f}",
-        f"- Recall: {micro['recall']:.4f}",
-        f"- F1: {micro['f1']:.4f}",
+        f"- Expected artifacts: {recon_summary.get('expected_total', 0)}",
+        f"- Observable expected artifacts: {recon_summary.get('observable_expected_total', 'n/a')}",
+        f"- Strong instance matched expected artifacts: {recon_summary.get('strong_instance_matched_expected', 0)}",
+        f"- Class-only/support expected artifacts: {recon_summary.get('class_only_supported_expected', 0)}",
+        f"- Missed expected artifacts: {recon_summary.get('missed_expected', 0)}",
+        f"- Strong instance recall: {recon_summary.get('strong_instance_recall', 0.0):.4f}",
+        f"- Class support coverage: {recon_summary.get('class_support_coverage', 0.0):.4f}",
+        f"- Strong-or-supported coverage: {recon_summary.get('strong_or_supported_coverage', 0.0):.4f}",
+        f"- Critical strong instance recall: {recon_summary.get('critical_strong_instance_recall', 'n/a')}",
+        "",
+        "## Source Coverage",
+        "",
+        "Source coverage is based on strong instance matches and their linked source findings.",
+        "",
+        f"- Available raw sources: {', '.join(source_coverage.get('available_sources', [])) or '-'}",
+        f"- Candidate sources: {', '.join(source_coverage.get('candidate_sources', [])) or '-'}",
+        f"- Strong reconstruction sources: {', '.join(source_coverage.get('strong_reconstruction_sources', [])) or '-'}",
+        f"- Source coverage ratio: {_fmt_optional_float(source_coverage.get('source_coverage_ratio'))}",
+        f"- Denominator: {source_coverage.get('denominator', 'not defined')}",
+        "",
+        "## Multi-Source Corroboration",
+        "",
+        "Counts distinct linked source types per strong reconstructed expected artifact.",
+        "",
+        f"- Strong reconstructed with 2+ sources: {corroboration.get('strong_reconstructed_with_2plus_sources', 0)}",
+        f"- Strong reconstructed total: {corroboration.get('strong_reconstructed_total', 0)}",
+        f"- Multi-source corroboration rate: {corroboration.get('multi_source_corroboration_rate', 0.0):.4f}",
+        "",
+        "## Noise Reduction",
+        "",
+        "Count reduction only; this is not baseline-aware.",
+        "",
+        f"- Raw findings: {noise.get('raw_findings_count', 0)}",
+        f"- Candidate claims: {noise.get('candidate_claim_count', 0)}",
+        f"- Strong instance matches: {noise.get('strong_instance_match_count', 0)}",
+        f"- Raw-to-candidate reduction: {_fmt_optional_float(noise.get('raw_to_candidate_reduction'))}",
+        f"- Raw-to-strong-reconstruction reduction: {_fmt_optional_float(noise.get('raw_to_strong_reconstruction_reduction'))}",
+        "",
+        "## Methodological Warnings / Unavailable Metrics",
+        "",
+        f"- final_reconstruction.precision label: {final.get('precision_label', 'n/a')}",
+        f"- final_reconstruction.precision warning: {final.get('precision_warning', 'n/a')}",
+        *[f"- {warning}" for warning in warnings],
         "",
         "## Class-level coverage",
         "",
@@ -712,16 +945,15 @@ def render_report(
         "",
         "## Instance-level reconstruction",
         "",
-        "Did we recover the exact planted entity (class hits count as misses here)?",
+        "Did we recover the exact planted entity? Class hits count only as support. No final-claim precision is emitted because there is no final-claim selection layer.",
         "",
-        f"- Instance-only precision: {recon.get('instance_only_precision', 0.0):.4f}",
-        f"- Instance-only recall: {recon.get('instance_only_recall', 0.0):.4f}",
-        f"- Instance-only F1: {recon.get('instance_only_f1', 0.0):.4f}",
+        f"- Strong instance recall: {recon_summary.get('strong_instance_recall', 0.0):.4f}",
         f"- Instance matches: {metrics['match_levels']['instance']}",
         "",
         "## Critical observables",
         "",
-        f"- Critical-event recall: {critical['recall']:.4f} "
+        f"- Critical strong instance recall: {recon_summary.get('critical_strong_instance_recall', 'n/a')}",
+        f"- Candidate-supported critical recall (diagnostic): {critical['recall']:.4f} "
         f"({critical['critical_matched']}/{critical['critical_total']})",
         "",
         "## Raw ToolFinding Counts by Source/Type",
@@ -828,6 +1060,10 @@ def render_report(
             f"{match.finding_or_claim_id} | {match.score:.4f} | {', '.join(match.fields_matched)} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def _fmt_optional_float(value: Any) -> str:
+    return "n/a" if value is None else f"{float(value):.4f}"
 
 
 def _tool_finding_counts(tool_findings: list[ToolFinding]) -> dict[tuple[str, str], int]:
