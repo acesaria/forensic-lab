@@ -32,8 +32,8 @@ is the current 255-claim, 245-FP result shown below.
 | candidate recall | 1.0000 |
 | strong instance matches | 7 |
 | class-only/support matches | 3 |
-| final precision | 0.0275 |
-| final recall | 0.7000 |
+| strict candidate-stream precision | 0.0275 |
+| strong instance recall | 0.7000 |
 
 ## Evidence Lifecycle
 

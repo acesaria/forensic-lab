@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from matcher.engine import run_matcher_files
+from matcher.engine import render_console_summary, render_report, run_matcher_files
 from orchestrator.canonical import MatchLevel, MatchResult, load_jsonl
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -98,6 +98,37 @@ def test_candidate_precision_is_labeled_diagnostic(tmp_path: Path):
     assert "not the thesis headline metric" in metrics["final_reconstruction"]["description"]
     assert any("pipeline_runtime_seconds is not emitted" in warning for warning in metrics["methodology_warnings"])
     assert any("evidence_latency is not emitted" in warning for warning in metrics["methodology_warnings"])
+
+
+def test_schema_v2_console_summary_labels_candidate_and_reconstruction_layers(tmp_path: Path):
+    result = run_matcher_files(
+        expectations_path=FIXTURES / "artifact_expectations.jsonl",
+        tool_findings_path=Path("detectors/tests/fixtures/tool_findings.jsonl"),
+        detection_claims_path=FIXTURES / "detection_claims.jsonl",
+        out_dir=tmp_path,
+        time_window_s=30,
+    )
+
+    text = "\n".join(render_console_summary(result["metrics"]))
+
+    assert "candidate diagnostics:" in text
+    assert "reconstruction:" in text
+    assert "baseline:" in text
+    assert "warnings:" in text
+    assert "canonical metrics: precision=" not in text
+    assert "final precision" not in text.lower()
+
+
+def test_old_or_unknown_metrics_schema_is_not_silently_formatted_as_canonical():
+    v1_like = {"precision": 1.0, "recall": 1.0, "tp": 1, "fp": 0, "fn": 0}
+    unknown = {"schema": "forensic-lab.matcher.metrics.v99"}
+
+    with pytest.raises(ValueError, match="unsupported metrics schema 'missing'"):
+        render_console_summary(v1_like)
+    with pytest.raises(ValueError, match="unsupported metrics schema 'forensic-lab.matcher.metrics.v99'"):
+        render_console_summary(unknown)
+    with pytest.raises(ValueError, match="regenerate with current matcher"):
+        render_report(v1_like, [])
 
 
 def test_source_coverage_uses_strong_instance_matches_not_raw_counts_only(tmp_path: Path):
