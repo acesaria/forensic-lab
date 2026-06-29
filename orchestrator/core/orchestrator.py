@@ -292,12 +292,12 @@ class ForensicOrchestrator:
         # The engine wrote a null-filled reference_context before the steps ran;
         # rewrite it now that the guest facts are known.
         if ctx is not None:
-                ctx.write_reference_context(
-                    guest=guest,
-                    baseline=self._baseline_context(distro_id),
-                    tool_versions=self._pipeline_versions(),
-                    volatility=self._volatility_context(
-                        distro_id, (guest or {}).get("kernel")
+            ctx.write_reference_context(
+                guest=guest,
+                baseline=self._baseline_context(distro_id),
+                tool_versions=self._pipeline_versions(),
+                volatility=self._volatility_context(
+                    distro_id, (guest or {}).get("kernel")
                 ),
             )
 

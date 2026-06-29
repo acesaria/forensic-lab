@@ -38,6 +38,21 @@ def test_baseline_comparison_classifies_new_changed_and_present_paths():
     assert comparison.status_counts[BASELINE_CHANGED] == 1
 
 
+def test_size_and_size_bytes_are_compared_across_adapter_naming():
+    # Baseline records the file size as ``size`` while the run's adapter records
+    # it as ``size_bytes``. The two names are one logical field, so a real size
+    # change must surface as changed_vs_baseline rather than present_in_baseline.
+    baseline = [_finding("b-lib", "/usr/lib/x.so", size=100)]
+    grown = [_finding("c-lib", "/usr/lib/x.so", size_bytes=200)]
+    same = [_finding("c-lib", "/usr/lib/x.so", size_bytes=100)]
+
+    changed = compare_path_baseline(baseline, grown, identity="lab-test:baseline")
+    unchanged = compare_path_baseline(baseline, same, identity="lab-test:baseline")
+
+    assert changed.status_by_path["/usr/lib/x.so"].status == BASELINE_CHANGED
+    assert unchanged.status_by_path["/usr/lib/x.so"].status == BASELINE_PRESENT
+
+
 def test_present_in_baseline_timeline_only_candidate_is_downgraded():
     baseline = [_finding("b-service", "/etc/systemd/system/demo.service")]
     compromised = [
@@ -93,6 +108,7 @@ def _finding(
     *,
     sha256: str | None = None,
     size: int | None = None,
+    size_bytes: int | None = None,
     source: EvidenceSource = EvidenceSource.DISK,
     artifact_class: str = "file",
 ) -> ToolFinding:
@@ -101,6 +117,8 @@ def _finding(
         entity["sha256"] = sha256
     if size is not None:
         entity["size"] = size
+    if size_bytes is not None:
+        entity["size_bytes"] = size_bytes
     return ToolFinding(
         finding_id=finding_id,
         run_id="run-baseline-test",

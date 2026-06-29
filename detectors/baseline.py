@@ -7,12 +7,15 @@ scenario ground truth.
 
 from __future__ import annotations
 
+import logging
 import posixpath
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 from orchestrator.canonical import DetectionClaim, EvidenceSource, ToolFinding
+
+_log = logging.getLogger(__name__)
 
 BASELINE_NEW = "new_vs_baseline"
 BASELINE_CHANGED = "changed_vs_baseline"
@@ -54,6 +57,13 @@ def compare_path_baseline(
 ) -> BaselineComparison:
     baseline_index = _index_findings(baseline_findings)
     current_index = _index_findings(compromised_findings)
+    if current_index and not baseline_index:
+        _log.warning(
+            "baseline '%s' has no comparable filesystem findings; every path will "
+            "be reported as %s",
+            identity,
+            BASELINE_NEW,
+        )
     status_by_path: dict[str, PathBaselineStatus] = {}
 
     for path, current_rows in sorted(current_index.items()):
@@ -126,6 +136,17 @@ def _index_findings(findings: Iterable[ToolFinding]) -> dict[str, list[ToolFindi
     return out
 
 
+# Content fields used to decide whether a path's bytes changed against the
+# baseline. ``size`` and ``size_bytes`` are the same quantity under two adapter
+# names, so they collapse to one logical field; otherwise a baseline that
+# records ``size`` never compares against a run that records ``size_bytes`` and a
+# genuinely changed file is misreported as present_in_baseline.
+_COMPARE_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("sha256", ("sha256",)),
+    ("size", ("size", "size_bytes")),
+)
+
+
 def _compare_rows(
     baseline_rows: list[ToolFinding],
     current_rows: list[ToolFinding],
@@ -133,9 +154,13 @@ def _compare_rows(
     comparable = _comparable_fields(baseline_rows, current_rows)
     if not comparable:
         return BASELINE_PRESENT, ()
+    aliases = dict(_COMPARE_FIELDS)
     for current in current_rows:
         for baseline in baseline_rows:
-            if all(_entity_value(current, field) == _entity_value(baseline, field) for field in comparable):
+            if all(
+                _logical_value(current, aliases[field]) == _logical_value(baseline, aliases[field])
+                for field in comparable
+            ):
                 return BASELINE_PRESENT, comparable
     return BASELINE_CHANGED, comparable
 
@@ -145,12 +170,20 @@ def _comparable_fields(
     current_rows: list[ToolFinding],
 ) -> tuple[str, ...]:
     fields: list[str] = []
-    for field in ("sha256", "size", "size_bytes"):
-        if any(_entity_value(row, field) not in (None, "") for row in baseline_rows) and any(
-            _entity_value(row, field) not in (None, "") for row in current_rows
+    for field, aliases in _COMPARE_FIELDS:
+        if any(_logical_value(row, aliases) is not None for row in baseline_rows) and any(
+            _logical_value(row, aliases) is not None for row in current_rows
         ):
             fields.append(field)
     return tuple(fields)
+
+
+def _logical_value(finding: ToolFinding, aliases: tuple[str, ...]) -> Any:
+    for field in aliases:
+        value = _entity_value(finding, field)
+        if value not in (None, ""):
+            return value
+    return None
 
 
 def _with_baseline_status(
