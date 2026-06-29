@@ -49,6 +49,10 @@ class ProjectPaths:
         return self.shared_dir / "experiments"
 
     @property
+    def baselines_dir(self) -> Path:
+        return self.shared_dir / "baselines"
+
+    @property
     def isf_dir(self) -> Path:
         return self.shared_dir / "isf"
 
