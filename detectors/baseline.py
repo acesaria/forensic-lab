@@ -240,6 +240,11 @@ def _should_downgrade_present_baseline_candidate(
 
 
 def _downgrade_claim(claim: DetectionClaim) -> DetectionClaim:
+    capped = min(float(claim.confidence), 0.35)
+    if capped >= float(claim.confidence):
+        # Confidence already at or below the cap: nothing to downgrade, so leave
+        # filter_action='none' rather than inflating candidate_downgrades.
+        return claim
     entity = dict(claim.entity)
     baseline = dict(entity.get("baseline") or {})
     baseline["filter_action"] = "confidence_downgraded"
@@ -251,7 +256,7 @@ def _downgrade_claim(claim: DetectionClaim) -> DetectionClaim:
     return _replace_claim(
         claim,
         entity=entity,
-        confidence=min(float(claim.confidence), 0.35),
+        confidence=capped,
         notes=notes,
     )
 
@@ -298,6 +303,11 @@ def _finding_path(finding: ToolFinding) -> str:
 def _normalize_path(value: Any) -> str:
     text = str(value or "").strip()
     if not text or not text.startswith("/"):
+        return ""
+    if " -> " in text:
+        # Correlation detectors synthesise composite display values such as
+        # "<process> -> <library>"; that is not a filesystem path, so reject it
+        # and let _claim_path fall back to the nested process/library dicts.
         return ""
     if " (deleted)" in text:
         text = text.replace(" (deleted)", "")
