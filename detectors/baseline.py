@@ -8,12 +8,15 @@ scenario ground truth.
 from __future__ import annotations
 
 import logging
-import posixpath
 from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
 from orchestrator.canonical import DetectionClaim, EvidenceSource, ToolFinding
+from orchestrator.canonical.baseline_paths import (
+    BASELINE_FILESYSTEM_CLASSES,
+    normalize_baseline_path,
+)
 
 _log = logging.getLogger(__name__)
 
@@ -21,16 +24,6 @@ BASELINE_NEW = "new_vs_baseline"
 BASELINE_CHANGED = "changed_vs_baseline"
 BASELINE_PRESENT = "present_in_baseline"
 BASELINE_UNKNOWN = "unknown_baseline_status"
-
-_FILESYSTEM_CLASSES = {
-    "deleted_file_candidate",
-    "file",
-    "preload_configuration",
-    "service_unit_file",
-    "shared_object",
-    "shell_history_log_event",
-}
-
 
 @dataclass(frozen=True)
 class PathBaselineStatus:
@@ -127,7 +120,7 @@ def apply_baseline_to_claims(
 def _index_findings(findings: Iterable[ToolFinding]) -> dict[str, list[ToolFinding]]:
     out: dict[str, list[ToolFinding]] = {}
     for finding in findings:
-        if finding.artifact_class not in _FILESYSTEM_CLASSES:
+        if finding.artifact_class not in BASELINE_FILESYSTEM_CLASSES:
             continue
         path = _finding_path(finding)
         if not path:
@@ -283,13 +276,13 @@ def _replace_claim(
 
 def _claim_path(claim: DetectionClaim) -> str:
     entity = claim.entity
-    direct = _normalize_path(entity.get("path") or entity.get("value"))
+    direct = normalize_baseline_path(entity.get("path") or entity.get("value"))
     if direct:
         return direct
     for key in ("library", "process", "file", "source"):
         value = entity.get(key)
         if isinstance(value, dict):
-            path = _normalize_path(value.get("path") or value.get("value"))
+            path = normalize_baseline_path(value.get("path") or value.get("value"))
             if path:
                 return path
     return ""
@@ -297,21 +290,7 @@ def _claim_path(claim: DetectionClaim) -> str:
 
 def _finding_path(finding: ToolFinding) -> str:
     entity = finding.entity
-    return _normalize_path(entity.get("path") or entity.get("value"))
-
-
-def _normalize_path(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text or not text.startswith("/"):
-        return ""
-    if " -> " in text:
-        # Correlation detectors synthesise composite display values such as
-        # "<process> -> <library>"; that is not a filesystem path, so reject it
-        # and let _claim_path fall back to the nested process/library dicts.
-        return ""
-    if " (deleted)" in text:
-        text = text.replace(" (deleted)", "")
-    return posixpath.normpath(text)
+    return normalize_baseline_path(entity.get("path") or entity.get("value"))
 
 
 def _entity_value(finding: ToolFinding, field: str) -> Any:

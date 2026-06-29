@@ -43,7 +43,7 @@ ISOLATED_NETWORK_GATEWAY = "192.168.100.1"
 # Acquisition output filenames. The run directory name already encodes which
 # scenario/run a dump belongs to, so the files themselves stay generic.
 MEMORY_DUMP_FILENAME = "mem.raw"
-BASELINE_DISK_FILENAME = "baseline_disk.E01"
+EVIDENCE_DISK_FILENAME = "evidence_disk.E01"
 
 # Scenario identifiers
 VERIFY_SCENARIO = "verify"

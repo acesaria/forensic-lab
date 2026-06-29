@@ -37,10 +37,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 from orchestrator.core.config import (
-    BASELINE_DISK_FILENAME,
     BASELINE_SNAPSHOT,
     MEMORY_DUMP_FILENAME,
     BUILD_VM_PREFIX,
+    EVIDENCE_DISK_FILENAME,
     ISF_BUILD_PLAYBOOK,
     ISOLATED_NETWORK_GATEWAY,
     LAB_VM_PREFIX,
@@ -1224,7 +1224,7 @@ class ForensicOrchestrator:
 
         run_dir = self.dumper.run_dir(run_id)
         memory_dump_path = run_dir / "memory" / MEMORY_DUMP_FILENAME
-        disk_dump_path = run_dir / "disk" / BASELINE_DISK_FILENAME
+        disk_dump_path = run_dir / "disk" / EVIDENCE_DISK_FILENAME
 
         console.step_header("acquisition")
         memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)

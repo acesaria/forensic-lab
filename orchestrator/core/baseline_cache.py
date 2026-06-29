@@ -9,27 +9,20 @@ from __future__ import annotations
 
 import hashlib
 import json
-import posixpath
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from orchestrator.canonical import ToolFinding, load_jsonl
+from orchestrator.canonical.baseline_paths import (
+    BASELINE_FILESYSTEM_CLASSES,
+    normalize_baseline_path,
+)
 from orchestrator.core.paths import ProjectPaths
 
 SCHEMA = "forensic-lab.baseline-cache.v1"
 EXTRACTION_PROFILE = "canonical-tool-findings-v1"
-
-_FILESYSTEM_CLASSES = {
-    "deleted_file_candidate",
-    "file",
-    "preload_configuration",
-    "service_unit_file",
-    "shared_object",
-    "shell_history_log_event",
-}
-
 
 @dataclass(frozen=True)
 class BaselineCacheEntry:
@@ -176,20 +169,11 @@ def _identity_warnings(
 def _comparable_paths(findings: list[ToolFinding]) -> set[str]:
     out: set[str] = set()
     for finding in findings:
-        if finding.artifact_class not in _FILESYSTEM_CLASSES:
+        if finding.artifact_class not in BASELINE_FILESYSTEM_CLASSES:
             continue
-        path = _normalize_path(finding.entity.get("path") or finding.entity.get("value"))
+        path = normalize_baseline_path(
+            finding.entity.get("path") or finding.entity.get("value")
+        )
         if path:
             out.add(path)
     return out
-
-
-def _normalize_path(value: Any) -> str:
-    text = str(value or "").strip()
-    if not text or not text.startswith("/"):
-        return ""
-    if " -> " in text:
-        return ""
-    if " (deleted)" in text:
-        text = text.replace(" (deleted)", "")
-    return posixpath.normpath(text)
