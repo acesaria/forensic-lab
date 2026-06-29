@@ -48,6 +48,14 @@ from orchestrator.core.config import (
     load_profile,
 )
 from orchestrator.core import console
+from orchestrator.core.baseline_cache import (
+    BaselineCacheEntry,
+    baseline_identity,
+    cache_dir_for_identity,
+    expected_manifest,
+    load_compatible_cache,
+    write_cache_manifest,
+)
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
@@ -276,6 +284,20 @@ class ForensicOrchestrator:
 
         ctx = None
         guest: dict[str, Any] | None = None
+        baseline_cache: BaselineCacheEntry | None = None
+        if acquire:
+            with self.vm_manager.open_ssh(vm_name) as ssh:
+                guest = self._guest_facts(ssh)
+            baseline_cache, baseline_acquired = self._ensure_clean_baseline_cache(
+                distro_id,
+                vm_name,
+                guest=guest,
+            )
+            if baseline_acquired:
+                vm_name = self._reset_lab(distro_id)
+                with self.vm_manager.open_ssh(vm_name) as ssh:
+                    guest = self._guest_facts(ssh)
+
         try:
             with self.vm_manager.open_ssh(vm_name) as ssh:
                 ctx = run_scenario(
@@ -294,7 +316,7 @@ class ForensicOrchestrator:
         if ctx is not None:
             ctx.write_reference_context(
                 guest=guest,
-                baseline=self._baseline_context(distro_id),
+                baseline=self._baseline_context(distro_id, baseline_cache),
                 tool_versions=self._pipeline_versions(),
                 volatility=self._volatility_context(
                     distro_id, (guest or {}).get("kernel")
@@ -310,13 +332,19 @@ class ForensicOrchestrator:
             ctx.write_reference_context(
                 guest=guest,
                 acquisition=self._acquisition_context(manifest_path),
-                baseline=self._baseline_context(distro_id),
+                baseline=self._baseline_context(distro_id, baseline_cache),
                 tool_versions=self._pipeline_versions(),
                 volatility=self._volatility_context(
                     distro_id, (guest or {}).get("kernel")
                 ),
             )
-        self._evaluate_declarative_run(run_id, scenario_id, distro_id, manifest_path)
+        self._evaluate_declarative_run(
+            run_id,
+            scenario_id,
+            distro_id,
+            manifest_path,
+            baseline_cache=baseline_cache,
+        )
         return manifest_path
 
     @staticmethod
@@ -356,11 +384,29 @@ class ForensicOrchestrator:
         except Exception:
             return {}
 
-    @staticmethod
-    def _baseline_context(distro_id: str) -> dict[str, Any]:
+    def _baseline_context(
+        self,
+        distro_id: str,
+        cache: BaselineCacheEntry | None = None,
+    ) -> dict[str, Any]:
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
+        identity = baseline_identity(
+            distro_id,
+            vm_prefix=LAB_VM_PREFIX,
+            snapshot=BASELINE_SNAPSHOT,
+        )
+        if cache is not None:
+            return {
+                "identity": cache.identity,
+                "vm_name": vm_name,
+                "snapshot": BASELINE_SNAPSHOT,
+                "clean_tool_findings": str(cache.tool_findings_path),
+                "manifest": str(cache.manifest_path),
+                "status": "cache_reused" if cache.reused else "cache_created",
+                "warnings": list(cache.manifest.get("warnings") or []),
+            }
         return {
-            "identity": f"{vm_name}:{BASELINE_SNAPSHOT}",
+            "identity": identity,
             "vm_name": vm_name,
             "snapshot": BASELINE_SNAPSHOT,
             "clean_tool_findings": None,
@@ -399,6 +445,8 @@ class ForensicOrchestrator:
         scenario_id: str,
         distro_id: str,
         manifest_path: str,
+        *,
+        baseline_cache: BaselineCacheEntry | None = None,
     ) -> None:
         """
         Canonical detect -> match -> metrics over the acquired images. Best-effort:
@@ -424,7 +472,14 @@ class ForensicOrchestrator:
                 run_id, distro_id, manifest_path, analysis_dir
             )
             tf_path = write_tool_findings(analysis_dir / "tool_findings.jsonl", findings)
-            claims = run_detectors_file(tf_path)
+            if baseline_cache is not None:
+                claims = run_detectors_file(
+                    tf_path,
+                    baseline_findings_path=baseline_cache.tool_findings_path,
+                    baseline_identity=baseline_cache.identity,
+                )
+            else:
+                claims = run_detectors_file(tf_path)
             dc_path = write_detection_claims(
                 analysis_dir / "detection_claims.jsonl", claims
             )
@@ -444,12 +499,87 @@ class ForensicOrchestrator:
             console.info(line)
         console.section_end()
 
+    def _ensure_clean_baseline_cache(
+        self,
+        distro_id: str,
+        vm_name: str,
+        *,
+        guest: dict[str, Any] | None,
+    ) -> tuple[BaselineCacheEntry | None, bool]:
+        profile = load_profile(self.repo_root, distro_id)
+        identity = baseline_identity(
+            distro_id,
+            vm_prefix=LAB_VM_PREFIX,
+            snapshot=BASELINE_SNAPSHOT,
+        )
+        expected = expected_manifest(
+            distro_id=distro_id,
+            vm_name=vm_name,
+            snapshot=BASELINE_SNAPSHOT,
+            identity=identity,
+            profile=profile,
+            guest=guest,
+            tool_versions=self._pipeline_versions(),
+            volatility=self._volatility_context(
+                distro_id,
+                (guest or {}).get("kernel"),
+            ),
+        )
+        cached = load_compatible_cache(self._paths, expected)
+        if cached is not None:
+            console.info(f"clean baseline cache reused: {cached.tool_findings_path}")
+            return cached, False
+
+        console.step("building clean baseline tool_findings cache...")
+        cache_dir = cache_dir_for_identity(self._paths, identity)
+        baseline_run_id = _make_run_id(distro_id, "clean_baseline")
+        try:
+            manifest_path = self._run_acquisition(
+                vm_name,
+                baseline_run_id,
+                "clean_baseline",
+            )
+            analysis_dir = cache_dir / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            findings = self._collect_tool_findings(
+                baseline_run_id,
+                distro_id,
+                manifest_path,
+                analysis_dir,
+                kernel_release=(guest or {}).get("kernel"),
+                scope_to_case_window=False,
+            )
+            from orchestrator.adapters import write_tool_findings
+
+            tf_path = write_tool_findings(cache_dir / "tool_findings.jsonl", findings)
+            entry = write_cache_manifest(
+                self._paths,
+                expected,
+                tool_findings_path=tf_path,
+                acquisition_manifest_path=Path(manifest_path),
+            )
+        except Exception as exc:
+            console.warn(f"clean baseline cache unavailable: {exc}")
+            return None, True
+
+        if entry is None:
+            console.warn(
+                "clean baseline cache unavailable: extracted baseline has no "
+                "comparable filesystem paths"
+            )
+            return None, True
+        console.ok(f"clean baseline cache written: {entry.tool_findings_path}")
+        return entry, True
+
     def _collect_tool_findings(
         self,
         run_id: str,
         distro_id: str,
         manifest_path: str,
         analysis_dir: Path,
+        *,
+        kernel_release: str | None = None,
+        scope_to_case_window: bool = True,
     ) -> list:
         """Extract raw forensic outputs and adapt them to canonical ToolFinding
         records. Each channel is best-effort; a degraded tool contributes no
@@ -463,8 +593,10 @@ class ForensicOrchestrator:
         memory_path = Path(manifest["memory_image"]["path"])
         disk_path = Path(manifest["disk_image"]["path"])
         versions = self._pipeline_versions()
-        kernel_release = self._guest_kernel(run_id)
-        window = self._case_window_from_command_log(run_id)
+        kernel_release = (
+            kernel_release if kernel_release is not None else self._guest_kernel(run_id)
+        )
+        window = self._case_window_from_command_log(run_id) if scope_to_case_window else None
         findings: list = []
 
         try:
