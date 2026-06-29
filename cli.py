@@ -374,6 +374,12 @@ def _cmd_run_detectors(args: argparse.Namespace) -> int:
             "baseline filtering disabled",
             file=sys.stderr,
         )
+    if args.baseline_identity and not args.baseline_findings:
+        print(
+            "warning: --baseline-identity supplied without --baseline-findings; "
+            "baseline filtering disabled",
+            file=sys.stderr,
+        )
     claims = run_detectors_file(
         args.findings,
         rules_dir=args.rules_dir,

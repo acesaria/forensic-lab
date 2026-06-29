@@ -53,13 +53,14 @@ def run_detectors(
         claims.extend(detector(rule, items))
     prepared = prepare_detection_claims(claims)
     if baseline_findings is not None and baseline_identity:
-        return prepare_detection_claims(
-            apply_baseline_to_claims(
-                prepared,
-                items,
-                baseline_findings,
-                identity=baseline_identity,
-            )
+        # Baseline annotation preserves each claim's id, order and dedup key, so
+        # the claims stay prepared; re-running prepare_detection_claims here would
+        # only re-sort and re-hash an identical set.
+        return apply_baseline_to_claims(
+            prepared,
+            items,
+            baseline_findings,
+            identity=baseline_identity,
         )
     return prepared
 
