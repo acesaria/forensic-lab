@@ -408,7 +408,7 @@ class ForensicOrchestrator:
         """
         from orchestrator.adapters import write_tool_findings
         from detectors.engine import run_detectors_file, write_detection_claims
-        from matcher.engine import run_matcher_files
+        from matcher.engine import render_console_summary, run_matcher_files
 
         run_dir = self.dumper.run_dir(run_id)
         analysis_dir = self._paths.run_analysis_dir(run_id)
@@ -439,12 +439,9 @@ class ForensicOrchestrator:
             console.section_end()
             return
 
-        micro = result["metrics"]["micro"]
-        console.ok(
-            f"canonical metrics: recall={micro['recall']} precision={micro['precision']} "
-            f"tp={micro['tp']} fp={micro['fp']} fn={micro['fn']} "
-            f"({analysis_dir / 'metrics.json'})"
-        )
+        console.ok(f"canonical metrics written: {analysis_dir / 'metrics.json'}")
+        for line in render_console_summary(result["metrics"]):
+            console.info(line)
         console.section_end()
 
     def _collect_tool_findings(

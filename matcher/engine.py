@@ -39,6 +39,7 @@ from orchestrator.forensics.timeutil import parse_iso_utc
 
 _NONE = "__none__"
 _TEMPORAL_VALUES = tuple(q.value for q in TemporalQuality)
+_METRICS_SCHEMA_V2 = "forensic-lab.matcher.metrics.v2"
 
 
 @dataclass(frozen=True)
@@ -505,9 +506,9 @@ def compute_metrics(
     methodology_warnings = [
         "candidate_diagnostics are detector/candidate-stream diagnostics, "
         "not final thesis reconstruction metrics",
-        "final_reconstruction.precision is retained only as "
-        "strict_candidate_stream_precision for backward compatibility; "
-        "unmatched candidate claims remain in its denominator",
+        "final_reconstruction.precision is exposed as "
+        "strict_candidate_stream_precision; unmatched candidate claims remain "
+        "in its denominator",
         "pipeline_runtime_seconds is not emitted because the canonical full "
         "pipeline runtime is not explicitly measured in cached artifacts",
         "evidence_latency is not emitted because reliable GT action timestamps "
@@ -522,7 +523,7 @@ def compute_metrics(
         )
 
     metrics = {
-        "schema": "forensic-lab.matcher.metrics.v2",
+        "schema": _METRICS_SCHEMA_V2,
         "counts": {"tp": len(tp), "fp": len(fp), "fn": len(fn)},
         "micro": micro,
         "candidate_diagnostics": {
@@ -534,8 +535,8 @@ def compute_metrics(
         },
         "final_reconstruction": {
             "description": (
-                "backward-compatible diagnostic only; precision uses the "
-                "candidate stream denominator and is not the thesis headline metric"
+                "candidate-stream diagnostic only; precision uses the candidate "
+                "stream denominator and is not the thesis headline metric"
             ),
             "strong_instance_matches": instance_tp,
             "class_only_support": class_tp,
@@ -901,6 +902,7 @@ def render_report(
     tool_findings: list[ToolFinding] | None = None,
     detection_claims: list[DetectionClaim] | None = None,
 ) -> str:
+    _require_metrics_v2(metrics)
     micro = metrics["micro"]
     final = metrics.get("final_reconstruction", {})
     critical = metrics["critical_recall"]
@@ -1135,6 +1137,58 @@ def render_report(
             f"{match.finding_or_claim_id} | {match.score:.4f} | {', '.join(match.fields_matched)} |"
         )
     return "\n".join(lines) + "\n"
+
+
+def render_console_summary(metrics: dict[str, Any]) -> list[str]:
+    """Short schema-v2 summary for active canonical CLI/run output."""
+    _require_metrics_v2(metrics)
+    candidate = metrics.get("candidate_diagnostics")
+    reconstruction = metrics.get("reconstruction_summary")
+    baseline = metrics.get("baseline_comparison") or {}
+    warnings = metrics.get("methodology_warnings") or []
+    if not isinstance(candidate, dict) or not isinstance(reconstruction, dict):
+        raise ValueError(
+            "metrics schema v2 is missing candidate_diagnostics or "
+            "reconstruction_summary; regenerate with current matcher"
+        )
+
+    strong = int(reconstruction.get("strong_instance_matched_expected") or 0)
+    expected = int(reconstruction.get("expected_total") or 0)
+    class_support = int(reconstruction.get("class_only_supported_expected") or 0)
+    missed = int(reconstruction.get("missed_expected") or 0)
+    baseline_available = bool(baseline.get("available"))
+    baseline_label = "available" if baseline_available else "unavailable"
+    baseline_input = baseline.get("baseline_input")
+    baseline_suffix = f" input={baseline_input}" if baseline_input else ""
+
+    lines = [
+        "candidate diagnostics: "
+        f"precision={float(candidate.get('precision', 0.0)):.4f} "
+        f"recall={float(candidate.get('recall', 0.0)):.4f} "
+        f"f1={float(candidate.get('f1', 0.0)):.4f} "
+        f"tp={int(candidate.get('tp', 0))} "
+        f"fp={int(candidate.get('fp', 0))} "
+        f"fn={int(candidate.get('fn', 0))}",
+        "reconstruction: "
+        f"strong_instance_recall={float(reconstruction.get('strong_instance_recall', 0.0)):.4f} "
+        f"strong={strong}/{expected} "
+        f"class_support={class_support} "
+        f"missed={missed}",
+        f"baseline: {baseline_label}{baseline_suffix}",
+    ]
+    if warnings:
+        lines.append(f"warnings: {len(warnings)} methodology warning(s)")
+    return lines
+
+
+def _require_metrics_v2(metrics: dict[str, Any]) -> None:
+    schema = metrics.get("schema")
+    if schema != _METRICS_SCHEMA_V2:
+        label = schema if schema not in (None, "") else "missing"
+        raise ValueError(
+            f"unsupported metrics schema '{label}'; regenerate with current "
+            f"matcher (expected {_METRICS_SCHEMA_V2})"
+        )
 
 
 def _fmt_optional_float(value: Any) -> str:

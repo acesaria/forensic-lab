@@ -392,7 +392,7 @@ def _cmd_run_detectors(args: argparse.Namespace) -> int:
 
 
 def _cmd_match_canonical(args: argparse.Namespace) -> int:
-    from matcher.engine import run_matcher_files
+    from matcher.engine import render_console_summary, run_matcher_files
 
     if not args.detection_claims and not args.debug_raw_findings:
         print(
@@ -411,13 +411,8 @@ def _cmd_match_canonical(args: argparse.Namespace) -> int:
         time_window_s=args.time_window_s,
         allow_raw_finding_fallback=args.debug_raw_findings,
     )
-    metrics = result["metrics"]["micro"]
-    print(
-        "micro: "
-        f"precision={metrics['precision']:.4f} "
-        f"recall={metrics['recall']:.4f} "
-        f"f1={metrics['f1']:.4f}"
-    )
+    for line in render_console_summary(result["metrics"]):
+        print(line)
     print(f"wrote matches.jsonl + metrics.json + score_report.md to {args.out_dir}")
     return 0
 

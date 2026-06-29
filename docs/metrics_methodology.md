@@ -51,9 +51,8 @@ For the current Father validation:
 | candidate recall | 1.0000 |
 | strong instance matches | 7 |
 | class-only/support matches | 3 |
-| final precision | 0.0275 |
-| final recall | 0.7000 |
-| final F1 | 0.0528 |
+| strict candidate-stream precision | 0.0275 |
+| strong instance recall | 0.7000 |
 
 ## Candidate-Level Precision and Recall
 
@@ -79,17 +78,22 @@ For Father:
 The high recall means every expected artifact received at least some candidate
 match. It does not mean every artifact was concretely reconstructed.
 
-## Final Reconstruction Metrics
+## Strong Reconstruction and Candidate-Stream Precision
 
 Current location: `metrics.json` key `final_reconstruction`.
 
-Current formula:
+The current schema is `forensic-lab.matcher.metrics.v2`. Older draft/v1 metric
+shapes are not thesis methodology and should be regenerated with the current
+matcher instead of silently displayed as canonical metrics.
+
+Current `final_reconstruction` formula:
 
 - strong TP = instance-level matches
 - support = class-only matches
 - FP = unmatched candidates + class-only/support matches
 - FN = expected artifacts not covered by strong instance matches
-- precision = strong TP / (strong TP + FP)
+- precision = strong TP / (strong TP + FP), labeled in CLI/reporting as strict
+  candidate-stream precision, not a headline reconstruction precision metric
 - recall = strong TP / (strong TP + FN)
 
 For Father:
@@ -99,23 +103,17 @@ For Father:
 - unmatched candidates = 245
 - FP = 245 + 3 = 248
 - FN = 10 - 7 = 3
-- precision = 7 / (7 + 248) = 0.0275
+- strict candidate-stream precision = 7 / (7 + 248) = 0.0275
 - recall = 7 / (7 + 3) = 0.7000
 
 This is conservative and correctly prevents class-only support from inflating
 headline reconstruction quality.
 
-Methodological risk: the name `final precision` is still debatable because
-unmatched candidate claims remain in the denominator. If final reconstruction is
-defined as only the selected matched reconstruction set, then unmatched
-candidates are detector noise rather than final reconstruction claims. In that
-interpretation, this metric is closer to "strong-instance precision over the
-candidate stream" than pure final reconstruction precision.
-
-Recommendation for later cleanup: either rename the metric to make the
-denominator explicit or define a persisted final reconstruction set and compute
-precision over that set. Do not change the formula without a written thesis
-definition.
+Important caveat: this precision denominator still includes unmatched candidate
+claims. It is therefore a strict candidate-stream precision diagnostic, not a
+pure final reconstruction precision. The thesis headline should use strong
+instance reconstruction recall/coverage, class-only support coverage, source
+coverage, corroboration, and noise reduction.
 
 ## Evidence Coverage
 
@@ -252,8 +250,9 @@ Defensible now:
 
 Questionable now:
 
-- `final precision` is conservative but semantically overloaded because
-  unmatched candidate claims are in its denominator.
+- `final_reconstruction.precision` is conservative but semantically overloaded
+  because unmatched candidate claims are in its denominator; CLI/report output
+  should label it as strict candidate-stream precision.
 - Source coverage is not yet a clean thesis metric.
 - Evidence coverage exists only as partial recall fields.
 - Critical recall can still hide weak class-only support.
@@ -262,7 +261,9 @@ Questionable now:
 Recommended next metric cleanup:
 
 1. Define the final reconstruction set explicitly in prose.
-2. Rename or clarify `final_reconstruction.precision`.
+2. Keep `final_reconstruction.precision` clearly labeled as strict
+   candidate-stream precision unless a real final-claim selection layer is
+   added.
 3. Add explicit pinned metric keys only after definitions are stable.
 4. Add source/evidence coverage over strong instance matches first.
 5. Leave baseline-aware filtering for a separate implementation patch.

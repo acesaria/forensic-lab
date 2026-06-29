@@ -158,6 +158,11 @@ Interpretation:
 
 ## Report and Metric Structures
 
+The current thesis metric schema is `forensic-lab.matcher.metrics.v2`. Older
+draft/v1 metric shapes are unsupported for active canonical reporting; regenerate
+them with the current matcher instead of displaying top-level precision/recall
+as canonical thesis metrics.
+
 `metrics.json` currently contains:
 
 - `counts`: candidate-level TP/FP/FN.
@@ -182,8 +187,8 @@ Interpretation:
 - `multi_source_corroboration`: distinct linked source types per strong match.
 - `noise_reduction`: raw-to-candidate and raw-to-strong count reduction; not
   baseline-aware.
-- `strict_candidate_stream_precision`: relabeled candidate-stream precision;
-  retained for backward compatibility, not a headline metric.
+- `strict_candidate_stream_precision`: explicit candidate-stream precision
+  diagnostic; not a headline metric.
 - `methodology_warnings`: explicit notes on diagnostics and unavailable metrics
   (e.g. `pipeline_runtime_seconds`, `evidence_latency`).
 - `macro_f1_by_artifact_class`: candidate-level macro F1 over artifact classes.
