@@ -1,0 +1,357 @@
+{
+  "baseline_comparison": {
+    "available": true,
+    "baseline_input": "lab-ubuntu-22.04:baseline",
+    "baseline_path_count": 67262,
+    "candidate_downgrades": 66,
+    "candidate_status_counts": {
+      "new_vs_baseline": 126,
+      "present_in_baseline": 75,
+      "unknown_baseline_status": 4
+    },
+    "candidate_suppressions": 0,
+    "compromised_path_count": 340,
+    "filtering_applied": true,
+    "limitations": [
+      "Path-only baseline comparison is candidate support, not a maliciousness verdict.",
+      "Present-in-baseline timeline-only candidates are confidence-downgraded, not removed.",
+      "Baseline metadata does not affect matcher formulas or strong reconstruction by itself."
+    ],
+    "status_counts": {
+      "changed_vs_baseline": 0,
+      "new_vs_baseline": 16,
+      "present_in_baseline": 324,
+      "unknown_baseline_status": 0
+    }
+  },
+  "candidate_diagnostics": {
+    "description": "detector/candidate-layer diagnostics only; not final thesis reconstruction metrics",
+    "f1": 0.093,
+    "fn": 0,
+    "fp": 195,
+    "precision": 0.0488,
+    "recall": 1.0,
+    "tp": 10
+  },
+  "candidate_input": "detection_claims",
+  "counts": {
+    "fn": 0,
+    "fp": 195,
+    "tp": 10
+  },
+  "critical_recall": {
+    "critical_matched": 5,
+    "critical_total": 5,
+    "recall": 1.0
+  },
+  "debug_only": false,
+  "false_positives_per_run": {
+    "ubuntu-22.04_userland_father_ldpreload_20260629-231821": 195
+  },
+  "final_reconstruction": {
+    "class_only_support": 3,
+    "description": "candidate-stream diagnostic only; precision uses the candidate stream denominator and is not the thesis headline metric",
+    "f1": 0.0651,
+    "fn": 3,
+    "fp": 198,
+    "missed_expected_after_strong_matching": 3,
+    "precision": 0.0341,
+    "precision_label": "strict_candidate_stream_precision",
+    "precision_warning": "denominator includes unmatched candidate claims and class-only support; do not present as final reconstruction precision",
+    "recall": 0.7,
+    "strong_instance_matches": 7,
+    "tp": 7,
+    "unmatched_candidates": 195
+  },
+  "macro_f1_by_artifact_class": {
+    "classes": {
+      "deleted_file_candidate": {
+        "f1": 0.5,
+        "fn": 0,
+        "fp": 2,
+        "precision": 0.3333,
+        "recall": 1.0,
+        "tp": 1
+      },
+      "file": {
+        "f1": 0.0833,
+        "fn": 0,
+        "fp": 88,
+        "precision": 0.0435,
+        "recall": 1.0,
+        "tp": 4
+      },
+      "library_mapping": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 1
+      },
+      "preload_configuration": {
+        "f1": 0.0308,
+        "fn": 0,
+        "fp": 63,
+        "precision": 0.0156,
+        "recall": 1.0,
+        "tp": 1
+      },
+      "process": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 1
+      },
+      "process_socket_correlation": {
+        "f1": 0.0,
+        "fn": 0,
+        "fp": 3,
+        "precision": 0.0,
+        "recall": 0.0,
+        "tp": 0
+      },
+      "service_unit_file": {
+        "f1": 0.0,
+        "fn": 0,
+        "fp": 39,
+        "precision": 0.0,
+        "recall": 0.0,
+        "tp": 0
+      },
+      "shared_object": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 1
+      },
+      "shell_history_log_event": {
+        "f1": 1.0,
+        "fn": 0,
+        "fp": 0,
+        "precision": 1.0,
+        "recall": 1.0,
+        "tp": 1
+      }
+    },
+    "macro_f1": 0.5127
+  },
+  "match_levels": {
+    "class": 3,
+    "instance": 7
+  },
+  "methodology_warnings": [
+    "candidate_diagnostics are detector/candidate-stream diagnostics, not final thesis reconstruction metrics",
+    "final_reconstruction.precision is exposed as strict_candidate_stream_precision; unmatched candidate claims remain in its denominator",
+    "pipeline_runtime_seconds is not emitted because the canonical full pipeline runtime is not explicitly measured in cached artifacts",
+    "evidence_latency is not emitted because reliable GT action timestamps and artifact timestamps are not paired here",
+    "noise_reduction is raw-to-candidate and raw-to-strong-count reduction only; it is not baseline-aware"
+  ],
+  "micro": {
+    "f1": 0.093,
+    "fn": 0,
+    "fp": 195,
+    "precision": 0.0488,
+    "recall": 1.0,
+    "tp": 10
+  },
+  "multi_source_corroboration": {
+    "multi_source_corroboration_rate": 0.0,
+    "source_type_count_by_expected": {
+      "AE-father-hiding-marker": 1,
+      "AE-father-library-mapping": 1,
+      "AE-father-preload-config": 1,
+      "AE-father-shared-object": 1,
+      "AE-father-source-file": 1,
+      "AE-father-source-metadata": 1,
+      "AE-father-upstream-archive": 1
+    },
+    "strong_reconstructed_total": 7,
+    "strong_reconstructed_with_2plus_sources": 0
+  },
+  "noise_reduction": {
+    "candidate_claim_count": 205,
+    "note": "count reduction only; not baseline-aware",
+    "raw_findings_count": 7670,
+    "raw_to_candidate_reduction": 0.9733,
+    "raw_to_strong_reconstruction_reduction": 0.9991,
+    "strong_instance_match_count": 7
+  },
+  "per_artifact_class": {
+    "deleted_file_candidate": {
+      "f1": 0.5,
+      "fn": 0,
+      "fp": 2,
+      "precision": 0.3333,
+      "recall": 1.0,
+      "tp": 1
+    },
+    "file": {
+      "f1": 0.0833,
+      "fn": 0,
+      "fp": 88,
+      "precision": 0.0435,
+      "recall": 1.0,
+      "tp": 4
+    },
+    "library_mapping": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tp": 1
+    },
+    "preload_configuration": {
+      "f1": 0.0308,
+      "fn": 0,
+      "fp": 63,
+      "precision": 0.0156,
+      "recall": 1.0,
+      "tp": 1
+    },
+    "process": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tp": 1
+    },
+    "process_socket_correlation": {
+      "f1": 0.0,
+      "fn": 0,
+      "fp": 3,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "service_unit_file": {
+      "f1": 0.0,
+      "fn": 0,
+      "fp": 39,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "shared_object": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tp": 1
+    },
+    "shell_history_log_event": {
+      "f1": 1.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "tp": 1
+    }
+  },
+  "per_source": {
+    "disk": {
+      "f1": 0.381,
+      "fn": 0,
+      "fp": 26,
+      "precision": 0.2353,
+      "recall": 1.0,
+      "tp": 8
+    },
+    "log": {
+      "f1": 0.0,
+      "fn": 0,
+      "fp": 0,
+      "precision": 0.0,
+      "recall": 0.0,
+      "tp": 0
+    },
+    "memory": {
+      "f1": 0.5714,
+      "fn": 0,
+      "fp": 3,
+      "precision": 0.4,
+      "recall": 1.0,
+      "tp": 2
+    },
+    "timeline": {
+      "f1": 0.0879,
+      "fn": 0,
+      "fp": 166,
+      "precision": 0.046,
+      "recall": 1.0,
+      "tp": 8
+    }
+  },
+  "reconstruction": {
+    "class_level_covered": 10,
+    "class_level_recall": 1.0,
+    "critical_event_recall": 1.0,
+    "expectations_total": 10,
+    "instance_only_f1": 0.066,
+    "instance_only_precision": 0.0347,
+    "instance_only_recall": 0.7,
+    "instance_only_tp": 7
+  },
+  "reconstruction_summary": {
+    "class_only_supported_expected": 3,
+    "class_support_coverage": 0.3,
+    "critical_strong_instance_recall": 0.6,
+    "expected_total": 10,
+    "missed_expected": 0,
+    "observable_expected_total": 10,
+    "strong_instance_matched_expected": 7,
+    "strong_instance_recall": 0.7,
+    "strong_or_supported_coverage": 1.0
+  },
+  "schema": "forensic-lab.matcher.metrics.v2",
+  "source_breakdown": {
+    "disk": 31,
+    "log": 0,
+    "memory": 4589,
+    "timeline": 3050,
+    "unknown": 0
+  },
+  "source_coverage": {
+    "available_source_count": 3,
+    "available_sources": [
+      "disk",
+      "memory",
+      "timeline"
+    ],
+    "candidate_source_count": 3,
+    "candidate_sources": [
+      "disk",
+      "memory",
+      "timeline"
+    ],
+    "denominator": "available_sources from raw ToolFinding records",
+    "source_coverage_ratio": 0.6667,
+    "strong_reconstruction_source_count": 2,
+    "strong_reconstruction_sources": [
+      "disk",
+      "memory"
+    ]
+  },
+  "strict_candidate_stream_precision": 0.0341,
+  "temporal_quality": {
+    "matched_candidates": {
+      "bounded": 0,
+      "exact": 7,
+      "none": 3,
+      "relative_order": 0
+    },
+    "tool_findings": {
+      "bounded": 0,
+      "exact": 3072,
+      "none": 4598,
+      "relative_order": 0
+    }
+  }
+}
