@@ -198,3 +198,6 @@ are reduced to one tightly bounded scenario with clear expected artifacts.
 - Runtime claims are weak until phase timing is explicitly measured.
 - Adding evasion, hardening, worm, Timesketch, Sigma, or YARA work before Father
   is stable would likely dilute the thesis deliverable.
+
+
+P.S Keep ART only if justified.. example we have a dedicated pipeline that "can test which artifacts are created when a specific technique is run"
