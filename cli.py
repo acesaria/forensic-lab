@@ -52,9 +52,8 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     run = sub.add_parser(
         "run",
         help=(
-            "Run a VM experiment. Primary thesis scenario is "
-            "userland_father_ldpreload; scenario_01_* and art_calibration are "
-            "legacy/calibration."
+            "Run a VM experiment. The active thesis registry path is "
+            "userland_father_ldpreload."
         ),
     )
     run.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")

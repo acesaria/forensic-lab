@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from detectors.engine import run_detectors, write_detection_claims
@@ -15,6 +16,9 @@ from orchestrator.scenarios.run_context import RunContext
 
 
 SCENARIO = Path("attacks/scenarios/userland_father_ldpreload/scenario.yml")
+FATHER_ARCHIVE = Path("attacks/scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar")
+FATHER_LOCK = Path("attacks/scenarios/userland_father_ldpreload/father.lock.yml")
+FAKE_FATHER_SOURCE = Path("attacks/scenarios/userland_father_ldpreload/files/father_lab_preload.c")
 
 
 def test_userland_father_scenario_plan_and_expectations():
@@ -22,54 +26,49 @@ def test_userland_father_scenario_plan_and_expectations():
 
     assert plan.scenario_id == "userland_father_ldpreload"
     assert [step["id"] for step in plan.steps] == [
-        "prepare_sample",
-        "deploy_library",
-        "modify_preload_config",
-        "start_benign_process",
-        "observe_or_mark_hiding_feature",
-        "partial_cleanup",
+        "prepare_father_source",
+        "configure_father",
+        "build_father_rootkit",
+        "install_preload_rootkit",
+        "trigger_accept_hook_capability",
+        "observe_file_hiding_effect",
+        "record_postconditions",
     ]
+    header_packages = {
+        item["ubuntu_package"]
+        for item in plan.prerequisites["father_build"]["headers"]
+    }
+    assert {"libpam0g-dev", "libgcrypt20-dev"} <= header_packages
     expectations = plan.expected_observables
     classes = {row["artifact_class"] for row in expectations}
-    assert {"preload_configuration", "shared_object", "library_mapping", "deleted_file_candidate"} <= classes
+    assert {
+        "preload_configuration",
+        "shared_object",
+        "library_mapping",
+        "process_socket_correlation",
+    } <= classes
+    assert "deleted_file_candidate" not in classes
     critical = {row["ae_id"] for row in expectations if row.get("critical")}
     assert {
-        "AE-father-shared-object",
+        "AE-father-run-config",
+        "AE-father-built-rk-so",
+        "AE-father-installed-library",
         "AE-father-preload-config",
-        "AE-father-benign-process",
+        "AE-father-accept-listener-process",
         "AE-father-library-mapping",
-        "AE-father-cleanup-deleted-marker",
+        "AE-father-accept-hook-trigger",
     } <= critical
 
 
-def test_userland_father_hooks_emit_canonical_truth_and_expectations(tmp_path: Path):
-    import importlib.util
+def test_fake_father_source_is_not_present():
+    assert not FAKE_FATHER_SOURCE.exists()
+    assert FATHER_ARCHIVE.is_file()
+    assert FATHER_LOCK.is_file()
 
-    plan = load_scenario_plan(SCENARIO)
-    spec = importlib.util.spec_from_file_location("father_steps", plan.hooks_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
 
-    root = tmp_path / "remote"
-    params = {
-        key: str(root / Path(str(value)).name)
-        for key, value in plan.parameters.items()
-        if str(value).startswith("/tmp/")
-    }
-    params.update(plan.parameters)
-    params["remote_root"] = str(root)
-    params["upstream_archive_path"] = str(root / "source" / "father-upstream-4eb2712.tar")
-    params["source_path"] = str(root / "source" / "father_lab_preload.c")
-    params["metadata_path"] = str(root / "source" / "father_sample.lock.yml")
-    params["library_path"] = str(root / "lib" / "libfather_lab_preload.so")
-    params["preload_config_path"] = str(root / "etc" / "ld.so.preload.lab")
-    params["process_cwd"] = str(root / "run")
-    params["process_stdout_path"] = str(root / "run" / "benign_process.out")
-    params["process_pid_path"] = str(root / "run" / "benign_process.pid")
-    params["hiding_marker_path"] = str(root / "markers" / "hiding_feature_marker.txt")
-    params["cleanup_marker_path"] = str(root / "markers" / "transient_cleanup_marker.txt")
-    params["process_duration_seconds"] = 1
+def test_userland_father_non_network_steps_build_real_archive(tmp_path: Path):
+    module, plan = _load_steps()
+    params = _test_params(plan, tmp_path / "remote")
 
     ctx = RunContext(
         run_id="father-test",
@@ -77,6 +76,7 @@ def test_userland_father_hooks_emit_canonical_truth_and_expectations(tmp_path: P
         out_dir=tmp_path / "out",
         executor=LocalExecutor(),
         parameters=params,
+        prerequisites=plan.prerequisites,
         repo_root=Path.cwd(),
     )
     ctx.write_reference_context()
@@ -84,56 +84,52 @@ def test_userland_father_hooks_emit_canonical_truth_and_expectations(tmp_path: P
         ctx.record_artifact(str(row.get("step_id") or "scenario"), row)
 
     for step in plan.steps:
+        if step["id"] == "trigger_accept_hook_capability":
+            continue
         getattr(module, step["function"])(ctx, step)
 
     truth = load_jsonl(ctx.execution_truth_path, GroundTruthEvent)
     expectations = load_jsonl(ctx.artifact_expectations_path, ArtifactExpectation)
 
     assert {event.event_type for event in truth} >= {
-        "sample_prepared",
-        "library_deployed",
-        "preload_config_modified",
-        "benign_process_started",
-        "library_observed_in_process",
-        "hiding_feature_demonstrated_or_marked",
-        "partial_cleanup",
+        "father_source_referenced",
+        "father_run_copy_configured",
+        "father_rootkit_built",
+        "father_preload_installed",
+        "father_file_hiding_observed",
+        "postconditions_recorded",
     }
-    sample_event = next(event for event in truth if event.event_type == "sample_prepared")
-    assert sample_event.details["vendored_original_source"] is True
-    assert sample_event.details["executed_original_source"] is False
-    assert sample_event.details["upstream_archive_sha256"] == (
+    source_event = next(event for event in truth if event.event_type == "father_source_referenced")
+    assert source_event.details["run_local_configuration_only"] is True
+    assert source_event.details["capability"] == "father_source_provenance"
+    assert source_event.details["upstream_archive_sha256"] == (
         "90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125"
     )
+    build_event = next(event for event in truth if event.event_type == "father_rootkit_built")
+    assert build_event.details["build_command"] == "make father"
+    assert build_event.details["capability"] == "ld_preload_installation"
+    assert all("capability" in event.details for event in truth)
+    command_rows = [
+        json.loads(line)
+        for line in ctx.command_log_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert any(row.get("actor") == "attacker" for row in command_rows)
+    assert any(row.get("actor") == "lab" for row in command_rows)
+    assert any(row.get("record_type") == "attacker_command" for row in command_rows)
+    assert any(row.get("record_type") == "measurement" for row in command_rows)
+    assert any(row.get("record_type") == "prerequisite" for row in command_rows)
     assert any(exp.artifact_class == "preload_configuration" for exp in expectations)
     assert Path(params["upstream_archive_path"]).is_file()
-    assert Path(params["library_path"]).is_file()
-    assert Path(params["preload_config_path"]).read_text().strip() == params["library_path"]
-    assert not Path(params["cleanup_marker_path"]).exists()
+    assert Path(params["father_config_path"]).is_file()
+    assert Path(params["father_built_library_path"]).is_file()
+    assert Path(params["installed_library_path"]).is_file()
+    assert Path(params["preload_config_path"]).read_text().strip() == params["installed_library_path"]
+    assert Path(params["hidden_file_path"]).is_file()
 
 
 def test_userland_father_cached_pipeline_reaches_detectors_and_matcher(tmp_path: Path):
-    import importlib.util
-
     plan = load_scenario_plan(SCENARIO)
-    spec = importlib.util.spec_from_file_location("father_steps", plan.hooks_path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-
-    root = tmp_path / "remote"
-    params = dict(plan.parameters)
-    params["remote_root"] = str(root)
-    params["upstream_archive_path"] = str(root / "source" / "father-upstream-4eb2712.tar")
-    params["source_path"] = str(root / "source" / "father_lab_preload.c")
-    params["metadata_path"] = str(root / "source" / "father_sample.lock.yml")
-    params["library_path"] = str(root / "lib" / "libfather_lab_preload.so")
-    params["preload_config_path"] = str(root / "etc" / "ld.so.preload.lab")
-    params["process_cwd"] = str(root / "run")
-    params["process_stdout_path"] = str(root / "run" / "benign_process.out")
-    params["process_pid_path"] = str(root / "run" / "benign_process.pid")
-    params["hiding_marker_path"] = str(root / "markers" / "hiding_feature_marker.txt")
-    params["cleanup_marker_path"] = str(root / "markers" / "transient_cleanup_marker.txt")
-    params["process_duration_seconds"] = 1
+    params = _test_params(plan, tmp_path / "remote")
 
     ctx = RunContext(
         run_id="father-cached-pipeline",
@@ -141,30 +137,27 @@ def test_userland_father_cached_pipeline_reaches_detectors_and_matcher(tmp_path:
         out_dir=tmp_path / "out",
         executor=LocalExecutor(),
         parameters=params,
+        prerequisites=plan.prerequisites,
         repo_root=Path.cwd(),
     )
     ctx.write_reference_context()
     for row in plan.expected_observables:
         ctx.record_artifact(str(row.get("step_id") or "scenario"), row)
-    for step in plan.steps:
-        getattr(module, step["function"])(ctx, step)
 
-    truth = load_jsonl(ctx.execution_truth_path, GroundTruthEvent)
-    process_event = next(event for event in truth if event.event_type == "benign_process_started")
-    pid = process_event.details["pid"]
-
+    pid = "4321"
     findings_path = tmp_path / "tool_findings.jsonl"
     findings = [
         _finding("tf-preload", "disk", "preload_configuration", params["preload_config_path"]),
-        _finding("tf-shared-object", "disk", "shared_object", params["library_path"]),
-        _finding("tf-process", "memory", "process", "/bin/sleep", pid=pid),
-        _finding("tf-library-map", "memory", "library_mapping", params["library_path"], pid=pid),
+        _finding("tf-shared-object", "disk", "shared_object", params["installed_library_path"]),
+        _finding("tf-process", "memory", "process", "python3", pid=pid),
+        _finding("tf-library-map", "memory", "library_mapping", params["installed_library_path"], pid=pid),
         _finding(
-            "tf-deleted-marker",
-            "timeline",
-            "deleted_file_candidate",
-            params["cleanup_marker_path"],
-            deleted=True,
+            "tf-socket",
+            "memory",
+            "socket",
+            "198.51.100.2:54321",
+            pid=pid,
+            remote={"address": "198.51.100.2", "port": 54321},
         ),
     ]
     write_jsonl(findings_path, findings)
@@ -177,7 +170,8 @@ def test_userland_father_cached_pipeline_reaches_detectors_and_matcher(tmp_path:
     assert "flab.filesystem.ld_preload_configuration" in rule_ids
     assert "flab.filesystem.suspicious_shared_object" in rule_ids
     assert "flab.memory.process_library_correlation" in rule_ids
-    assert "flab.filesystem.deleted_artifact_cleanup" in rule_ids
+    assert "flab.memory.process_socket_correlation" in rule_ids
+    assert "flab.filesystem.deleted_artifact_cleanup" not in rule_ids
 
     result = run_matcher_files(
         expectations_path=ctx.artifact_expectations_path,
@@ -190,8 +184,47 @@ def test_userland_father_cached_pipeline_reaches_detectors_and_matcher(tmp_path:
     assert result["matches_path"].is_file()
     assert result["metrics_path"].is_file()
     assert result["report_path"].is_file()
-    assert result["metrics"]["counts"]["tp"] >= 4
+    assert result["metrics"]["counts"]["tp"] >= 3
     assert result["metrics"]["critical_recall"]["recall"] > 0
+
+
+def _load_steps():
+    import importlib.util
+
+    plan = load_scenario_plan(SCENARIO)
+    spec = importlib.util.spec_from_file_location("father_steps", plan.hooks_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module, plan
+
+
+def _test_params(plan, root: Path) -> dict:
+    params = dict(plan.parameters)
+    params["remote_root"] = str(root)
+    params["upstream_archive_path"] = str(root / "source" / "father-upstream-4eb2712.tar")
+    params["father_lock_path"] = str(root / "source" / "father.lock.yml")
+    params["father_extract_dir"] = str(root / "source")
+    params["father_source_tree"] = str(root / "source" / "Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332")
+    params["father_config_path"] = str(root / "source" / "Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332" / "src" / "config.h")
+    params["father_built_library_path"] = str(root / "source" / "Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332" / "rk.so")
+    params["listener_script_path"] = str(root / "source" / "father_accept_listener.py")
+    params["resolved_config_path"] = str(root / "config" / "father_resolved_parameters.txt")
+    params["installed_library_path"] = str(root / "lib" / "selinux.so.3")
+    params["father_install_location"] = params["installed_library_path"]
+    params["preload_config_path"] = str(root / "etc" / "ld.so.preload")
+    params["process_cwd"] = str(root / "run")
+    params["process_stdout_path"] = str(root / "run" / "accept_listener.out")
+    params["process_pid_path"] = str(root / "run" / "accept_listener.pid")
+    params["accept_hook_log_path"] = str(root / "run" / "father_accept_hook.log")
+    params["accept_summary_path"] = str(root / "run" / "accept_connection.summary")
+    params["hidden_directory"] = str(root / "observed_files")
+    params["hidden_file_path"] = str(root / "observed_files" / "lobster_session_note.txt")
+    params["visible_listing_path"] = str(root / "run" / "file_listing_without_preload.txt")
+    params["hidden_listing_path"] = str(root / "run" / "file_listing_with_preload.txt")
+    params["postconditions_path"] = str(root / "run" / "postconditions.txt")
+    params["process_duration_seconds"] = 1
+    return params
 
 
 def _finding(
@@ -202,14 +235,21 @@ def _finding(
     *,
     pid: str | None = None,
     deleted: bool = False,
+    remote: dict | None = None,
 ) -> ToolFinding:
-    entity = {"type": "process" if artifact_class == "process" else "path", "value": value}
+    entity_type = {
+        "process": "process",
+        "socket": "socket",
+    }.get(artifact_class, "path")
+    entity = {"type": entity_type, "value": value}
     if pid is not None:
         entity["pid"] = pid
     if deleted:
         entity["deleted"] = True
+    if remote:
+        entity["remote"] = remote
     if artifact_class == "process":
-        entity["argv"] = [value, "1"]
+        entity["argv"] = [value, "father_accept_listener.py"]
     return ToolFinding(
         finding_id=finding_id,
         run_id="father-cached-pipeline",

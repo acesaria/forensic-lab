@@ -1,85 +1,96 @@
 # userland_father_ldpreload
 
-`userland_father_ldpreload` is a lab-safe userland LD_PRELOAD rootkit case
-study inspired by Father: https://github.com/mav8557/Father.
+`userland_father_ldpreload` is the canonical Father-based DFIR scenario for the
+thesis pipeline. It models a bounded Linux userland rootkit case: Father
+LD_PRELOAD installation, Father accept-hook behavior, and contextual file-hiding
+behavior.
 
-The scenario vendors the original Father source as an inert pinned sample archive
-for provenance and DFIR sample-management artifacts. It is pinned to upstream
-commit `4eb2712caf612a7dc55fd4f34ff5c72b74c7c332` under the Unlicense, with
-archive SHA-256
-`90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125`.
+The upstream Father project is the scenario subject:
+https://github.com/mav8557/Father. The repository keeps a pinned upstream
+git-archive at commit `4eb2712caf612a7dc55fd4f34ff5c72b74c7c332` with SHA-256
+`90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125`. Source
+provenance is recorded in `father.lock.yml`.
 
-The scenario does not execute the original Father rootkit and does not
-demonstrate complete offensive capability. Runtime execution uses a small
-controlled harness in
-`files/father_lab_preload.c` that preserves LD_PRELOAD forensic artifacts while
-neutralizing unsafe behavior.
+Father source is treated as upstream scenario material. forensic-lab does not
+patch Father internals, rewrite Father hooks, or hardcode forensic-lab paths into
+Father C source. Scenario-specific logging, safety controls, ground truth, and
+expected artifacts live in `steps.py`, `scenario.yml`,
+`expected_observables.yml`, and this README.
 
-## Safety Model
+At runtime the scenario extracts the pristine archive into the run workspace,
+edits only that temporary copy's `src/config.h`, runs `make father`, and uses the
+resulting Father `rk.so`. The committed repository contains no scenario-local C
+replacement for Father.
+On Ubuntu, Father requires `libpam0g-dev` for `security/pam_appl.h` and `libgcrypt20-dev` for `gcrypt.h`; the scenario installs them if missing.
 
-Disabled or not implemented:
+## Selected Capabilities
 
-- remote backdoor;
-- reverse shell;
-- privilege escalation;
-- GnuPG or user-data tampering;
-- logic bomb;
-- destructive anti-detection;
-- propagation;
-- exfiltration.
+Canonical v1 demonstrates:
 
-The preload configuration is written to a lab-only path inside the guest:
-`/tmp/forensic-lab/father_ldpreload/etc/ld.so.preload.lab`. The scenario does
-**not** modify the guest's real `/etc/ld.so.preload`. The benign target process
-is hooked by passing `LD_PRELOAD` in its environment directly, so the
-preload-configuration file is an on-disk forensic marker that names the shared
-object rather than a system-wide active hook. This keeps the run reversible by
-snapshot revert and avoids destabilizing the guest while still leaving the
-ld.so.preload artifact a DFIR examiner would look for.
+- Father LD_PRELOAD / dynamic-linker loading from the real `rk.so`;
+- Father accept-hook/backdoor source-port behavior, bounded by sending a wrong
+  password so no shell is spawned;
+- contextual file-hiding observation using Father’s configured prefix behavior;
+- no cleanup/evasion by default.
 
-Socket / backdoor / reverse shell: **not applicable**. Father's remote backdoor
-and reverse shell are disabled, so the scenario declares no network-socket
-observable and reports no socket metrics. The benign process holds no listening
-socket.
+Excluded from this scenario:
+
+- local privilege escalation;
+- reverse shell or authenticated bind shell;
+- malicious LKM, ptrace, CopyFail, GnuPG tampering, time bomb, and full APT
+  behavior;
+- broad anti-detection, log wiping, timestomping, or destructive cleanup;
+- SIEM, EDR, or live telemetry logic.
 
 ## Forensic Intent
 
-The scenario produces artifacts for disk, memory, and timeline analysis:
+The scenario should answer:
 
-- pinned Father upstream source archive and lock metadata;
-- preload configuration;
-- compiled shared object;
-- benign process started with LD_PRELOAD;
-- process/library relation via `/proc/<pid>/maps` and memory tooling when
-  acquisition happens while the process is alive;
-- hiding-feature marker as a forensic concept, not functional stealth;
-- partial cleanup and a deleted marker candidate.
+> How would a basic attacker/script-kiddie use Father LD_PRELOAD behavior in a
+> controlled Linux VM, and what post-mortem traces would remain?
 
-## Thesis Snippet
+Attack-core artifacts are the upstream source archive/provenance, run-local
+Father configuration, built `rk.so`, installed Father library, preload
+configuration artifact, preloaded process, process/library memory mapping, and
+accept-hook/source-port evidence. File hiding is contextual: Father’s upstream
+source defines prefix-based hiding, and disk, timeline, and baseline-diff
+evidence should still reveal the prefix-matching file.
 
-“Lo scenario userland_father_ldpreload utilizza Father come caso di studio di
-rootkit userland basato su LD_PRELOAD. Poiché il progetto originale include
-funzionalità offensive quali hiding, privilege escalation, backdoor e
-anti-detection, l’esperimento è stato eseguito in modalità controllata e
-confinata, disabilitando o neutralizzando le componenti non necessarie alla
-valutazione forense. L’obiettivo non è misurare l’efficacia offensiva del
-rootkit, ma valutare la capacità della pipeline di acquisizione, normalizzazione,
-detection e matching di ricostruire artefatti rilevanti su disco, memoria e
-timeline.”
+## Safety Model
 
-## Limits
+The accept-hook trigger uses Father's real preloaded code but sends the wrong
+password, so the hook path can be observed without authenticating to a shell. The
+scenario writes under `/tmp/forensic-lab/father_ldpreload` by default. Father's
+real `/etc/ld.so.preload` concept is recorded as a reference parameter, but the
+canonical v1 activates the library with an explicit `LD_PRELOAD` environment for
+one bounded process. This avoids destabilizing the VM while preserving the
+forensic artifacts the pipeline should reconstruct.
 
-This scenario does not measure the full realism of a real compromise. It does
-not evaluate advanced stealth, network forensics, or adversary resilience. The
-hiding feature is represented by a documented marker and indirect artifacts
-rather than active userspace stealth.
+The Python listener is a lab stand-in for a daemon whose `accept()` path is
+executed under Father preload. In a more realistic compromise, the hooked
+process could be an existing daemon and the client interaction could be
+performed manually from an attacker shell. The lab listener keeps the scenario
+deterministic and bounded.
 
-## Running the scenario
+## Step Shape
 
-There are two execution modes.
+The manifest defines seven steps:
 
-Local (engine only, no VM, no acquisition) -- for fast iteration on the steps
-and the canonical truth/expectation files:
+1. `prepare_father_source`
+2. `configure_father`
+3. `build_father_rootkit`
+4. `install_preload_rootkit`
+5. `trigger_accept_hook_capability`
+6. `observe_file_hiding_effect`
+7. `record_postconditions`
+
+Each step writes execution truth and command log entries. Expectations are
+declared separately in `expected_observables.yml` and are used only by the
+GT-aware evaluation layer; detectors must not read those files.
+
+## Running
+
+Local engine validation:
 
 ```bash
 .venv/bin/python cli.py run-scenario \
@@ -87,70 +98,37 @@ and the canonical truth/expectation files:
   --out-dir /tmp/father_local --run-id father_local
 ```
 
-The local mode runs the steps on the host with a `LocalExecutor`, writes the
-artifacts under `/tmp/forensic-lab/father_ldpreload`, and leaves
-`reference_context.json` guest/acquisition fields null. It is for development
-only and is not thesis evidence.
-
-VM-backed (full case study) -- reverts the lab VM to baseline, runs the steps
-inside the guest over SSH, then acquires and evaluates:
+VM-backed scenario execution without acquisition:
 
 ```bash
-# execution only, no acquisition (fast check that the steps run in the guest)
 .venv/bin/python cli.py run --distro ubuntu-22.04 \
   --scenario userland_father_ldpreload --no-acquire
+```
 
-# full run: scenario + RAM/disk acquisition + canonical evaluation
+Full thesis run:
+
+```bash
 .venv/bin/python cli.py run --distro ubuntu-22.04 \
   --scenario userland_father_ldpreload
 ```
 
-In VM-backed mode the guest paths under `/tmp/forensic-lab/father_ldpreload`
-live inside the disposable VM, and `reference_context.json` records the real
-guest distro, kernel, user and timezone.
-
 ## Outputs
 
-A run writes to `shared/experiments/<run_id>/`:
+A scenario run writes:
 
-- `dumps/` -- canonical truth (`execution_truth.jsonl`,
-  `artifact_expectations.jsonl`, `reference_context.json`, `command_log.jsonl`)
-  plus the acquired `memory/`, `disk/` images and `manifest.json`.
-- `analysis/` -- raw forensic outputs (`vol3.json`, `bodyfile`,
-  `timeline.jsonl`), the canonical `tool_findings.jsonl`,
-  `detection_claims.jsonl`, and the matcher's `matches.jsonl`, `metrics.json`,
-  `score_report.md`.
+- `execution_truth.jsonl`
+- `artifact_expectations.jsonl`
+- `reference_context.json`
+- `command_log.jsonl`
 
-The pipeline is: scenario truth/expectations -> acquire RAM+disk -> extract
-(Volatility3 / Sleuth Kit / Plaso) -> adapt to `ToolFinding` -> GT-blind
-detectors emit `DetectionClaim`s -> GT-aware matcher scores claims against the
-expectations. Detectors never read ground truth; findings are never derived
-from it.
+VM-backed full runs then acquire RAM and disk and run the existing post-mortem
+pipeline: extract tool output, normalize `ToolFinding` records, emit GT-blind
+candidate `DetectionClaim` records, match against expected artifacts, and compute
+metrics/report outputs.
 
-## Metrics: quantitative vs qualitative
+## Deferred Variants
 
-Quantitative (in `score_report.md` / `metrics.json`):
-
-- class-level coverage (did the artifact class appear at all);
-- instance-level reconstruction (did the exact planted entity match);
-- critical-event recall;
-- per-source and per-artifact-class precision/recall/F1;
-- source breakdown of tool findings (disk / memory / timeline).
-
-Qualitative (documented, not scored as detection effectiveness):
-
-- the hiding feature, represented by a marker file rather than active stealth;
-- the disabled offensive components listed under Safety Model.
-
-## Known limitations
-
-- The benign `sleep` process is intentionally not malicious, so the GT-blind
-  detectors do not raise a process claim for it on its own; the process is
-  recovered as a memory mapping via the process/library correlation rule, so the
-  bare `process` expectation can show as a class-level or instance miss. This is
-  an honest measurement of the detectors, not a pipeline failure.
-- Commands run over a one-shot SSH exec channel, not an interactive login shell,
-  so the shell-history observable is opportunistic and may be absent.
-- The preload configuration is a lab-only marker, not an active system-wide
-  `/etc/ld.so.preload` hook (see Safety Model).
-- No network, stealth, or adversary-resilience realism is claimed.
+Cleanup/evasion is documented in `scenario.yml` but disabled by default. A later
+variant may remove or alter the preload configuration, remove staging/build
+files, and leave memory/timeline/baseline residue. It should not add broad log
+wiping, timestomping, anti-forensics, or stealth expansion.

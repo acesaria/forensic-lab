@@ -16,6 +16,7 @@ class ScenarioPlan:
     steps: list[dict[str, Any]]
     description: str = ""
     parameters: dict[str, Any] = field(default_factory=dict)
+    prerequisites: dict[str, Any] = field(default_factory=dict)
     attck: list[str] = field(default_factory=list)
     expected_observables: list[dict[str, Any]] = field(default_factory=list)
     hooks_path: Path | None = None
@@ -56,6 +57,7 @@ def load_scenario_plan(path: str | Path) -> ScenarioPlan:
         path=p,
         description=str(data.get("description") or ""),
         parameters=dict(data.get("parameters") or {}),
+        prerequisites=dict(data.get("prerequisites") or {}),
         attck=[str(x) for x in data.get("attck") or []],
         steps=steps,
         expected_observables=expected,

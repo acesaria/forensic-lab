@@ -306,9 +306,12 @@ class ForensicOrchestrator:
                     out_dir=run_dir,
                     run_id=run_id,
                     repo_root=self.repo_root,
+                    internet_on=functools.partial(self.vm_manager.internet_on, vm_name),
+                    internet_off=functools.partial(self.vm_manager.internet_off, vm_name),
                 )
                 guest = self._guest_facts(ssh)
         finally:
+            self.vm_manager.internet_off(vm_name, quiet=True)
             console.section_end()
 
         # The engine wrote a null-filled reference_context before the steps ran;

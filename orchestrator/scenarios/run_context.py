@@ -6,7 +6,7 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from orchestrator.canonical import (
     ArtifactExpectation,
@@ -27,7 +27,10 @@ class RunContext:
         out_dir: str | Path,
         executor: ScenarioExecutor,
         parameters: dict[str, Any] | None = None,
+        prerequisites: dict[str, Any] | None = None,
         repo_root: str | Path | None = None,
+        internet_on: Callable[[], None] | None = None,
+        internet_off: Callable[[], None] | None = None,
     ) -> None:
         self.run_id = run_id
         self.scenario_id = scenario_id
@@ -35,7 +38,10 @@ class RunContext:
         self.work_dir = self.out_dir / "work"
         self.executor = executor
         self.parameters = parameters or {}
+        self.prerequisites = prerequisites or {}
         self.repo_root = Path(repo_root) if repo_root is not None else None
+        self.internet_on = internet_on
+        self.internet_off = internet_off
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.command_log_path = self.out_dir / "command_log.jsonl"

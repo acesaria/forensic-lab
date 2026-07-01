@@ -24,6 +24,8 @@ def run_scenario(
     run_id: str | None = None,
     executor: ScenarioExecutor | None = None,
     repo_root: str | Path | None = None,
+    internet_on: Callable[[], None] | None = None,
+    internet_off: Callable[[], None] | None = None,
 ) -> RunContext:
     plan = load_scenario_plan(scenario_yml)
     run_id = run_id or _run_id(plan)
@@ -34,7 +36,10 @@ def run_scenario(
         out_dir=out,
         executor=executor or LocalExecutor(),
         parameters=plan.parameters,
+        prerequisites=plan.prerequisites,
         repo_root=repo_root,
+        internet_on=internet_on,
+        internet_off=internet_off,
     )
     hooks = _load_hooks(plan)
     ctx.write_reference_context()

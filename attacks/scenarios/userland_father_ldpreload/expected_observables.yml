@@ -1,132 +1,282 @@
 artifact_expectations:
   - ae_id: AE-father-upstream-archive
-    step_id: prepare_sample
+    step_id: prepare_father_source
+    capability: provenance
+    evidence_role: provenance
+    indicator_strength: strong
+    required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline]
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
     persistence: persistent
     observability: direct
     instance_constraints:
       path: "{upstream_archive_path}"
       sha256: 90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125
+      upstream_url: https://github.com/mav8557/Father
+      pinned_commit: 4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
     critical: false
     attck: [T1014]
-    notes: Pinned upstream Father source archive used as inert DFIR sample material.
+    why_it_matters: Establishes the pristine upstream Father source used by the scenario.
+    notes: "provenance/strong/not-scored: pinned upstream Father git archive."
 
-  - ae_id: AE-father-source-metadata
-    step_id: prepare_sample
+  - ae_id: AE-father-source-lock
+    step_id: prepare_father_source
+    capability: provenance
+    evidence_role: provenance
+    indicator_strength: strong
+    required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline]
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
     persistence: persistent
     observability: direct
     instance_constraints:
-      path: "{metadata_path}"
+      path: "{father_lock_path}"
+      repository_patches_father_source: false
+      run_local_configuration_only: true
     critical: false
     attck: [T1014]
-    notes: Father external-sample metadata copied into the VM workspace.
+    why_it_matters: Records the source-integrity rule and archive provenance.
+    notes: "provenance/strong/not-scored: Father lock file copied into the run workspace."
 
-  - ae_id: AE-father-source-file
-    step_id: prepare_sample
+  - ae_id: AE-father-run-source-tree
+    step_id: configure_father
+    capability: provenance
+    evidence_role: provenance
+    indicator_strength: contextual
+    required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline]
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
     persistence: persistent
     observability: direct
     instance_constraints:
-      path: "{source_path}"
+      path: "{father_source_tree}"
+      extracted_from: "{upstream_archive_path}"
+      repository_patches_father_source: false
     critical: false
     attck: [T1014]
-    notes: Lab-safe source harness, not original Father operational code.
+    why_it_matters: Shows Father was extracted as a run-local working copy rather than replaced by local C files.
+    notes: "provenance/contextual/not-scored: run-local extracted Father source tree."
 
-  - ae_id: AE-father-shared-object
-    step_id: deploy_library
+  - ae_id: AE-father-run-config
+    step_id: configure_father
+    capability: configuration
+    evidence_role: attack-core
+    indicator_strength: strong
+    required_for_scoring: true
+    artifact_class: file
+    observable_kind: filesystem_path
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{father_config_path}"
+      resolved_config_path: "{resolved_config_path}"
+      source_port: "{accept_source_port}"
+      file_prefix: "{file_prefix}"
+      environment_variable: "{env_var}"
+      password: "{password}"
+      gid: "{gid}"
+      install_location: "{installed_library_path}"
+    critical: true
+    attck: [T1574.006, T1014, T1071]
+    why_it_matters: Captures Father’s build-time configuration values in the temporary source copy.
+    notes: "attack-core/strong/scored: run-local Father src/config.h and resolved parameter record."
+
+  - ae_id: AE-father-built-rk-so
+    step_id: build_father_rootkit
+    capability: ld_preload_installation
+    evidence_role: attack-core
+    indicator_strength: strong
+    required_for_scoring: true
     artifact_class: shared_object
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline]
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
     persistence: persistent
     observability: direct
     instance_constraints:
-      path: "{library_path}"
+      path: "{father_built_library_path}"
+      build_command: make father
+      source_tree: "{father_source_tree}"
     critical: true
     attck: [T1574.006, T1014]
-    notes: Compiled lab-safe LD_PRELOAD shared object.
+    why_it_matters: The upstream Father build output is the rootkit shared object.
+    notes: "attack-core/strong/scored: Father rk.so built from the run-local source tree."
+
+  - ae_id: AE-father-installed-library
+    step_id: build_father_rootkit
+    capability: ld_preload_installation
+    evidence_role: attack-core
+    indicator_strength: strong
+    required_for_scoring: true
+    artifact_class: shared_object
+    observable_kind: filesystem_path
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{installed_library_path}"
+      copied_from: "{father_built_library_path}"
+    critical: true
+    attck: [T1574.006, T1014]
+    why_it_matters: The installed Father library path is the payload that later appears in preload and memory evidence.
+    notes: "attack-core/strong/scored: installed Father shared object."
 
   - ae_id: AE-father-preload-config
-    step_id: modify_preload_config
+    step_id: install_preload_rootkit
+    capability: ld_preload_installation
+    evidence_role: attack-core
+    indicator_strength: strong
+    required_for_scoring: true
     artifact_class: preload_configuration
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline]
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
     persistence: persistent
     observability: direct
     instance_constraints:
       path: "{preload_config_path}"
+      contains: "{installed_library_path}"
+      father_preload_file_reference: "{father_preload_file}"
     critical: true
     attck: [T1574.006]
-    notes: Lab-only preload configuration artifact containing the shared object path.
+    why_it_matters: Records the LD_PRELOAD configuration artifact and the Father library path.
+    notes: "attack-core/strong/scored: preload artifact containing the installed Father shared object."
 
-  - ae_id: AE-father-benign-process
-    step_id: start_benign_process
+  - ae_id: AE-father-accept-listener-process
+    step_id: trigger_accept_hook_capability
+    capability: accept_hook_backdoor_trigger
+    evidence_role: attack-core
+    indicator_strength: strong
+    required_for_scoring: true
     artifact_class: process
     observable_kind: process
-    source_eligibility: [memory]
+    extended_evidence_sources: [memory, command_log, execution_truth]
+    source_eligibility: [memory, log]
     persistence: volatile
     observability: expected_if_acquired_live
     instance_constraints:
-      process: sleep
-      argv_contains: "{process_duration_seconds}"
+      process: python3
+      argv_contains: "{listener_script_path}"
+      pid_file: "{process_pid_path}"
+      listen_port: "{accept_listen_port}"
     critical: true
-    attck: [T1059.004]
-    notes: Benign target process started with LD_PRELOAD in its environment.
+    attck: [T1059.004, T1071]
+    why_it_matters: The long-lived preloaded process is where memory acquisition should recover process and socket state.
+    notes: "attack-core/strong/scored: wrapper process launched with Father loaded by LD_PRELOAD."
 
   - ae_id: AE-father-library-mapping
-    step_id: start_benign_process
+    step_id: trigger_accept_hook_capability
+    capability: ld_preload_installation
+    evidence_role: attack-core
+    indicator_strength: strong
+    required_for_scoring: true
     artifact_class: library_mapping
     observable_kind: memory_mapping
-    source_eligibility: [memory]
+    extended_evidence_sources: [memory, command_log, execution_truth]
+    source_eligibility: [memory, log]
     persistence: volatile
     observability: expected_if_acquired_live
     instance_constraints:
-      path: "{library_path}"
+      path: "{installed_library_path}"
+      process_pid_path: "{process_pid_path}"
     critical: true
     attck: [T1574.006, T1014]
-    notes: Process memory mapping of the lab-safe shared object.
+    why_it_matters: A process mapping proves Father’s shared object was loaded, not merely staged.
+    notes: "attack-core/strong/scored: process memory mapping of the installed Father library."
 
-  - ae_id: AE-father-hiding-marker
-    step_id: observe_or_mark_hiding_feature
+  - ae_id: AE-father-accept-hook-trigger
+    step_id: trigger_accept_hook_capability
+    capability: accept_hook_backdoor_trigger
+    evidence_role: attack-core
+    indicator_strength: strong
+    required_for_scoring: true
+    artifact_class: process_socket_correlation
+    observable_kind: process_socket
+    extended_evidence_sources: [memory, command_log, execution_truth]
+    source_eligibility: [memory, log]
+    persistence: volatile
+    observability: expected_if_acquired_live
+    instance_constraints:
+      pid_path: "{process_pid_path}"
+      listen_host: "{accept_listen_host}"
+      listen_port: "{accept_listen_port}"
+      source_port: "{accept_source_port}"
+      hook_log_path: "{accept_hook_log_path}"
+      shell_spawned: false
+    critical: true
+    attck: [T1574.006, T1014, T1071]
+    why_it_matters: Shows Father’s accept-hook source-port path was exercised without authenticating to a shell.
+    notes: "attack-core/strong/scored: process, socket, source-port trigger, and safety log."
+
+  - ae_id: AE-father-hidden-file-context
+    step_id: observe_file_hiding_effect
+    capability: file_hiding_observation
+    evidence_role: contextual
+    indicator_strength: contextual
+    required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline]
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
     persistence: persistent
     observability: direct
     instance_constraints:
-      path: "{hiding_marker_path}"
+      path: "{hidden_file_path}"
+      file_prefix: "{file_prefix}"
+      live_userland_hiding_observed: true
     critical: false
     attck: [T1014]
-    notes: Hiding concept marker; no stealth functionality is implemented.
+    why_it_matters: Demonstrates Father’s prefix-based live hiding while the artifact remains available to post-mortem sources.
+    notes: "contextual/contextual/not-scored: hidden-prefix file remains present on disk."
 
-  - ae_id: AE-father-cleanup-deleted-marker
-    step_id: partial_cleanup
-    artifact_class: deleted_file_candidate
+  - ae_id: AE-father-file-hiding-observation-logs
+    step_id: observe_file_hiding_effect
+    capability: file_hiding_observation
+    evidence_role: contextual
+    indicator_strength: contextual
+    required_for_scoring: false
+    artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline]
-    persistence: deleted
-    observability: recoverable_or_timeline
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
+    persistence: persistent
+    observability: direct
     instance_constraints:
-      path: "{cleanup_marker_path}"
-    critical: true
-    attck: [T1070.004]
-    notes: Controlled deleted marker left for deleted-file/timeline analysis.
-
-  - ae_id: AE-father-shell-log
-    step_id: start_benign_process
-    artifact_class: shell_history_log_event
-    observable_kind: log_line
-    source_eligibility: [timeline, disk]
-    persistence: unknown
-    observability: opportunistic
-    instance_constraints:
-      command: LD_PRELOAD
+      paths:
+        - "{visible_listing_path}"
+        - "{hidden_listing_path}"
+      expected_difference: "{file_prefix} entry appears without Father preload and is omitted with Father preload"
     critical: false
-    attck: [T1059.004, T1574.006]
-    notes: Shell/log trace of controlled LD_PRELOAD execution when captured.
+    attck: [T1014]
+    why_it_matters: Stores live observation output without treating file hiding as a primary post-mortem artifact.
+    notes: "contextual/contextual/not-scored: live listing comparison."
+
+  - ae_id: AE-father-postconditions-summary
+    step_id: record_postconditions
+    capability: provenance
+    evidence_role: provenance
+    indicator_strength: contextual
+    required_for_scoring: false
+    artifact_class: file
+    observable_kind: filesystem_path
+    extended_evidence_sources: [disk, timeline, baseline_diff, command_log, execution_truth]
+    source_eligibility: [disk, timeline, log]
+    persistence: persistent
+    observability: direct
+    instance_constraints:
+      path: "{postconditions_path}"
+      father_source_repository_patched: false
+      cleanup_evasion_default: disabled
+    critical: false
+    attck: [T1574.006, T1014, T1071]
+    why_it_matters: Records hashes, resolved paths, and source-integrity state for reproducibility.
+    notes: "provenance/contextual/not-scored: run summary and hashes."

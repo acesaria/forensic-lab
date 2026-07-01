@@ -17,10 +17,12 @@ platform.
 
 ## Active Scope
 
-The current primary scenario is `scenario_01_ldpreload` / Father_LDPRELOAD.
-`scenarios.yaml` currently also registers `scenario_01_ldpreload_cleanup`,
-`art_calibration`, and the declarative `userland_father_ldpreload` scenario.
-Verify the registry before changing scenario behavior.
+The current primary and registered thesis scenario is the declarative
+`userland_father_ldpreload` Father-style LD_PRELOAD / accept-hook scenario.
+Legacy `scenario_01_ldpreload`, `scenario_01_ldpreload_cleanup`, and
+`art_calibration` code remains in the tree for regression/history, but it is not
+the normal thesis registry path. Verify `scenarios.yaml` before changing
+scenario behavior.
 
 LKM, eBPF, CopyFail, ptrace/process injection, broader Sigma expansion, and
 other advanced scenarios are future or secondary work until they are registered,

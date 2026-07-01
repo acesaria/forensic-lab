@@ -1,0 +1,21 @@
+schema: forensic-lab.father_source_lock.v1
+upstream:
+  name: Father
+  url: https://github.com/mav8557/Father
+  branch: master
+  pinned_commit: 4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
+  license: Unlicense
+retrieval:
+  method: vendored_git_archive
+  archive_path: files/father-upstream-4eb2712.tar
+  archive_format: git-archive-tar
+  archive_sha256: 90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125
+source_integrity:
+  repository_contains_pristine_upstream_archive: true
+  repository_patches_father_source: false
+  run_local_configuration_only: true
+  note: >
+    The canonical scenario extracts the pristine archive into the run workspace,
+    edits that temporary copy's src/config.h with scenario parameters, builds
+    Father there, and records the configuration/build actions in canonical logs
+    and ground truth. No Father C/header/build file is patched in the repository.
