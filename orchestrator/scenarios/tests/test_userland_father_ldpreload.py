@@ -50,14 +50,15 @@ def test_userland_father_scenario_plan_and_expectations():
     assert "deleted_file_candidate" not in classes
     critical = {row["ae_id"] for row in expectations if row.get("critical")}
     assert {
-        "AE-father-run-config",
         "AE-father-built-rk-so",
         "AE-father-installed-library",
-        "AE-father-preload-config",
-        "AE-father-accept-listener-process",
-        "AE-father-library-mapping",
-        "AE-father-accept-hook-trigger",
+        "AE-father-ldpreload-activation",
+        "AE-father-hooked-listener-process",
+        "AE-father-mapped-shared-object",
+        "AE-father-accept-hook-session",
+        "AE-father-shell-session-process",
     } <= critical
+    assert "AE-father-run-config" not in critical
 
 
 def test_fake_father_source_is_not_present():
@@ -123,7 +124,7 @@ def test_userland_father_non_network_steps_build_real_archive(tmp_path: Path):
     assert Path(params["father_config_path"]).is_file()
     assert Path(params["father_built_library_path"]).is_file()
     assert Path(params["installed_library_path"]).is_file()
-    assert Path(params["preload_config_path"]).read_text().strip() == params["installed_library_path"]
+    assert Path(params["preload_artifact_path"]).read_text().strip() == params["installed_library_path"]
     assert Path(params["hidden_file_path"]).is_file()
 
 
@@ -147,7 +148,7 @@ def test_userland_father_cached_pipeline_reaches_detectors_and_matcher(tmp_path:
     pid = "4321"
     findings_path = tmp_path / "tool_findings.jsonl"
     findings = [
-        _finding("tf-preload", "disk", "preload_configuration", params["preload_config_path"]),
+        _finding("tf-preload", "disk", "preload_configuration", params["preload_artifact_path"]),
         _finding("tf-shared-object", "disk", "shared_object", params["installed_library_path"]),
         _finding("tf-process", "memory", "process", "python3", pid=pid),
         _finding("tf-library-map", "memory", "library_mapping", params["installed_library_path"], pid=pid),
@@ -200,31 +201,22 @@ def _load_steps():
 
 
 def _test_params(plan, root: Path) -> dict:
+    import importlib.util
+
     params = dict(plan.parameters)
-    params["remote_root"] = str(root)
-    params["upstream_archive_path"] = str(root / "source" / "father-upstream-4eb2712.tar")
-    params["father_lock_path"] = str(root / "source" / "father.lock.yml")
-    params["father_extract_dir"] = str(root / "source")
-    params["father_source_tree"] = str(root / "source" / "Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332")
-    params["father_config_path"] = str(root / "source" / "Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332" / "src" / "config.h")
-    params["father_built_library_path"] = str(root / "source" / "Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332" / "rk.so")
-    params["listener_script_path"] = str(root / "source" / "father_accept_listener.py")
-    params["resolved_config_path"] = str(root / "config" / "father_resolved_parameters.txt")
-    params["installed_library_path"] = str(root / "lib" / "selinux.so.3")
-    params["father_install_location"] = params["installed_library_path"]
-    params["preload_config_path"] = str(root / "etc" / "ld.so.preload")
-    params["process_cwd"] = str(root / "run")
-    params["process_stdout_path"] = str(root / "run" / "accept_listener.out")
-    params["process_pid_path"] = str(root / "run" / "accept_listener.pid")
-    params["accept_hook_log_path"] = str(root / "run" / "father_accept_hook.log")
-    params["accept_summary_path"] = str(root / "run" / "accept_connection.summary")
-    params["hidden_directory"] = str(root / "observed_files")
-    params["hidden_file_path"] = str(root / "observed_files" / "lobster_session_note.txt")
-    params["visible_listing_path"] = str(root / "run" / "file_listing_without_preload.txt")
-    params["hidden_listing_path"] = str(root / "run" / "file_listing_with_preload.txt")
-    params["postconditions_path"] = str(root / "run" / "postconditions.txt")
+    params["root"] = str(root)
+    params["source_dir"] = str(root / "source")
+    params["config_dir"] = str(root / "config")
+    params["lib_dir"] = str(root / "lib")
+    params["run_dir"] = str(root / "run")
+    params["observed_dir"] = str(root / "observed_files")
     params["process_duration_seconds"] = 1
-    return params
+
+    spec = importlib.util.spec_from_file_location("father_steps_for_params", plan.hooks_path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module.resolve_parameters(params)
 
 
 def _finding(

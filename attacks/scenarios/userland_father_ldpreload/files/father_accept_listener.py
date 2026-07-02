@@ -59,6 +59,7 @@ def main() -> int:
     )
     Path(args.summary_path).write_text(summary, encoding="utf-8")
     source_port_matched = peer[1] == args.expected_source_port or accept_error.startswith("OSError:103:")
+    accept_hook_aborted = accept_error.startswith("OSError:103:")
     Path(args.hook_log_path).write_text(
         "forensic_lab_accept_wrapper_observed\n"
         f"peer={peer[0]}:{peer[1]}\n"
@@ -66,9 +67,9 @@ def main() -> int:
         f"source_port_matched={source_port_matched}\n"
         f"password_matched={data.decode('utf-8', errors='replace').strip() == args.password}\n"
         f"accept_error={accept_error}\n"
-        f"father_accept_hook_returned_abort={bool(accept_error)}\n"
+        f"father_accept_hook_returned_abort={accept_hook_aborted}\n"
         "father_source_repository_patched=false\n"
-        "shell_spawned=false\n",
+        f"bounded_localhost_shell_session_expected={accept_hook_aborted}\n",
         encoding="utf-8",
     )
 

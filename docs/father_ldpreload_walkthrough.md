@@ -1,5 +1,11 @@
 # Father LD_PRELOAD Walkthrough
 
+Status: this is a historical walkthrough for a cached run. The current
+`userland_father_ldpreload` scenario uses the real Father source, a
+scenario-local LD_PRELOAD activation artifact, and a bounded localhost-only
+accept-hook shell/session. Treat the examples below as cached-output context,
+not the current scenario declaration.
+
 This walkthrough uses the cached Father run:
 
 `shared/experiments/ubuntu-22.04_userland_father_ldpreload_20260618-183143`

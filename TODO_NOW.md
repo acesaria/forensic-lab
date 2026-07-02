@@ -58,3 +58,30 @@ matcher semantics, metrics, or adding a second scenario.
 - Treat file hiding as contextual live-userland evidence, not a primary
   post-mortem artifact.
 - Treat candidate precision as diagnostic only, not the thesis headline.
+
+
+## !!! Extra (manually added, need to refactor and replaced in this file)
+- there are still some minor problems on scenario userland_father_ldpreload:
+  - (current output):
+```
+=== experiment: userland_father_ldpreload on ubuntu-22.04 ===
+[*] reverting 'lab-ubuntu-22.04' to baseline snapshot...
+[*] shutting down 'lab-ubuntu-22.04' before snapshot revert...
+[+] VM 'lab-ubuntu-22.04' shut down gracefully
+[+] VM 'lab-ubuntu-22.04' reverted to 'baseline'
+[*] waiting for SSH on lab-ubuntu-22.04 (192.168.100.36)...
+[+] SSH ready on lab-ubuntu-22.04 (192.168.100.36)
+[i] clean baseline cache reused: /home/anto/forensic-lab/shared/baselines/lab-ubuntu-22.04-baseline-c94f1200087a/tool_findings.jsonl
+[1/7] prepare_father_source - using pinned upstream Father archive
+[2/7] configure_father - applying run-local Father configuration
+[3/7] build_father_rootkit - running make father
+[i] NAT NIC link up
+[i] NAT NIC link down
+[4/7] install_preload_rootkit - installing rk.so into scenario preload path
+[5/7] trigger_accept_hook_capability - exercising accept hook with bounded password failure
+[6/7] observe_file_hiding_effect - comparing live listing before/after hook
+[7/7] record_postconditions - verifying mapped library, hook result, hashes
+```
+  - problem 1: NAT NIC link up should appear on 1/7 preparation/prerequisites while NAT NIC link down should appear immediatly after that (logically is the best way)
+
+  - problem 2: steps messages ( [1/7] ..., [2/7] ..., ecc..) should use some 'decoration' using appropriate logging function (choose the appropriate one).. moreover since is an "internal phase" it should have identation

