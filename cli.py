@@ -212,8 +212,11 @@ _OFFLINE_COMMANDS = (
 
 
 def _cmd_verify(args: argparse.Namespace) -> int:
-    from orchestrator.evaluation.pipeline import load_pipeline_config, ruleset_hash
-    from orchestrator.evaluation.provenance import verify_versions
+    from orchestrator.forensics.pipeline_config import (
+        load_pipeline_config,
+        ruleset_hash,
+        verify_versions,
+    )
 
     cfg = load_pipeline_config()
     problems = verify_versions(cfg)

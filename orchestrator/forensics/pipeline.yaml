@@ -1,8 +1,8 @@
-# orchestrator/evaluation/config/pipeline.yaml
+# orchestrator/forensics/pipeline.yaml
 #
-# Reproducibility manifest (Phase 6). Pins tool versions, parser/plugin lists,
-# rule-set git refs, and paths. The runner verifies installed versions match
-# these and aborts on mismatch (orchestrator/evaluation/provenance.py + cli.py).
+# Reproducibility manifest. Pins tool versions, parser/plugin lists, rule-set
+# git refs, and paths. `cli.py verify` checks installed versions against these
+# pins (orchestrator/forensics/pipeline_config.py).
 
 versions:
   plaso: "20240826"          # log2timeline.py / psort.py

@@ -1,14 +1,15 @@
-# orchestrator/evaluation/extract/vol3.py
+# orchestrator/forensics/extract.py
 #
-# Volatility 3 extraction wrapper (Phase 3.2). Runs the pinned plugin set with
-# JSON renderers via the in-tree VolatilityRunner and returns
-# {plugin: [rows]} for the GT-blind vol3 heuristics.
+# Thin extraction wrappers over the in-tree forensic runners. They produce the
+# raw tool output the canonical adapters normalize into ToolFinding records.
+# Extraction is GT-blind by construction: no planted value is read here.
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
+from orchestrator.forensics.sleuth_runner import SleuthKitRunner
 from orchestrator.forensics.vol_runner import VolatilityRunner
 
 DEFAULT_PLUGINS = (
@@ -37,7 +38,15 @@ def extract_plugins(
                 memory_path, distro_id, plugin, kernel_release=kernel_release
             )
         except RuntimeError:
-            # A plugin missing for this kernel build is not fatal: the heuristics
+            # A plugin missing for this kernel build is not fatal: the adapters
             # degrade gracefully to whatever plugins did run.
             out[plugin] = []
     return out
+
+
+def extract_bodyfile(sleuth: SleuthKitRunner, disk_path: Path) -> dict[str, Any]:
+    offset = sleuth.partition_offset(disk_path)
+    # fls -m emits bodyfile rows for every name, allocated or not, mounting the
+    # listing at "/" so paths read absolute.
+    lines = sleuth.fls(disk_path, offset, flags="-r -m /")
+    return {"bodyfile": "\n".join(lines)}

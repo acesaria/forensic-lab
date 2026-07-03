@@ -8,11 +8,10 @@ artifact observation.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 from orchestrator.adapters.common import iso_from_epoch, make_tool_finding
 from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding
-from orchestrator.evaluation.detect.tsk_heuristics import parse_bodyfile
 
 _SERVICE_DIRS = (
     "/etc/systemd/",
@@ -26,6 +25,52 @@ _HISTORY_NAMES = (
     ".sh_history",
     ".python_history",
 )
+
+
+# bodyfile columns: MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime
+# fls -m appends "(deleted)" / "(deleted-realloc)" to the name of unallocated
+# entries, which is how a deleted inode is recognised here.
+def parse_bodyfile(lines: Iterable[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for line in lines:
+        line = line.rstrip("\n")
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split("|")
+        if len(parts) < 11:
+            continue
+        name = parts[1]
+        deleted = "(deleted" in name
+        clean = name.split(" (deleted")[0]
+        if not clean.startswith("/"):
+            clean = "/" + clean
+        rows.append(
+            {
+                "path": clean,
+                "inode": parts[2],
+                "mode": parts[3],
+                "size": _to_int(parts[6]),
+                "mtime": _to_float(parts[8]),
+                "ctime": _to_float(parts[9]),
+                "crtime": _to_float(parts[10]),
+                "deleted": deleted,
+            }
+        )
+    return rows
+
+
+def _to_int(s: str) -> int:
+    try:
+        return int(s)
+    except ValueError:
+        return 0
+
+
+def _to_float(s: str) -> float | None:
+    try:
+        return float(s)
+    except ValueError:
+        return None
 
 
 def adapt_bodyfile(

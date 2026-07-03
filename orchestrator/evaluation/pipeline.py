@@ -39,7 +39,9 @@ _REPO_ROOT = _PKG_DIR.parent.parent
 
 
 def load_pipeline_config(path: str | Path | None = None) -> dict[str, Any]:
-    p = Path(path) if path else _PKG_DIR / "config" / "pipeline.yaml"
+    # pipeline.yaml moved to the canonical side; this legacy loader follows it
+    # so there is a single source of truth for the pinned tool versions.
+    p = Path(path) if path else _REPO_ROOT / "orchestrator" / "forensics" / "pipeline.yaml"
     return yaml.safe_load(p.read_text(encoding="utf-8"))
 
 

@@ -76,12 +76,12 @@ from orchestrator.forensics.plaso_runner import (
 from orchestrator.evaluation.scenario.manifest import GtManifestBuilder
 from orchestrator.evaluation.contracts.models import GtManifest
 from orchestrator.evaluation.contracts.validate import load_gt_manifest
-from orchestrator.evaluation.extract.vol3 import extract_plugins
-from orchestrator.evaluation.extract.tsk import extract_bodyfile
 from orchestrator.evaluation.provenance import build_provenance, write_provenance
 from orchestrator.canonical.legacy import write_canonical_from_legacy
 from orchestrator.forensics import deleted_file_runner, yara_runner
-from orchestrator.evaluation.pipeline import load_pipeline_config, run_from_raw
+from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
+from orchestrator.forensics.pipeline_config import load_pipeline_config
+from orchestrator.evaluation.pipeline import run_from_raw
 
 
 class ForensicOrchestrator:
