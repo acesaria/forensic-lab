@@ -7,7 +7,7 @@ from orchestrator.scenarios.executors import SSHClientExecutor
 
 
 def test_toy_file_creation_scenario_outputs_canonical_files(tmp_path: Path):
-    scenario = Path("attacks/scenarios/toy_file_creation/scenario.yml")
+    scenario = Path("scenarios/scenarios/toy_file_creation/scenario.yml")
 
     ctx = run_scenario(
         scenario,

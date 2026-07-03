@@ -1,21 +1,39 @@
-# Vendored third-party trees -- huge and read-only
-vendor/
+# Context hygiene only; not a security boundary.
 
-# Atomic Red Team test YAMLs -- only the runtime needs them
-atomics/
-
-# Virtualenvs
+# Local environments and caches
 .venv/
 .venv-art/
-
-# Python bytecode
+venv/
+env/
+__pycache__/
 **/__pycache__/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.pyc
 
-# Experiment outputs (binary, large)
-shared/dumps/
-shared/isf/
-shared/results/
+# Generated/local experiment material
+shared/
+audit/
+*.log
+*.plaso
+*.raw
+*.dd
+*.img
+*.iso
+*.mem
+*.vmem
+*.lime
+*.dmp
+*.E[0-9][0-9]
+*.e[0-9][0-9]
+*.tar
+*.zip
+*.gz
+
+# Vendored third-party trees normally not needed for architecture review
+vendor/
+atomics/
 
 # Editor and OS noise
 .vscode/

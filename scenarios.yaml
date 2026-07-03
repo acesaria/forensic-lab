@@ -1,14 +1,9 @@
-# Canonical thesis scenario registry.
-#
-# Normal thesis runs should use only userland_father_ldpreload. Legacy modules
-# remain in the tree for regression and historical fixtures, but are intentionally
-# not registered here:
-# - orchestrator.attacks.scenario_01_ldpreload
-# - orchestrator.attacks.art_calibration
+# Canonical thesis scenario registry. Every entry is a declarative scenario
+# (scenario_yml); the legacy module execution path has been removed.
 #
 # run_cleanup is the per-scenario cleanup DEFAULT; the CLI --cleanup/--no-cleanup
 # flag overrides it when passed. The canonical Father v1 has no cleanup/evasion
 # phase by default.
 userland_father_ldpreload:
-  scenario_yml: attacks/scenarios/userland_father_ldpreload/scenario.yml
+  scenario_yml: scenarios/scenarios/userland_father_ldpreload/scenario.yml
   run_cleanup: false

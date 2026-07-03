@@ -73,7 +73,7 @@ Local engine validation:
 
 ```bash
 .venv/bin/python cli.py run-scenario \
-  attacks/scenarios/userland_father_ldpreload/scenario.yml \
+  scenarios/scenarios/userland_father_ldpreload/scenario.yml \
   --out-dir /tmp/father_local --run-id father_local
 ```
 

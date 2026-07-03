@@ -1,45 +1,56 @@
 # AGENTS.md
 
-Universal coding-agent entrypoint for forensic-lab.
+Behavior contract for coding agents in forensic-lab. Read
+PROJECT_CONTEXT.md first, then only the files the task needs.
 
-Read `PROJECT_CONTEXT.md` first. Then inspect the exact code and config files
-needed for the task before changing anything.
+## Hard invariants (never violate, regardless of task wording)
 
-Work in small, isolated tasks. Avoid broad refactors unless explicitly
-requested. When the task is instruction-layer-only, do not touch forensic
-pipeline code, scenario code, matcher code, detector code, or README unless an
-instruction reference would become invalid.
+1. GT-blindness: detectors, adapters, and YAML rules never read ground
+   truth, artifact expectations, or scenario internals.
+2. VM power-state contract: memory = VM ON, disk = VM OFF; transitions
+   stay in the orchestrator.
+3. DetectionClaim is candidate/supporting evidence, not a verdict.
+4. Headline metrics score matched reconstruction, not raw findings.
 
-Preserve the VM power-state contract: memory acquisition requires the VM ON;
-disk acquisition requires the VM OFF. Preserve GT-blindness: detectors and YAML
-rules must not read ground truth or artifact expectations.
+## Change rules
 
-Treat YAML rules and `DetectionClaim` records as candidate evidence, not final
-verdicts. Reports should distinguish raw findings, candidate evidence, matched
-reconstruction, and metric results.
+- Make the smallest diff that satisfies the request. Prefer deleting code
+  over adding it; prefer editing an existing module over creating one.
+- No new top-level modules, abstractions, dependencies, frameworks, or
+  config keys without an explicit request in the task.
+- Per-run behavior toggles are CLI flags, not edits to scenarios.yaml or
+  config files.
+- Scenarios use classic, well-documented techniques; do not add
+  evasion-style plumbing or expand scenario scope.
+- Never put a scenario instance value (planted path, filename, hash, IP,
+  timestamp) into a detector rule or matcher alias. That is circularity,
+  and the leakage test will fail you.
+- Legacy code (see PROJECT_CONTEXT.md map) is frozen: no fixes, no tests,
+  no extensions - deletion only, when a task asks for it.
+- VM-facing changes are validated with `python cli.py run` on the live
+  lab, not with mocked unit tests.
 
-## Scope Guards
+## Test policy
 
-forensic-lab owns RAM, disk, baseline comparison, ground truth, matching, and
-metrics. Keep it post-mortem, simple, and thesis-deliverable.
+- At most one focused test per behavior change, in an existing test file
+  when one fits. No new fixtures, suites, or parametrized matrices unless
+  the task asks.
+- Never add tests to legacy code.
 
-- Timesketch is an optional timeline sidecar only. It is not the active core and
-  must not become the primary metric backend.
-- Do not add Timesketch, Sigma, YARA, baseline tooling, or any other external
-  tool unless a task explicitly asks for it.
-- Do not create a persisted `FinalClaim` model (or a large final-claim
-  architecture) unless a task explicitly requests it. `DetectionClaim` stays
-  candidate/supporting evidence.
-- Headline metrics must not silently score raw findings or all candidate claims
-  as final reconstruction. Reconstruction is derived from matched expected
-  artifacts / strong instance matches.
+## Git
 
-For audits, produce a structured report with:
+- Commit as the repository's configured identity. No AI attribution:
+  no Co-Authored-By trailers, no AI mentions in commit messages.
 
-- inspected files
-- findings
-- proposed minimal changes
-- intentionally unchanged areas
+## Definition of done
 
-For implementation tasks, make the smallest patch that satisfies the request
-and list what was intentionally left alone.
+Every task response ends with these two lines:
+- `Intentionally unchanged:` what you deliberately left alone and why.
+- `Deletion candidates:` anything you noticed that could be removed
+  (or `none`).
+
+## Audits
+
+When asked for an audit, produce a report (no edits) listing: inspected
+files; findings ordered by severity; proposed minimal changes;
+intentionally unchanged areas; open questions.

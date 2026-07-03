@@ -9,7 +9,7 @@ Reference inputs: `detectors/rules/README.md`, `detectors/engine.py`,
 `docs/metrics_methodology.md`, `docs/canonical_pipeline_review.md`,
 `docs/canonical_pipeline_schema.md`, `docs/architecture/canonical_pipeline_gap_analysis.md`,
 `AGENTS.md`, `PROJECT_CONTEXT.md`, and the Father expectations in
-`attacks/scenarios/userland_father_ldpreload/expected_observables.yml`.
+`scenarios/scenarios/userland_father_ldpreload/expected_observables.yml`.
 
 ## 1. Executive Verdict
 

@@ -15,10 +15,10 @@ from orchestrator.scenarios.loader import load_scenario_plan
 from orchestrator.scenarios.run_context import RunContext
 
 
-SCENARIO = Path("attacks/scenarios/userland_father_ldpreload/scenario.yml")
-FATHER_ARCHIVE = Path("attacks/scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar")
-FATHER_LOCK = Path("attacks/scenarios/userland_father_ldpreload/father.lock.yml")
-FAKE_FATHER_SOURCE = Path("attacks/scenarios/userland_father_ldpreload/files/father_lab_preload.c")
+SCENARIO = Path("scenarios/scenarios/userland_father_ldpreload/scenario.yml")
+FATHER_ARCHIVE = Path("scenarios/scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar")
+FATHER_LOCK = Path("scenarios/scenarios/userland_father_ldpreload/father.lock.yml")
+FAKE_FATHER_SOURCE = Path("scenarios/scenarios/userland_father_ldpreload/files/father_lab_preload.c")
 
 
 def test_userland_father_scenario_plan_and_expectations():

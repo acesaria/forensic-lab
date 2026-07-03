@@ -43,9 +43,6 @@ Thumbs.db
 ## ADDITIONAL
 config.yaml
 manifest.json
-orchestrator/attacks/attack_01_ptrace.py
-orchestrator/attacks/attack_05_metasploit.py
-orchestrator/attacks/attack_06_kernel.py
 shared/isf/
 *.plaso
 forensics_report.json
@@ -60,9 +57,10 @@ shared/baselines/
 
 *.bak
 shared/experiments/ubuntu-22.04_scenario_01_ldpreload_20260615-200322/dumps/ground_truth.json
+!scenarios/scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar
 
 # Local audit scaffolding (not part of the codebase)
+audit/
 
 # Vendored third-party binary, fetched locally, not tracked
 dfir-tools/
-audit/father_scenario_20260618_115529/father_run_local/artifact_expectations.jsonl
