@@ -306,7 +306,7 @@ def test_match_canonical_cli_requires_claims_unless_debug(tmp_path: Path):
     assert "requires --detection-claims" in result.stderr
 
 
-def test_cli_help_labels_primary_and_legacy_paths():
+def test_cli_help_labels_primary_thesis_path():
     result = subprocess.run(
         [".venv/bin/python", "cli.py", "--help"],
         cwd=Path.cwd(),
@@ -317,7 +317,8 @@ def test_cli_help_labels_primary_and_legacy_paths():
 
     assert result.returncode == 0, result.stderr or result.stdout
     assert "Primary thesis path" in result.stdout
-    assert "LEGACY/CALIBRATION" in result.stdout
+    # Legacy score/pipeline/analyze commands were removed from the CLI surface.
+    assert "LEGACY/CALIBRATION" not in result.stdout
 
     match_help = subprocess.run(
         [".venv/bin/python", "cli.py", "match-canonical", "--help"],

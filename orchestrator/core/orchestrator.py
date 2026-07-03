@@ -59,7 +59,7 @@ from orchestrator.core.baseline_cache import (
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
-from orchestrator.attacks import ArtRunner
+from orchestrator.scenario_execution import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
 from orchestrator.forensics.plaso_runner import (
@@ -690,46 +690,6 @@ class ForensicOrchestrator:
         lo = datetime.fromtimestamp(min(times) - margin_s, timezone.utc)
         hi = datetime.fromtimestamp(max(times) + margin_s, timezone.utc)
         return iso_utc_ms(lo), iso_utc_ms(hi)
-
-    def analyze_run(
-        self, distro_id: str, scenario_id: str, run_id: str | None = None
-    ) -> Path:
-        """
-        Re-run IOC detection + scoring on an already-acquired run, reusing its
-        dumps and cached timeline (no VM, no Plaso re-run). Rewrites that run's
-        forensics_report.json + metrics.csv so specs/filters can be iterated fast.
-        """
-        if run_id is None:
-            run_id = self._latest_run_id(distro_id, scenario_id)
-        run_dir = self.dumper.run_dir(run_id)
-        gt_manifest_path = run_dir / "gt_manifest.json"
-        manifest_path = str(run_dir / "manifest.json")
-        console.section(f"re-analyze: {run_id}")
-        self._evaluate_run_framework(
-            run_id,
-            scenario_id,
-            distro_id,
-            gt_manifest_path,
-            manifest_path,
-            reuse_cached_timeline=True,
-        )
-        return self._paths.run_analysis_dir(run_id) / "metrics.csv"
-
-    def _latest_run_id(self, distro_id: str, scenario_id: str) -> str:
-        # run_id ends in a timestamp, so lexical sort over the matching run dirs
-        # is chronological; the last one is the most recent.
-        prefix = f"{distro_id}_{scenario_id}_"
-        runs = sorted(
-            p.name
-            for p in self._paths.experiments_dir.glob(f"{prefix}*")
-            if p.is_dir()
-        )
-        if not runs:
-            raise RuntimeError(
-                f"no acquired run found for {distro_id} / {scenario_id} "
-                f"under {self._paths.experiments_dir}"
-            )
-        return runs[-1]
 
     def _dispatch_scenario(
         self,
