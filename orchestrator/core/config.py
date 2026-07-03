@@ -35,11 +35,6 @@ CLOUD_INIT_NETWORK_CONFIG = CLOUD_INIT_DIR / "network-config"
 LAB_VM_PREFIX = "lab"
 BUILD_VM_PREFIX = "build-isf"
 
-# Gateway IP on the isolated libvirt network. Must match the address bound in
-# the network XML at infra/provider.py. Used by scenarios that need a
-# host-side listener (e.g. reverse shells) reachable from the lab VM.
-ISOLATED_NETWORK_GATEWAY = "192.168.100.1"
-
 # Acquisition output filenames. The run directory name already encodes which
 # scenario/run a dump belongs to, so the files themselves stay generic.
 MEMORY_DUMP_FILENAME = "mem.raw"
@@ -78,7 +73,9 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     Load and validate config.yaml.
 
     After this returns, every field listed in _HOST_PATH_FIELDS is an absolute
-    pathlib.Path. Consumers should treat them as such and not re-normalize.
+    pathlib.Path, and each role_defaults entry carries its libvirt network
+    names (lab -> isolated + NAT, build-isf -> NAT). Consumers should treat
+    the result as fully wired and not re-normalize.
     """
     config_path = repo_root / "config.yaml"
     with open(config_path) as f:
@@ -91,6 +88,14 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     for field in _HOST_PATH_FIELDS:
         if field in host:
             host[field] = _resolve_path(host[field], repo_root)
+
+    role_defaults = cfg.get("role_defaults") or {}
+    nat_network = host.get("nat_network_name", "default")
+    if isinstance(role_defaults.get("lab"), dict):
+        role_defaults["lab"]["network"] = host["isolated_network_name"]
+        role_defaults["lab"]["nat_network"] = nat_network
+    if isinstance(role_defaults.get("build-isf"), dict):
+        role_defaults["build-isf"]["network"] = nat_network
     return cfg
 
 

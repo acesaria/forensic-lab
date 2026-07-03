@@ -1,9 +1,4 @@
 # Canonical thesis scenario registry. Every entry is a declarative scenario
-# (scenario_yml); the legacy module execution path has been removed.
-#
-# run_cleanup is the per-scenario cleanup DEFAULT; the CLI --cleanup/--no-cleanup
-# flag overrides it when passed. The canonical Father v1 has no cleanup/evasion
-# phase by default.
+# (scenario_yml); the scenario.yml owns its own step sequence.
 userland_father_ldpreload:
   scenario_yml: scenarios/scenarios/userland_father_ldpreload/scenario.yml
-  run_cleanup: false

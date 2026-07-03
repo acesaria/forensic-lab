@@ -67,21 +67,6 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         default=True,
         help="Acquire memory + disk after the scenario (default: enabled)",
     )
-    run.add_argument(
-        "--cleanup",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Run the scenario's cleanup phase after the attack "
-        "(--cleanup / --no-cleanup); overrides the scenario's run_cleanup "
-        "default. Unset uses the scenario default (--no-cleanup preserves all "
-        "artifacts)",
-    )
-    run.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help="Seed for the scenario's randomized instance values (default: 0)",
-    )
 
     # destroy: remove lab VM and storage
     destroy = sub.add_parser("destroy", help="Destroy lab VM and storage")
@@ -92,7 +77,7 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     # artifacts without touching libvirt. These deliberately skip the host
     # prerequisite check and orchestrator construction (see main()).
 
-    verify = sub.add_parser(
+    sub.add_parser(
         "verify",
         help="Check pinned tool versions and print the ruleset hash",
     )
@@ -203,13 +188,6 @@ def _check_prerequisites() -> None:
 
 # --- offline evaluation handlers -----------------------------------------
 
-_OFFLINE_COMMANDS = (
-    "verify",
-    "run-scenario",
-    "run-detectors",
-    "match-canonical",
-)
-
 
 def _cmd_verify(args: argparse.Namespace) -> int:
     from orchestrator.forensics.pipeline_config import (
@@ -299,14 +277,15 @@ def _cmd_match_canonical(args: argparse.Namespace) -> int:
     return 0
 
 
-def _run_offline_command(args: argparse.Namespace) -> int:
-    handlers = {
-        "verify": _cmd_verify,
-        "run-scenario": _cmd_run_scenario,
-        "run-detectors": _cmd_run_detectors,
-        "match-canonical": _cmd_match_canonical,
-    }
-    return handlers[args.command](args)
+# Offline evaluation commands re-score cached artifacts and need neither the
+# lab host nor the acquisition toolchain, so main() dispatches them before the
+# prerequisite check and orchestrator construction.
+_OFFLINE_HANDLERS = {
+    "verify": _cmd_verify,
+    "run-scenario": _cmd_run_scenario,
+    "run-detectors": _cmd_run_detectors,
+    "match-canonical": _cmd_match_canonical,
+}
 
 
 # --- main ----------------------------------------------------------------
@@ -318,29 +297,30 @@ def main() -> None:
     args = build_parser(tuple(sorted(scenarios.keys()))).parse_args()
     _setup_logging(args.debug)
 
-    # Offline evaluation commands re-score cached artifacts and need neither the
-    # lab host nor the acquisition toolchain, so they bypass the prerequisite
-    # check and orchestrator construction below.
-    if args.command in _OFFLINE_COMMANDS:
-        sys.exit(_run_offline_command(args))
+    if args.command in _OFFLINE_HANDLERS:
+        sys.exit(_OFFLINE_HANDLERS[args.command](args))
 
     _check_prerequisites()
     if args.debug:
         console.info("debug mode on")
 
-    # All host path fields are absolute Paths after load_config(); ProjectPaths
-    # then derives every layout-specific subdirectory once. Downstream code
-    # only sees `paths`, never raw host_cfg path entries.
+    # The 'setup' and 'run' paths need a valid distro profile; fail fast with a
+    # config error before any VM work starts.
+    if args.command in ("setup", "run"):
+        try:
+            load_profile(repo_root, args.distro)
+        except (KeyError, FileNotFoundError, ValueError) as exc:
+            console.err(f"config: distro '{args.distro}' not found: {exc}")
+            sys.exit(1)
+
+    # All host path fields are absolute Paths and role_defaults carry their
+    # network names after load_config(); ProjectPaths then derives every
+    # layout-specific subdirectory once. Downstream code only sees `paths`,
+    # never raw host_cfg path entries.
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
     paths = ProjectPaths.from_config(repo_root, host_cfg)
     role_defaults = cfg.get("role_defaults") or {}
-    nat_network = host_cfg.get("nat_network_name", "default")
-    if isinstance(role_defaults.get("lab"), dict):
-        role_defaults["lab"]["network"] = host_cfg["isolated_network_name"]
-        role_defaults["lab"]["nat_network"] = nat_network
-    if isinstance(role_defaults.get("build-isf"), dict):
-        role_defaults["build-isf"]["network"] = nat_network
 
     provider = Provider(
         libvirt_uri=host_cfg["libvirt_uri"],
@@ -372,13 +352,6 @@ def main() -> None:
                 orchestrator.setup_infra()
 
             elif args.command == "setup":
-                try:
-                    load_profile(repo_root, args.distro)
-                except (KeyError, FileNotFoundError, ValueError) as exc:
-                    raise RuntimeError(
-                        f"config: distro '{args.distro}' not found: {exc}"
-                    ) from exc
-
                 console.section("infrastructure")
                 orchestrator.setup_infra()
                 console.section("lab VM setup")
@@ -390,27 +363,11 @@ def main() -> None:
                 console.ok(f"setup complete for '{distro_id}'")
 
             elif args.command == "run":
-                try:
-                    load_profile(repo_root, args.distro)
-                except (KeyError, FileNotFoundError, ValueError) as exc:
-                    raise RuntimeError(
-                        f"config: distro '{args.distro}' not found: {exc}"
-                    ) from exc
-
                 if not orchestrator.lab_exists(distro_id):
                     console.warn(f"lab '{distro_id}' not found; run 'setup' first")
                     raise SystemExit(1)
-                scenario_id = args.scenario
-                scenario_cfg = scenarios.get(args.scenario)
-                if not scenario_cfg:
-                    raise RuntimeError(f"Unknown scenario '{args.scenario}'")
-                # The --cleanup/--no-cleanup flag overrides the scenario's
-                # run_cleanup default; unset falls back to the registry value.
-                run_cleanup = (
-                    args.cleanup
-                    if args.cleanup is not None
-                    else bool(scenario_cfg.get("run_cleanup", False))
-                )
+                # argparse choices guarantee the key exists in the registry.
+                scenario_cfg = scenarios[args.scenario]
                 if "scenario_yml" not in scenario_cfg:
                     raise RuntimeError(
                         f"Invalid scenario config for '{args.scenario}': "
@@ -418,11 +375,9 @@ def main() -> None:
                     )
                 orchestrator.run_declarative_experiment(
                     distro_id,
-                    scenario_id,
+                    args.scenario,
                     scenario_cfg,
                     acquire=args.acquire,
-                    run_cleanup=run_cleanup,
-                    seed=args.seed,
                 )
 
             elif args.command == "destroy":

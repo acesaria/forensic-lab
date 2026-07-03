@@ -170,16 +170,19 @@ def test_declarative_evaluation_passes_verified_baseline_to_detector(
             )
         ]
 
-    monkeypatch.setattr("detectors.engine.run_detectors_file", fake_run_detectors_file)
     monkeypatch.setattr(
-        "matcher.engine.run_matcher_files",
+        "orchestrator.core.orchestrator.run_detectors_file", fake_run_detectors_file
+    )
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.run_matcher_files",
         lambda **kwargs: {"metrics": {"schema": "forensic-lab.matcher.metrics.v2"}},
     )
-    monkeypatch.setattr("matcher.engine.render_console_summary", lambda metrics: [])
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.render_console_summary", lambda metrics: []
+    )
 
     orch._evaluate_declarative_run(
         run_id,
-        "userland_father_ldpreload",
         "ubuntu-22.04",
         str(manifest_path),
         baseline_cache=baseline_entry,

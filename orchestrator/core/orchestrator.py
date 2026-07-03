@@ -12,7 +12,7 @@ build_isf(distro_id)       one-time: Volatility symbol file
 run_declarative_experiment(...)  experiment loop
 destroy_lab(distro_id)     teardown
 lab_exists(distro_id)      predicate
-def verify_pipeline(distro_id: str): Acquire a baseline image and probe with Volatility + SleuthKit.
+verify_pipeline(distro_id) acquire a baseline image and probe Volatility/SleuthKit/Plaso
 
 Naming contract
 ---------------
@@ -29,12 +29,18 @@ _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
 run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=False
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 import functools
 import json
 from pathlib import Path
 from typing import Any
 
+from detectors.engine import run_detectors_file, write_detection_claims
+from matcher.engine import render_console_summary, run_matcher_files
+from orchestrator.adapters import filter_findings_to_window, write_tool_findings
+from orchestrator.adapters.plaso import adapt_plaso_events
+from orchestrator.adapters.sleuthkit import adapt_bodyfile
+from orchestrator.adapters.volatility3 import adapt_plugin_rows
 from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
     MEMORY_DUMP_FILENAME,
@@ -68,6 +74,9 @@ from orchestrator.forensics.plaso_runner import (
 )
 from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
 from orchestrator.forensics.pipeline_config import load_pipeline_config
+from orchestrator.forensics.timeutil import iso_utc_ms, parse_iso_utc
+from orchestrator.scenarios import run_scenario
+from orchestrator.scenarios.executors import SSHClientExecutor
 
 
 class ForensicOrchestrator:
@@ -110,7 +119,7 @@ class ForensicOrchestrator:
         if not isinstance(role_cfg, dict):
             raise RuntimeError("Missing 'role_defaults.lab' in config")
 
-        vm_name = "lab-" + distro_id
+        vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         if not self.vm_manager.vm_exists(vm_name):
             self.vm_manager.prepare_lab(distro_id, profile, role_cfg)
             console.ok(f"'{distro_id}' ready for experiments")
@@ -166,8 +175,6 @@ class ForensicOrchestrator:
         scenario_id: str,
         scenario_cfg: dict[str, Any],
         acquire: bool = True,
-        run_cleanup: bool = False,
-        seed: int = 0,
     ) -> str | None:
         """
         VM-backed run of a declarative scenario.yml through the canonical engine.
@@ -179,12 +186,9 @@ class ForensicOrchestrator:
         pipeline (tool_findings -> detection_claims -> matches/metrics/report
         under analysis/). The VM ends OFF when acquire is True, ON otherwise.
 
-        Declarative scenarios run their full step list; run_cleanup/seed are
-        recorded for provenance but the scenario.yml owns its own step sequence.
+        Declarative scenarios always run their full step list; the scenario.yml
+        owns its own step sequence.
         """
-        from orchestrator.scenarios import run_scenario
-        from orchestrator.scenarios.executors import SSHClientExecutor
-
         scenario_yml = self.repo_root / str(scenario_cfg["scenario_yml"])
         if not scenario_yml.is_file():
             raise RuntimeError(
@@ -223,22 +227,24 @@ class ForensicOrchestrator:
                     internet_on=functools.partial(self.vm_manager.internet_on, vm_name),
                     internet_off=functools.partial(self.vm_manager.internet_off, vm_name),
                 )
-                guest = self._guest_facts(ssh)
+                if guest is None:
+                    guest = self._guest_facts(ssh)
         finally:
             self.vm_manager.internet_off(vm_name, quiet=True)
             console.section_end()
 
         # The engine wrote a null-filled reference_context before the steps ran;
         # rewrite it now that the guest facts are known.
+        ref_ctx = dict(
+            guest=guest,
+            baseline=self._baseline_context(distro_id, baseline_cache),
+            tool_versions=self._pipeline_versions(),
+            volatility=self._volatility_context(
+                distro_id, (guest or {}).get("kernel")
+            ),
+        )
         if ctx is not None:
-            ctx.write_reference_context(
-                guest=guest,
-                baseline=self._baseline_context(distro_id, baseline_cache),
-                tool_versions=self._pipeline_versions(),
-                volatility=self._volatility_context(
-                    distro_id, (guest or {}).get("kernel")
-                ),
-            )
+            ctx.write_reference_context(**ref_ctx)
 
         if not acquire:
             console.ok(f"declarative run complete (no acquisition): {run_dir}")
@@ -247,17 +253,10 @@ class ForensicOrchestrator:
         manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
         if ctx is not None:
             ctx.write_reference_context(
-                guest=guest,
-                acquisition=self._acquisition_context(manifest_path),
-                baseline=self._baseline_context(distro_id, baseline_cache),
-                tool_versions=self._pipeline_versions(),
-                volatility=self._volatility_context(
-                    distro_id, (guest or {}).get("kernel")
-                ),
+                acquisition=self._acquisition_context(manifest_path), **ref_ctx
             )
         self._evaluate_declarative_run(
             run_id,
-            scenario_id,
             distro_id,
             manifest_path,
             baseline_cache=baseline_cache,
@@ -359,7 +358,6 @@ class ForensicOrchestrator:
     def _evaluate_declarative_run(
         self,
         run_id: str,
-        scenario_id: str,
         distro_id: str,
         manifest_path: str,
         *,
@@ -371,10 +369,6 @@ class ForensicOrchestrator:
         swallowed. Writes tool_findings.jsonl, detection_claims.jsonl,
         matches.jsonl, metrics.json and score_report.md under analysis/.
         """
-        from orchestrator.adapters import write_tool_findings
-        from detectors.engine import run_detectors_file, write_detection_claims
-        from matcher.engine import render_console_summary, run_matcher_files
-
         run_dir = self.dumper.run_dir(run_id)
         analysis_dir = self._paths.run_analysis_dir(run_id)
         analysis_dir.mkdir(parents=True, exist_ok=True)
@@ -466,8 +460,6 @@ class ForensicOrchestrator:
                 kernel_release=(guest or {}).get("kernel"),
                 scope_to_case_window=False,
             )
-            from orchestrator.adapters import write_tool_findings
-
             tf_path = write_tool_findings(cache_dir / "tool_findings.jsonl", findings)
             entry = write_cache_manifest(
                 self._paths,
@@ -501,11 +493,6 @@ class ForensicOrchestrator:
         """Extract raw forensic outputs and adapt them to canonical ToolFinding
         records. Each channel is best-effort; a degraded tool contributes no
         findings rather than sinking the others."""
-        from orchestrator.adapters import filter_findings_to_window
-        from orchestrator.adapters.plaso import adapt_plaso_events
-        from orchestrator.adapters.sleuthkit import adapt_bodyfile
-        from orchestrator.adapters.volatility3 import adapt_plugin_rows
-
         manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         memory_path = Path(manifest["memory_image"]["path"])
         disk_path = Path(manifest["disk_image"]["path"])
@@ -578,9 +565,6 @@ class ForensicOrchestrator:
     ) -> tuple[str, str] | None:
         """Derive [start, end] from the scenario command_log step times, padded by
         a margin. Returns None if the log is missing or has no usable times."""
-        from datetime import datetime, timezone
-        from orchestrator.forensics.timeutil import iso_utc_ms, parse_iso_utc
-
         log_path = self.dumper.run_dir(run_id) / "command_log.jsonl"
         if not log_path.is_file():
             return None
@@ -733,31 +717,9 @@ class ForensicOrchestrator:
         console.step(f"probing acquired images for {distro_id}...")
         self._vol_runner.probe(memory_path, distro_id)
         self._sleuth_runner.probe(disk_path)
-        self._verify_plaso(run_id, disk_path)
+        # Plaso probe: confirm the toolchain can ingest the disk and emit events.
+        self._build_timeline(run_id, disk_path)
         console.ok(f"pipeline verified for '{distro_id}'")
-
-    def _verify_plaso(self, run_id: str, disk_path: Path) -> None:
-        # Shallow sanity check: confirm the host's Plaso toolchain can ingest
-        # the disk and emit at least one JSON event. Artifacts land under the
-        # run's analysis/ subtree so they survive for inspection and don't sit
-        # inside the dumps/ subtree (acquisition outputs) or the repo root. The
-        # default Linux filter keeps this fast and verify_plaso_inputs()
-        # catches missing binaries / YAML up front.
-        file_filter = default_linux_filter()
-        verify_plaso_inputs(file_filter=file_filter)
-
-        verify_dir = self._paths.run_analysis_dir(run_id)
-        storage_path = verify_dir / "verify.plaso"
-        timeline_path = verify_dir / "verify.jsonl"
-        run_log2timeline(
-            disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
-        )
-        run_psort(storage_path=storage_path, output_path=timeline_path)
-        events = read_timeline(timeline_path)
-        console.ok(
-            f"plaso probe passed: {len(events)} event(s) readable "
-            f"(artifacts: {verify_dir})"
-        )
 
     # --- private: experiment helpers -------------------------------------
 
