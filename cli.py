@@ -411,26 +411,19 @@ def main() -> None:
                     if args.cleanup is not None
                     else bool(scenario_cfg.get("run_cleanup", False))
                 )
-                if "module" in scenario_cfg:
-                    orchestrator.run_experiment(
-                        distro_id,
-                        scenario_id,
-                        scenario_cfg,
-                        acquire=args.acquire,
-                        run_cleanup=run_cleanup,
-                        seed=args.seed,
+                if "scenario_yml" not in scenario_cfg:
+                    raise RuntimeError(
+                        f"Invalid scenario config for '{args.scenario}': "
+                        "missing 'scenario_yml'"
                     )
-                elif "scenario_yml" in scenario_cfg:
-                    orchestrator.run_declarative_experiment(
-                        distro_id,
-                        scenario_id,
-                        scenario_cfg,
-                        acquire=args.acquire,
-                        run_cleanup=run_cleanup,
-                        seed=args.seed,
-                    )
-                else:
-                    raise RuntimeError(f"Invalid scenario config for '{args.scenario}'")
+                orchestrator.run_declarative_experiment(
+                    distro_id,
+                    scenario_id,
+                    scenario_cfg,
+                    acquire=args.acquire,
+                    run_cleanup=run_cleanup,
+                    seed=args.seed,
+                )
 
             elif args.command == "destroy":
                 orchestrator.destroy_lab(distro_id)

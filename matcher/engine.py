@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import posixpath
 from collections import Counter
 from dataclasses import dataclass

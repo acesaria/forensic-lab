@@ -9,7 +9,7 @@ Public API
 setup_infra()              one-time: libvirt network + pool
 prepare_lab(distro_id)     one-time: image + VM + baseline snapshot + pipeline verify
 build_isf(distro_id)       one-time: Volatility symbol file
-run_experiment(...)        experiment loop
+run_declarative_experiment(...)  experiment loop
 destroy_lab(distro_id)     teardown
 lab_exists(distro_id)      predicate
 def verify_pipeline(distro_id: str): Acquire a baseline image and probe with Volatility + SleuthKit.
@@ -26,15 +26,14 @@ prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM destroyed)
 _reset_lab         ends ON + SSH ready
 _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
-run_experiment     ends OFF when acquire=True; ends ON when acquire=False
+run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=False
 """
 
 from datetime import datetime
 import functools
-import importlib
 import json
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
@@ -42,7 +41,6 @@ from orchestrator.core.config import (
     BUILD_VM_PREFIX,
     EVIDENCE_DISK_FILENAME,
     ISF_BUILD_PLAYBOOK,
-    ISOLATED_NETWORK_GATEWAY,
     LAB_VM_PREFIX,
     VERIFY_SCENARIO,
     load_profile,
@@ -59,7 +57,6 @@ from orchestrator.core.baseline_cache import (
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
-from orchestrator.scenario_execution import ArtRunner
 from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
 from orchestrator.forensics.plaso_runner import (
@@ -69,19 +66,8 @@ from orchestrator.forensics.plaso_runner import (
     run_psort,
     verify_plaso_inputs,
 )
-# Evaluation goes through the GT-blind framework pipeline (detect -> match ->
-# metrics). The old direct-GT-lookup path (artifact_specs.resolve_specs +
-# ioc_detector + evaluator) is no longer executed here; GT is read only inside
-# orchestrator.evaluation.match.
-from orchestrator.evaluation.scenario.manifest import GtManifestBuilder
-from orchestrator.evaluation.contracts.models import GtManifest
-from orchestrator.evaluation.contracts.validate import load_gt_manifest
-from orchestrator.evaluation.provenance import build_provenance, write_provenance
-from orchestrator.canonical.legacy import write_canonical_from_legacy
-from orchestrator.forensics import deleted_file_runner, yara_runner
 from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
 from orchestrator.forensics.pipeline_config import load_pipeline_config
-from orchestrator.evaluation.pipeline import run_from_raw
 
 
 class ForensicOrchestrator:
@@ -101,14 +87,10 @@ class ForensicOrchestrator:
         self._paths = paths
         self._role_defaults = role_defaults
 
-    # Convenience accessors keep the call sites readable.
+    # Convenience accessor keeps the call sites readable.
     @property
     def repo_root(self) -> Path:
         return self._paths.repo_root
-
-    @property
-    def atomics_path(self) -> Path:
-        return self._paths.atomics_dir
 
     # --- one-time setup --------------------------------------------------
 
@@ -175,74 +157,6 @@ class ForensicOrchestrator:
 
     def lab_exists(self, distro_id: str) -> bool:
         return self.vm_manager.vm_exists(f"{LAB_VM_PREFIX}-{distro_id}")
-
-    # --- experiment loop -------------------------------------------------
-
-    def run_experiment(
-        self,
-        distro_id: str,
-        scenario_id: str,
-        scenario_cfg: dict[str, Any],
-        acquire: bool = True,
-        evaluate: bool = True,
-        run_cleanup: bool = True,
-        seed: int = 0,
-    ) -> str | None:
-        """
-        Full experiment cycle:
-        1. Revert VM to baseline and start it
-        2. Dispatch the scenario module, persist ground truth
-        3. Acquire RAM + disk (unless acquire=False)
-        4. Detect IOCs + score per-step metrics (unless evaluate=False)
-
-        The VM ends OFF after acquisition (host-side disk acquisition needs it
-        powered down). When acquire=False the VM is left ON. Evaluation needs the
-        acquired images, so it only runs when acquire is True.
-        Returns manifest path if acquired, else None.
-        """
-        console.section(f"experiment: {scenario_id} on {distro_id}")
-        vm_name = self._reset_lab(distro_id)
-        run_id = _make_run_id(distro_id, scenario_id)
-        # ground_truth is owned here and mutated in place by the scenario so
-        # whatever steps ran before an exception are still on disk afterwards.
-        ground_truth: dict[str, Any] = {"scenario_id": scenario_id, "steps": []}
-        # The GT-blind pipeline's ground-truth manifest, emitted at execution time
-        # by the scenario (additive to ground_truth). Persisted in the finally so a
-        # partial run still yields a manifest of whatever actions completed.
-        gt_builder = GtManifestBuilder(
-            scenario_id, run_id, distro_id, seed=seed, cleanup=run_cleanup
-        )
-
-        try:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                self._dispatch_scenario(
-                    vm_name,
-                    ssh,
-                    scenario_id,
-                    scenario_cfg,
-                    ground_truth,
-                    run_cleanup=run_cleanup,
-                    gt_builder=gt_builder,
-                )
-        finally:
-            console.section_end()
-            self._persist_ground_truth(run_id, ground_truth)
-            gt_manifest_path = self._persist_gt_manifest(run_id, gt_builder)
-
-        if acquire:
-            manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
-            self._write_canonical_artifacts(
-                run_id,
-                gt_manifest_path,
-                acquisition_manifest_path=manifest_path,
-                distro_id=distro_id,
-            )
-            if evaluate:
-                self._evaluate_run_framework(
-                    run_id, scenario_id, distro_id, gt_manifest_path, manifest_path
-                )
-            return manifest_path
-        return None
 
     # --- declarative (canonical) experiment loop -------------------------
 
@@ -691,108 +605,6 @@ class ForensicOrchestrator:
         hi = datetime.fromtimestamp(max(times) + margin_s, timezone.utc)
         return iso_utc_ms(lo), iso_utc_ms(hi)
 
-    def _dispatch_scenario(
-        self,
-        vm_name: str,
-        ssh: SSHClient,
-        scenario_id: str,
-        scenario_cfg: dict[str, Any],
-        ground_truth: dict[str, Any],
-        run_cleanup: bool = True,
-        gt_builder=None,
-    ) -> None:
-        """
-        Import the scenario module named in scenario_cfg["module"] and call
-        its run() with ssh/runner/host_ip + internet_on/off + ground_truth
-        plus any remaining cfg keys as kwargs. The scenario appends to
-        ground_truth["steps"] in place; nothing is returned.
-
-        Ensures the NAT NIC link is down before returning so the memory dump
-        doesn't capture stray network state.
-        """
-        module_path = scenario_cfg.get("module")
-        if not module_path:
-            raise RuntimeError(f"scenario '{scenario_id}' missing 'module' key")
-        try:
-            module = importlib.import_module(module_path)
-        except ImportError as exc:
-            raise RuntimeError(
-                f"scenario '{scenario_id}': cannot import module '{module_path}': {exc}"
-            ) from exc
-        run_fn = getattr(module, "run", None)
-        if run_fn is None:
-            raise RuntimeError(
-                f"scenario module '{module_path}' has no top-level run() function"
-            )
-        extras = {k: v for k, v in scenario_cfg.items() if k != "module"}
-        # run_cleanup comes straight from the CLI --cleanup/--no-cleanup flag.
-        extras["run_cleanup"] = run_cleanup
-        runner = ArtRunner(ssh, self.atomics_path)
-        internet_on = functools.partial(self.vm_manager.internet_on, vm_name)
-        internet_off = functools.partial(self.vm_manager.internet_off, vm_name)
-        try:
-            run_fn(
-                ssh=ssh,
-                runner=runner,
-                host_ip=ISOLATED_NETWORK_GATEWAY,
-                internet_on=internet_on,
-                internet_off=internet_off,
-                ground_truth=ground_truth,
-                gt_builder=gt_builder,
-                **extras,
-            )
-        finally:
-            self.vm_manager.internet_off(vm_name, quiet=True)
-
-    def _persist_ground_truth(
-        self,
-        run_id: str,
-        ground_truth: dict[str, Any],
-    ) -> Path:
-        """Write ground_truth.json beside the acquisition outputs."""
-        run_dir = self.dumper.run_dir(run_id)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        out = run_dir / "ground_truth.json"
-        out.write_text(json.dumps(ground_truth, indent=2, default=str))
-        console.ok(f"ground truth written: {out}")
-        return out
-
-    def _persist_gt_manifest(self, run_id: str, gt_builder) -> Path:
-        """Write gt_manifest.json beside the dumps. Best-effort: a manifest write
-        failure must not sink the run."""
-        run_dir = self.dumper.run_dir(run_id)
-        run_dir.mkdir(parents=True, exist_ok=True)
-        out = run_dir / "gt_manifest.json"
-        try:
-            gt_builder.write(out)
-            self._write_canonical_artifacts(run_id, out, distro_id=gt_builder.distro)
-            console.ok(f"gt manifest written: {out}")
-        except Exception as exc:
-            console.warn(f"gt manifest not written: {exc}")
-        return out
-
-    def _write_canonical_artifacts(
-        self,
-        run_id: str,
-        gt_manifest_path: Path,
-        *,
-        acquisition_manifest_path: str | Path | None = None,
-        distro_id: str | None = None,
-    ) -> None:
-        try:
-            tool_versions = load_pipeline_config().get("versions", {})
-            volatility_symbols = self._volatility_context(distro_id) if distro_id else None
-            write_canonical_from_legacy(
-                gt_manifest_path,
-                self.dumper.run_dir(run_id),
-                acquisition_manifest_path=acquisition_manifest_path,
-                repo_root=self.repo_root,
-                tool_versions=tool_versions,
-                volatility_symbols=volatility_symbols,
-            )
-        except Exception as exc:
-            console.warn(f"canonical GT artifacts not written: {exc}")
-
     def _volatility_context(
         self, distro_id: str | None, kernel_release: str | None = None
     ) -> dict[str, Any]:
@@ -804,228 +616,16 @@ class ForensicOrchestrator:
             return {"symbols": None, "profile": None}
         return {"symbols": str(isf), "profile": isf.name}
 
-    def _evaluate_run_framework(
-        self,
-        run_id: str,
-        scenario_id: str,
-        distro_id: str,
-        gt_manifest_path: Path,
-        manifest_path: str,
-        reuse_cached_timeline: bool = False,
-    ) -> None:
-        """
-        GT-blind detection + GT-aware matching + metrics on the acquired images.
-
-        Best-effort: the acquisition has already succeeded and is on disk, so a
-        failure here is logged and swallowed rather than discarding a good run.
-        Writes analysis/<run_id>/{findings.jsonl,matches.json,metrics.csv,report.md}.
-        """
-        if not Path(gt_manifest_path).is_file():
-            console.info(
-                f"no gt_manifest for '{scenario_id}'; skipping evaluation"
-            )
-            return
-
-        manifest = json.loads(Path(manifest_path).read_text())
-        memory_path = Path(manifest["memory_image"]["path"])
-        disk_path = Path(manifest["disk_image"]["path"])
-
-        console.step_header("detect -> match -> metrics")
-        try:
-            gt = GtManifest.from_dict(load_gt_manifest(gt_manifest_path))
-            timeline_events = self._build_timeline(
-                run_id, disk_path, reuse_cached=reuse_cached_timeline
-            )
-            raw_outputs: dict[str, Any] = {"plaso": timeline_events}
-            try:
-                raw_outputs["vol3"] = extract_plugins(
-                    self._vol_runner, memory_path, distro_id
-                )
-            except Exception as exc:
-                console.warn(f"vol3 extraction degraded: {exc}")
-            try:
-                raw_outputs["tsk"] = extract_bodyfile(self._sleuth_runner, disk_path)
-            except Exception as exc:
-                console.warn(f"tsk extraction degraded: {exc}")
-
-            # External-tool channels (best-effort, like vol3/tsk). YARA needs a
-            # mounted/extracted FS root, provided per-distro by self._fs_scan_root
-            # (None -> skipped). The plaso_sigma detector runs automatically over
-            # raw_outputs["plaso"].
-            scan_root = self._fs_scan_root(distro_id)
-            if scan_root is not None:
-                try:
-                    raw_outputs["yara"] = yara_runner.run(scan_root)
-                except Exception as exc:
-                    console.warn(f"yara scan degraded: {exc}")
-
-            # Escalating deleted-file recovery. Targets are the GT deleted_file
-            # observables, passed as plain dicts so the runner stays GT-blind.
-            analysis_dir = self._paths.run_analysis_dir(run_id)
-            case_window = self._case_window(gt)
-            recovery_versions: dict[str, Any] = {}
-            targets = self._deleted_file_targets(gt)
-            if targets:
-                try:
-                    payload = deleted_file_runner.run(
-                        disk_path,
-                        self._partition_info(distro_id, disk_path, case_window),
-                        targets,
-                        analysis_dir / "deleted_file",
-                        run_id,
-                    )
-                    raw_outputs["deleted_file"] = payload
-                    recovery_versions = payload.get("tool_versions", {})
-                except Exception as exc:
-                    console.warn(f"deleted-file recovery degraded: {exc}")
-
-            row = run_from_raw(
-                gt,
-                raw_outputs,
-                analysis_dir,
-                case_window=case_window,
-            )
-            self._write_recovery_provenance(run_id, analysis_dir, recovery_versions)
-        except Exception as exc:
-            console.warn(f"evaluation failed (acquisition is intact): {exc}")
-            console.section_end()
-            return
-
-        v = row.values
-        console.ok(
-            f"metrics written: recall={v['recall']} precision={v['precision']} "
-            f"tp={v['tp']} fp={v['fp']} fn={v['fn']} "
-            f"({self._paths.run_analysis_dir(run_id) / 'metrics.csv'})"
-        )
-        console.section_end()
-
-    @staticmethod
-    def _case_window(gt: GtManifest) -> dict[str, str] | None:
-        # The case window bounds which on-disk creations the tsk heuristic
-        # considers, from the seeded action span padded by a margin. Derived from
-        # the manifest's own event times (acquisition metadata), never from a
-        # planted entity value.
-        from orchestrator.forensics.timeutil import parse_iso_utc, iso_utc_ms
-        from datetime import datetime, timezone
-
-        times = [parse_iso_utc(e.ts_utc) for e in gt.events]
-        if not times:
-            return None
-        margin = 1800.0
-        lo = datetime.fromtimestamp(min(times) - margin, timezone.utc)
-        hi = datetime.fromtimestamp(max(times) + margin, timezone.utc)
-        return {"start": iso_utc_ms(lo), "end": iso_utc_ms(hi)}
-
-    def _fs_scan_root(self, distro_id: str) -> Path | None:
-        # Root of a mounted/extracted filesystem for YARA to walk (/tmp, /etc
-        # under it). The current acquisition flow does not mount the E01, so this
-        # is opt-in: set host.fs_scan_root (or role default) to a directory where
-        # the image is mounted/extracted, else YARA is skipped.
-        # TODO: mount the read-only E01 (ewfmount + loop) here so YARA runs
-        # automatically without an externally provided root.
-        root = self._role_defaults.get("fs_scan_root")
-        if not root:
-            return None
-        p = Path(root)
-        return p if p.is_dir() else None
-
-    @staticmethod
-    def _deleted_file_targets(gt: GtManifest) -> list[dict[str, Any]]:
-        # Artifacts to attempt recovery for: the GT observables whose operation is
-        # deleted_file, deduped by value. Read from GT here (orchestrator is
-        # GT-aware) and handed to the runner as plain dicts to keep it blind.
-        targets: list[dict[str, Any]] = []
-        seen: set[str] = set()
-        for ev in gt.events:
-            for o in ev.observables:
-                if o.operation == "deleted_file" and o.entity_value not in seen:
-                    seen.add(o.entity_value)
-                    targets.append(
-                        {"entity_type": o.entity_type, "entity_value": o.entity_value}
-                    )
-        return targets
-
-    def _partition_info(
-        self,
-        distro_id: str,
-        disk_path: Path,
-        case_window: dict[str, str] | None = None,
-    ) -> dict[str, Any]:
-        # Filesystem context for the recovery runner. fs_type gates ext4magic;
-        # tmpfs_mounts mark volatile paths (deletions there are unrecoverable).
-        # offset_bytes locates the ext partition for tsk_recover (start-only);
-        # part_start_sector/part_count_sectors additionally let the runner carve
-        # the exact ext partition (dd skip/count) into a raw image for ext4magic,
-        # which cannot read the whole-disk E01. All best-effort.
-        from orchestrator.forensics.timeutil import parse_iso_utc
-
-        try:
-            start_sector, count_sectors = self._sleuth_runner.partition_extent(disk_path)
-        except Exception:
-            start_sector, count_sectors = 0, 0
-        # ext4magic -a/-b bound the journal scan to the case window (unix epoch
-        # seconds), reusing the same padded span the tsk heuristic uses.
-        window_start = window_end = None
-        if case_window:
-            try:
-                window_start = int(parse_iso_utc(case_window["start"]))
-                window_end = int(parse_iso_utc(case_window["end"]))
-            except Exception:
-                window_start = window_end = None
-        return {
-            "fs_type": self._role_defaults.get("root_fs_type", "ext4"),
-            "offset_bytes": start_sector * 512,
-            "part_start_sector": start_sector,
-            "part_count_sectors": count_sectors,
-            "window_start_epoch": window_start,
-            "window_end_epoch": window_end,
-            "is_tmpfs": False,
-            # Only genuinely volatile mounts. On Ubuntu 22.04 cloud images /tmp is
-            # disk-backed ext4 (NOT tmpfs), so deletions there ARE recoverable;
-            # listing /tmp here wrongly made the recovery skip /tmp targets as
-            # unsupported_fs (the scenario_01 cleanup G1/G7 false negatives).
-            "tmpfs_mounts": self._role_defaults.get(
-                "tmpfs_mounts", ["/dev/shm", "/run"]
-            ),
-        }
-
-    def _write_recovery_provenance(
-        self, run_id: str, analysis_dir: Path, tool_versions: dict[str, Any]
-    ) -> None:
-        # Record the recovery tool versions actually used in provenance.json so the
-        # run is reproducible (which of tsk_recover/ext4magic ran).
-        if not tool_versions:
-            return
-        try:
-            prov = build_provenance(
-                run_id,
-                artifacts={"findings": analysis_dir / "findings.jsonl"},
-                extra={"recovery_tool_versions": tool_versions},
-            )
-            write_provenance(prov, analysis_dir / "provenance.json")
-        except Exception as exc:
-            console.warn(f"provenance write degraded: {exc}")
-
-    def _build_timeline(
-        self, run_id: str, disk_path: Path, reuse_cached: bool = False
-    ) -> list[dict]:
+    def _build_timeline(self, run_id: str, disk_path: Path) -> list[dict]:
         """
         Run the Plaso pipeline over the acquired disk and return the events.
         Mirrors _verify_plaso but keeps the timeline as a named run artifact
-        (analysis/<run_id>/timeline.jsonl) for the timeline-based IOC specs.
-
-        reuse_cached skips the (expensive) Plaso run and reads the existing
-        timeline.jsonl instead -- used by analyze_run to iterate on specs.
+        (analysis/<run_id>/timeline.jsonl).
         """
 
         analysis_dir = self._paths.run_analysis_dir(run_id)
         storage_path = analysis_dir / "timeline.plaso"
         timeline_path = analysis_dir / "timeline.jsonl"
-
-        if reuse_cached:
-            events = read_timeline(timeline_path)
-            console.ok(f"timeline reused: {len(events)} event(s) ({timeline_path})")
-            return events
 
         file_filter = default_linux_filter()
         verify_plaso_inputs(file_filter=file_filter)

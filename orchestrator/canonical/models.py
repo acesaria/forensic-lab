@@ -36,15 +36,6 @@ class MatchLevel(str, Enum):
     NONE = "none"
 
 
-class RecoveryOutcome(str, Enum):
-    EXACT = "exact"
-    PARTIAL = "partial"
-    CLASS_ONLY = "class_only"
-    NOT_RECOVERED = "not_recovered"
-    SPURIOUS = "spurious"
-    INDETERMINATE = "indeterminate"
-
-
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -320,22 +311,3 @@ class MatchResult(CanonicalRecord):
         super().validate()
         if not 0.0 <= float(self.score) <= 1.0:
             raise ValueError("MatchResult.score must be between 0 and 1")
-
-
-@dataclass
-class MetricRow(CanonicalRecord):
-    required_fields: ClassVar[tuple[str, ...]] = (
-        "run_id",
-        "scenario_id",
-        "metric",
-        "value",
-    )
-
-    run_id: str
-    scenario_id: str
-    metric: str
-    value: float | int | str | None
-    target: str = "global"
-    numerator: float | int | None = None
-    denominator: float | int | None = None
-    notes: dict[str, Any] = field(default_factory=dict)

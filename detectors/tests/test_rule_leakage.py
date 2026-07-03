@@ -1,6 +1,7 @@
-# Phase 3.4 anti-circularity lint: collect every string literal from every GT
-# manifest in the repo (paths, filenames, IPs, usernames, exact timestamps) and
-# fail if any appears verbatim in any rule file under config/rules/.
+# Anti-circularity lint: collect every instance-looking string literal from
+# canonical run artifacts (artifact expectations and execution truth, real runs
+# and fixtures) and fail if any appears verbatim in a detector rule under
+# detectors/rules/.
 #
 # A detection rule that hardcodes an instance value is a circularity leak: it
 # would "detect" the seeded artifact by memorising it, and would break on the
@@ -11,36 +12,47 @@ import json
 import re
 from pathlib import Path
 
-_ROOT = Path(__file__).resolve().parent.parent.parent.parent
-_RULES_DIR = _ROOT / "orchestrator" / "evaluation" / "config" / "rules"
+_ROOT = Path(__file__).resolve().parent.parent.parent
+_RULES_DIR = _ROOT / "detectors" / "rules"
 
-# Manifests live next to runs and in the test fixtures. Scan both so a leak is
+# Ground truth lives next to runs and in test fixtures. Scan both so a leak is
 # caught whether it came from a real run or a fixture.
-_MANIFEST_GLOBS = (
-    "orchestrator/evaluation/tests/fixtures/gt_manifest.json",
-    "shared/experiments/*/dumps/gt_manifest.json",
-    "shared/experiments/*/gt_manifest.json",
+_GT_GLOBS = (
+    "matcher/tests/fixtures/artifact_expectations.jsonl",
+    "shared/experiments/*/dumps/artifact_expectations.jsonl",
+    "shared/experiments/*/dumps/execution_truth.jsonl",
+    "shared/experiments/*/artifact_expectations.jsonl",
+    "shared/experiments/*/execution_truth.jsonl",
 )
 
 # Tokens too generic to be "instance" values; matching them would be noise, not
-# a real leak (every cron rule legitimately says /etc/cron.d).
+# a real leak (every preload rule legitimately says /etc/ld.so.preload).
 _GENERIC = {
     "/etc/ld.so.preload",  # T1574.006 mechanism path, intrinsic not instance
+    "ld.so.preload",
     "ubuntu-22.04",
     "UTC",
     "user1",
+    "labuser",
     "root",
 }
 
 
-def _iter_manifest_strings():
-    for pattern in _MANIFEST_GLOBS:
+def _iter_gt_strings():
+    for pattern in _GT_GLOBS:
         for path in _ROOT.glob(pattern):
             try:
-                obj = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except OSError:
                 continue
-            yield from _strings_in(obj)
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                yield from _strings_in(obj)
 
 
 def _strings_in(obj):
@@ -60,7 +72,7 @@ def _instance_literals() -> set[str]:
     # filesystem paths, basenames with an extension, ip:port sockets, and exact
     # timestamps. Plain class words (technique ids) are excluded.
     out: set[str] = set()
-    for s in _iter_manifest_strings():
+    for s in _iter_gt_strings():
         if s.startswith("/") and len(s) > 1:
             out.add(s)
             base = s.rstrip("/").rsplit("/", 1)[-1]
@@ -79,21 +91,16 @@ def _instance_literals() -> set[str]:
 
 
 def _rule_files():
-    if not _RULES_DIR.is_dir():
-        return []
-    return [p for p in _RULES_DIR.rglob("*") if p.is_file()]
+    return [p for p in _RULES_DIR.rglob("*.yml") if p.is_file()]
 
 
-def test_no_instance_literal_in_rules():
+def test_no_instance_literal_in_detector_rules():
     literals = _instance_literals()
     if not literals:
-        return  # nothing seeded yet; lint is a no-op until a manifest exists
+        return  # nothing seeded yet; lint is a no-op until a run/fixture exists
     offenders = []
     for rule in _rule_files():
-        try:
-            text = rule.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
+        text = rule.read_text(encoding="utf-8")
         for lit in literals:
             if lit in text:
                 offenders.append((rule.relative_to(_ROOT).as_posix(), lit))

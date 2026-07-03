@@ -11,14 +11,12 @@
 #
 # Pure tool I/O: runs the binaries, walks their output, and decides a per-target
 # per-level OUTCOME (found / not_found / not_applicable / tool_error). It returns
-# plain result dicts and imports nothing from the evaluation layer, so it stays in
-# the forensics layer and never sees ground truth. Finding emission happens in
-# orchestrator/evaluation/detect/deleted_file_recovery.py, which maps these
-# results to Finding objects (the Prompt-4 runner/detector split).
+# plain result dicts and never sees ground truth. Not yet wired into the
+# canonical detect path; kept for future deleted-file recovery in hardened
+# scenarios.
 #
-# targets are plain dicts {entity_type, entity_value} handed in by the
-# orchestrator (derived from GT deleted_file observables); no GT module is
-# imported here.
+# targets are plain dicts {entity_type, entity_value} handed in by the caller;
+# no GT module is imported here.
 
 from __future__ import annotations
 

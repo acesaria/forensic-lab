@@ -9,7 +9,6 @@ from orchestrator.canonical import (
     GroundTruthEvent,
     MatchLevel,
     MatchResult,
-    MetricRow,
     ReferenceContext,
     ScenarioStep,
     TemporalQuality,
@@ -143,17 +142,9 @@ def test_other_canonical_records_validate_and_serialize():
         fields_matched=["artifact_class", "entity.path"],
         notes="",
     )
-    metric = MetricRow(
-        run_id="run-1",
-        scenario_id="scenario_01",
-        metric="critical_recall",
-        value=1.0,
-    )
-
     assert step.to_dict()["executor"] == "shell"
     assert claim.to_dict()["confidence"] == 0.9
     assert match.to_dict()["match_level"] == "instance"
-    assert metric.to_dict()["metric"] == "critical_recall"
 
 
 def test_missing_required_field_rejected():
