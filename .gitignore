@@ -48,11 +48,8 @@ shared/isf/
 forensics_report.json
 TODO.md
 
-!shared/experiments/
 
 shared/experiments/*
-!shared/experiments/ubuntu-22.04_userland_father_ldpreload_20260629-231821/
-
 shared/baselines/
 
 *.bak
