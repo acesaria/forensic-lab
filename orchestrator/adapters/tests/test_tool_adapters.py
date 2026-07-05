@@ -5,7 +5,7 @@ from orchestrator.adapters.plaso import adapt_plaso_jsonl_file
 from orchestrator.adapters.sleuthkit import adapt_bodyfile_file
 from orchestrator.adapters.volatility3 import adapt_volatility_json_file
 from orchestrator.adapters.yara import adapt_yara_matches_file
-from orchestrator.canonical import EvidenceSource, ToolFinding, load_jsonl
+from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding, load_jsonl
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -15,17 +15,26 @@ def test_sleuthkit_bodyfile_adapter_converts_file_and_deleted_candidate(tmp_path
     out = write_tool_findings(tmp_path / "tool_findings.jsonl", findings)
     loaded = load_jsonl(out, ToolFinding)
 
-    assert len(loaded) == 3
+    # 3 timed rows x 4 MACB kinds + 1 untimed deleted-realloc row
+    assert len(loaded) == 13
     assert {finding.artifact_class for finding in loaded} >= {
         "file",
         "service_unit_file",
         "deleted_file_candidate",
     }
-    deleted = next(f for f in loaded if f.artifact_class == "deleted_file_candidate")
-    assert deleted.tool == "sleuthkit"
-    assert deleted.source_type == EvidenceSource.DISK
-    assert deleted.entity["value"] == "/tmp/deleted.txt"
-    assert deleted.raw_ref.startswith("bodyfile:")
+    deleted = [f for f in loaded if f.entity["value"] == "/tmp/deleted.txt"]
+    assert {f.entity["time_kind"] for f in deleted} == {"atime", "mtime", "ctime", "crtime"}
+    assert all(f.artifact_class == "deleted_file_candidate" for f in deleted)
+    assert deleted[0].tool == "sleuthkit"
+    assert deleted[0].source_type == EvidenceSource.DISK
+    assert deleted[0].raw_ref.startswith("bodyfile:")
+
+    realloc = [f for f in loaded if f.entity["value"] == "/tmp/realloc.txt"]
+    assert len(realloc) == 1
+    assert realloc[0].artifact_class == "deleted_file_candidate"
+    assert realloc[0].entity["reallocated"] is True
+    assert "time_kind" not in realloc[0].entity
+    assert realloc[0].temporal_quality == TemporalQuality.NONE
 
 
 def test_volatility3_adapter_converts_process_socket_and_bash_history(tmp_path: Path):
@@ -73,6 +82,8 @@ def test_plaso_and_yara_adapters_convert_cached_outputs():
     assert plaso[0].tool == "plaso"
     assert plaso[0].artifact_class == "file"
     assert plaso[0].source_type == EvidenceSource.TIMELINE
+    assert plaso[0].entity["time_kind"] == "Content Modification Time"
+    assert "time_kind" not in plaso[1].entity
     assert yara[0].tool == "yara"
     assert yara[0].entity["rule"] == "Suspicious_Linux_SO"
     assert yara[0].raw_ref.startswith("yara:")

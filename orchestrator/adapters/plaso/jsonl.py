@@ -29,6 +29,9 @@ def adapt_plaso_events(
             timestamp = event["date_time"].get("timestamp")
         time = iso_from_plaso_timestamp(timestamp)
         artifact_class, entity_type = _classify(event, entity_value)
+        entity: dict[str, Any] = {"type": entity_type, "value": entity_value}
+        if event.get("timestamp_desc"):
+            entity["time_kind"] = event["timestamp_desc"]
         findings.append(
             make_tool_finding(
                 run_id=run_id,
@@ -36,7 +39,7 @@ def adapt_plaso_events(
                 tool_version=tool_version,
                 source_type=EvidenceSource.TIMELINE,
                 artifact_class=artifact_class,
-                entity={"type": entity_type, "value": entity_value},
+                entity=entity,
                 time=time,
                 raw_ref=f"plaso:{input_name}:event={idx}",
                 provenance={

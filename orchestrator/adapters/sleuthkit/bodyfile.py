@@ -50,10 +50,12 @@ def parse_bodyfile(lines: Iterable[str]) -> list[dict[str, Any]]:
                 "inode": parts[2],
                 "mode": parts[3],
                 "size": _to_int(parts[6]),
+                "atime": _to_float(parts[7]),
                 "mtime": _to_float(parts[8]),
                 "ctime": _to_float(parts[9]),
                 "crtime": _to_float(parts[10]),
                 "deleted": deleted,
+                "reallocated": "(deleted-realloc)" in name,
             }
         )
     return rows
@@ -73,6 +75,9 @@ def _to_float(s: str) -> float | None:
         return None
 
 
+_TIME_KINDS = ("crtime", "mtime", "ctime", "atime")
+
+
 def adapt_bodyfile(
     lines: Iterable[str],
     *,
@@ -83,33 +88,47 @@ def adapt_bodyfile(
     findings: list[ToolFinding] = []
     for idx, row in enumerate(parse_bodyfile(lines), start=1):
         path = row["path"]
-        time = iso_from_epoch(row.get("crtime") or row.get("mtime") or row.get("ctime"))
-        findings.append(
-            make_tool_finding(
-                run_id=run_id,
-                tool="sleuthkit",
-                tool_version=tool_version,
-                source_type=EvidenceSource.DISK,
-                artifact_class=_artifact_class(path, bool(row.get("deleted"))),
-                entity={
-                    "type": "path",
-                    "value": path,
-                    "inode": row.get("inode"),
-                    "mode": row.get("mode"),
-                    "size": row.get("size"),
-                    "deleted": bool(row.get("deleted")),
-                },
-                time=time,
-                raw_ref=f"bodyfile:{input_name}:line={idx}:inode={row.get('inode')}",
-                provenance={
-                    "adapter": "sleuthkit.bodyfile",
-                    "input": input_name,
-                    "row_index": idx,
-                    "parser": "fls -m bodyfile",
-                },
-                temporal_quality=TemporalQuality.EXACT if time else TemporalQuality.NONE,
+        entity: dict[str, Any] = {
+            "type": "path",
+            "value": path,
+            "inode": row.get("inode"),
+            "mode": row.get("mode"),
+            "size": row.get("size"),
+            "deleted": bool(row.get("deleted")),
+        }
+        timed: list[tuple[str, str]] = []
+        if row.get("reallocated"):
+            # A reallocated inode's metadata belongs to the new file, not the
+            # deleted name: emit no timed findings, offsets stay absent.
+            entity["reallocated"] = True
+        else:
+            timed = [
+                (kind, ts)
+                for kind in _TIME_KINDS
+                if (ts := iso_from_epoch(row.get(kind))) is not None
+            ]
+        # One finding per present timestamp kind (METHODOLOGY §6.D, §10.6);
+        # a row with no usable time still yields one untimed finding.
+        for kind, time in timed or [(None, None)]:
+            findings.append(
+                make_tool_finding(
+                    run_id=run_id,
+                    tool="sleuthkit",
+                    tool_version=tool_version,
+                    source_type=EvidenceSource.DISK,
+                    artifact_class=_artifact_class(path, bool(row.get("deleted"))),
+                    entity=dict(entity, time_kind=kind) if kind else dict(entity),
+                    time=time,
+                    raw_ref=f"bodyfile:{input_name}:line={idx}:inode={row.get('inode')}",
+                    provenance={
+                        "adapter": "sleuthkit.bodyfile",
+                        "input": input_name,
+                        "row_index": idx,
+                        "parser": "fls -m bodyfile",
+                    },
+                    temporal_quality=TemporalQuality.EXACT if time else TemporalQuality.NONE,
+                )
             )
-        )
     return findings
 
 
