@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from orchestrator.adapters.common import iso_from_epoch, make_tool_finding
-from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding
+from orchestrator.canonical import EvidenceSource, ToolFinding
 
 _SERVICE_DIRS = (
     "/etc/systemd/",
@@ -75,7 +75,7 @@ def _to_float(s: str) -> float | None:
         return None
 
 
-_TIME_KINDS = ("crtime", "mtime", "ctime", "atime")
+_TIME_KINDS = ("atime", "mtime", "ctime", "crtime")
 
 
 def adapt_bodyfile(
@@ -85,6 +85,9 @@ def adapt_bodyfile(
     tool_version: str = "unknown",
     input_name: str = "bodyfile",
 ) -> list[ToolFinding]:
+    # Bodyfile rows are disk *objects*, not timeline events (plaso owns those):
+    # one finding per row, typed MACB metadata under entity["timestamps"], and
+    # no scalar event time is claimed for the row.
     findings: list[ToolFinding] = []
     for idx, row in enumerate(parse_bodyfile(lines), start=1):
         path = row["path"]
@@ -96,39 +99,35 @@ def adapt_bodyfile(
             "size": row.get("size"),
             "deleted": bool(row.get("deleted")),
         }
-        timed: list[tuple[str, str]] = []
         if row.get("reallocated"):
             # A reallocated inode's metadata belongs to the new file, not the
-            # deleted name: emit no timed findings, offsets stay absent.
+            # deleted name: record no timestamps, offsets stay absent.
             entity["reallocated"] = True
         else:
-            timed = [
-                (kind, ts)
+            timestamps = {
+                kind: ts
                 for kind in _TIME_KINDS
                 if (ts := iso_from_epoch(row.get(kind))) is not None
-            ]
-        # One finding per present timestamp kind (METHODOLOGY §6.D, §10.6);
-        # a row with no usable time still yields one untimed finding.
-        for kind, time in timed or [(None, None)]:
-            findings.append(
-                make_tool_finding(
-                    run_id=run_id,
-                    tool="sleuthkit",
-                    tool_version=tool_version,
-                    source_type=EvidenceSource.DISK,
-                    artifact_class=_artifact_class(path, bool(row.get("deleted"))),
-                    entity=dict(entity, time_kind=kind) if kind else dict(entity),
-                    time=time,
-                    raw_ref=f"bodyfile:{input_name}:line={idx}:inode={row.get('inode')}",
-                    provenance={
-                        "adapter": "sleuthkit.bodyfile",
-                        "input": input_name,
-                        "row_index": idx,
-                        "parser": "fls -m bodyfile",
-                    },
-                    temporal_quality=TemporalQuality.EXACT if time else TemporalQuality.NONE,
-                )
+            }
+            if timestamps:
+                entity["timestamps"] = timestamps
+        findings.append(
+            make_tool_finding(
+                run_id=run_id,
+                tool="sleuthkit",
+                tool_version=tool_version,
+                source_type=EvidenceSource.DISK,
+                artifact_class=_artifact_class(path, bool(row.get("deleted"))),
+                entity=entity,
+                raw_ref=f"bodyfile:{input_name}:line={idx}:inode={row.get('inode')}",
+                provenance={
+                    "adapter": "sleuthkit.bodyfile",
+                    "input": input_name,
+                    "row_index": idx,
+                    "parser": "fls -m bodyfile",
+                },
             )
+        )
     return findings
 
 

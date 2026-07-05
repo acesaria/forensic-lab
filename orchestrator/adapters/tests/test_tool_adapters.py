@@ -15,26 +15,34 @@ def test_sleuthkit_bodyfile_adapter_converts_file_and_deleted_candidate(tmp_path
     out = write_tool_findings(tmp_path / "tool_findings.jsonl", findings)
     loaded = load_jsonl(out, ToolFinding)
 
-    # 3 timed rows x 4 MACB kinds + 1 untimed deleted-realloc row
-    assert len(loaded) == 13
+    # one object finding per bodyfile row; MACB stays on the object
+    assert len(loaded) == 4
     assert {finding.artifact_class for finding in loaded} >= {
         "file",
         "service_unit_file",
         "deleted_file_candidate",
     }
-    deleted = [f for f in loaded if f.entity["value"] == "/tmp/deleted.txt"]
-    assert {f.entity["time_kind"] for f in deleted} == {"atime", "mtime", "ctime", "crtime"}
-    assert all(f.artifact_class == "deleted_file_candidate" for f in deleted)
-    assert deleted[0].tool == "sleuthkit"
-    assert deleted[0].source_type == EvidenceSource.DISK
-    assert deleted[0].raw_ref.startswith("bodyfile:")
+    assert all(f.time is None for f in loaded)
+    assert all("time_kind" not in f.entity for f in loaded)
 
-    realloc = [f for f in loaded if f.entity["value"] == "/tmp/realloc.txt"]
-    assert len(realloc) == 1
-    assert realloc[0].artifact_class == "deleted_file_candidate"
-    assert realloc[0].entity["reallocated"] is True
-    assert "time_kind" not in realloc[0].entity
-    assert realloc[0].temporal_quality == TemporalQuality.NONE
+    payload = next(f for f in loaded if f.entity["value"] == "/tmp/payload.sh")
+    assert set(payload.entity["timestamps"]) == {"atime", "mtime", "ctime", "crtime"}
+    assert all(isinstance(ts, str) and ts for ts in payload.entity["timestamps"].values())
+
+    deleted = next(f for f in loaded if f.entity["value"] == "/tmp/deleted.txt")
+    assert deleted.artifact_class == "deleted_file_candidate"
+    assert deleted.entity["deleted"] is True
+    assert deleted.tool == "sleuthkit"
+    assert deleted.source_type == EvidenceSource.DISK
+    assert deleted.raw_ref.startswith("bodyfile:")
+
+    realloc = next(f for f in loaded if f.entity["value"] == "/tmp/realloc.txt")
+    assert realloc.artifact_class == "deleted_file_candidate"
+    assert realloc.entity["deleted"] is True
+    assert realloc.entity["reallocated"] is True
+    assert "timestamps" not in realloc.entity
+    assert realloc.time is None
+    assert realloc.temporal_quality == TemporalQuality.NONE
 
 
 def test_volatility3_adapter_converts_process_socket_and_bash_history(tmp_path: Path):
