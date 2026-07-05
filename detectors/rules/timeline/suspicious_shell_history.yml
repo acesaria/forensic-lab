@@ -4,7 +4,6 @@ description: Flags shell history and log lines containing command execution, per
 source_types: [memory, timeline, disk]
 artifact_classes: [shell_history_log_event]
 attck: [T1059.004, T1105, T1070.004, T1574.006]
-confidence_default: 0.68
 parameters:
   tokens:
     - curl

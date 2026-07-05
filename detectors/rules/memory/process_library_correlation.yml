@@ -4,7 +4,6 @@ description: Correlates a memory-observed process with a loaded shared object fr
 source_types: [memory]
 artifact_classes: [process, library_mapping, shared_object]
 attck: [T1574.006, T1014]
-confidence_default: 0.80
 parameters:
   path_prefixes: [/tmp/, /var/tmp/, /dev/shm/]
   path_tokens: [preload, rootkit]

@@ -4,7 +4,6 @@ description: Flags memory-observed processes, mappings, or backing files launche
 source_types: [memory]
 artifact_classes: [process, file]
 attck: [T1059.004, T1036, T1070.004]
-confidence_default: 0.78
 parameters:
   path_prefixes: [/tmp/, /var/tmp/, /dev/shm/]
   deleted_marker: "(deleted)"

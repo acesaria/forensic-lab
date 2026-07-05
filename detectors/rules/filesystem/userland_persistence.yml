@@ -4,7 +4,6 @@ description: Flags cron entries, systemd service/unit files, and user service pa
 source_types: [disk, timeline]
 artifact_classes: [file, service_unit_file]
 attck: [T1053.003, T1543.002, T1543.003]
-confidence_default: 0.82
 parameters:
   prefixes:
     - /etc/cron

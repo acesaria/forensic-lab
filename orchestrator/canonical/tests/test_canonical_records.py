@@ -7,16 +7,10 @@ from orchestrator.canonical import (
     DetectionClaim,
     EvidenceSource,
     GroundTruthEvent,
-    MatchLevel,
-    MatchResult,
-    ReferenceContext,
-    ScenarioStep,
     TemporalQuality,
     ToolFinding,
     append_jsonl,
-    load_json,
     load_jsonl,
-    write_json,
 )
 
 
@@ -50,6 +44,7 @@ def _expectation() -> ArtifactExpectation:
         instance_constraints={"path": "/tmp/payload.so"},
         critical=True,
         attck=["T1574.006"],
+        required_for_scoring=True,
     )
 
 
@@ -88,6 +83,16 @@ def test_artifact_expectations_jsonl_round_trip(tmp_path: Path):
 
     assert loaded == [_expectation()]
     assert loaded[0].source_eligibility == [EvidenceSource.DISK, EvidenceSource.TIMELINE]
+    assert loaded[0].required_for_scoring is True
+
+
+def test_required_for_scoring_fails_safe():
+    # METHODOLOGY 10.2: missing or null never scores.
+    data = _expectation().to_dict()
+    del data["required_for_scoring"]
+    assert ArtifactExpectation.from_dict(data).required_for_scoring is False
+    data["required_for_scoring"] = None
+    assert ArtifactExpectation.from_dict(data).required_for_scoring is False
 
 
 def test_tool_findings_jsonl_round_trip(tmp_path: Path):
@@ -100,51 +105,25 @@ def test_tool_findings_jsonl_round_trip(tmp_path: Path):
     assert loaded[0].source_type == EvidenceSource.DISK
 
 
-def test_json_round_trip_for_reference_context(tmp_path: Path):
-    record = ReferenceContext(
-        ref_id="raw-1",
-        run_id="run-1",
-        scenario_id="scenario_01",
-        source=EvidenceSource.TIMELINE,
-        locator="timeline.jsonl:10",
-    )
-    path = write_json(tmp_path / "reference_context.json", record)
-
-    assert load_json(path, ReferenceContext) == record
+def test_tool_finding_accepts_missing_time():
+    # METHODOLOGY 10.6: findings without a time are normal (memory is
+    # point-in-time); a JSONL row may omit the key entirely.
+    data = _finding().to_dict()
+    del data["time"]
+    assert ToolFinding.from_dict(data).time is None
 
 
 def test_other_canonical_records_validate_and_serialize():
-    step = ScenarioStep(
-        scenario_id="scenario_01",
-        step_id="S1",
-        action="create_ld_preload_payload",
-        command="touch /tmp/payload.so",
-        attck=["T1574.006"],
-    )
     claim = DetectionClaim(
         claim_id="dc-1",
         run_id="run-1",
         rule_id="tsk:temp_exec_created",
         artifact_class="ld_preload_payload",
         entity={"type": "path", "value": "/tmp/payload.so"},
-        confidence=0.9,
         source_findings=["tf-1"],
         attck=["T1574.006"],
     )
-    match = MatchResult(
-        match_id="m-1",
-        run_id="run-1",
-        target_id="AE1",
-        finding_or_claim_id="dc-1",
-        match_level=MatchLevel.INSTANCE,
-        relation="supports",
-        score=1.0,
-        fields_matched=["artifact_class", "entity.path"],
-        notes="",
-    )
-    assert step.to_dict()["executor"] == "shell"
-    assert claim.to_dict()["confidence"] == 0.9
-    assert match.to_dict()["match_level"] == "instance"
+    assert claim.to_dict()["entity"]["value"] == "/tmp/payload.so"
 
 
 def test_missing_required_field_rejected():
@@ -164,15 +143,3 @@ def test_missing_required_field_rejected():
         )
 
 
-def test_score_bounds_rejected():
-    with pytest.raises(ValueError):
-        DetectionClaim(
-            claim_id="dc-1",
-            run_id="run-1",
-            rule_id="rule",
-            artifact_class="class",
-            entity={},
-            confidence=2.0,
-            source_findings=[],
-            attck=[],
-        )

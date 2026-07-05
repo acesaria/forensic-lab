@@ -3,12 +3,17 @@
 This module consumes canonical ToolFinding rows from an already-acquired clean
 baseline run. It does not acquire a baseline, create cache directories, or read
 scenario ground truth.
+
+Per-claim output is exactly what metrics block C (METHODOLOGY §6) reads:
+``entity["baseline"] = {"status": <status>, "downgraded": <bool>}``. A claim is
+downgraded only when its path is present unchanged in the clean baseline and
+every linked finding is timeline-sourced — a conservative benign-noise marker
+that never drops the claim.
 """
 
 from __future__ import annotations
 
 import logging
-from collections import Counter
 from dataclasses import dataclass
 from typing import Any, Iterable
 
@@ -25,21 +30,11 @@ BASELINE_CHANGED = "changed_vs_baseline"
 BASELINE_PRESENT = "present_in_baseline"
 BASELINE_UNKNOWN = "unknown_baseline_status"
 
-@dataclass(frozen=True)
-class PathBaselineStatus:
-    path: str
-    status: str
-    compared_fields: tuple[str, ...] = ()
-    baseline_record_count: int = 0
-
 
 @dataclass(frozen=True)
 class BaselineComparison:
     identity: str
-    baseline_path_count: int
-    compromised_path_count: int
-    status_by_path: dict[str, PathBaselineStatus]
-    status_counts: dict[str, int]
+    status_by_path: dict[str, str]
 
 
 def compare_path_baseline(
@@ -57,36 +52,13 @@ def compare_path_baseline(
             identity,
             BASELINE_NEW,
         )
-    status_by_path: dict[str, PathBaselineStatus] = {}
-
-    for path, current_rows in sorted(current_index.items()):
-        baseline_rows = baseline_index.get(path, [])
-        if not baseline_rows:
-            status_by_path[path] = PathBaselineStatus(
-                path=path,
-                status=BASELINE_NEW,
-                compared_fields=(),
-                baseline_record_count=0,
-            )
-            continue
-        status, fields = _compare_rows(baseline_rows, current_rows)
-        status_by_path[path] = PathBaselineStatus(
-            path=path,
-            status=status,
-            compared_fields=fields,
-            baseline_record_count=len(baseline_rows),
-        )
-
-    counts = Counter(row.status for row in status_by_path.values())
-    for status in (BASELINE_NEW, BASELINE_CHANGED, BASELINE_PRESENT, BASELINE_UNKNOWN):
-        counts.setdefault(status, 0)
-    return BaselineComparison(
-        identity=identity,
-        baseline_path_count=len(baseline_index),
-        compromised_path_count=len(current_index),
-        status_by_path=status_by_path,
-        status_counts=dict(sorted(counts.items())),
-    )
+    status_by_path = {
+        path: _compare_rows(baseline_index[path], rows)
+        if path in baseline_index
+        else BASELINE_NEW
+        for path, rows in current_index.items()
+    }
+    return BaselineComparison(identity=identity, status_by_path=status_by_path)
 
 
 def apply_baseline_to_claims(
@@ -98,23 +70,21 @@ def apply_baseline_to_claims(
 ) -> list[DetectionClaim]:
     findings = list(compromised_findings)
     by_id = {finding.finding_id: finding for finding in findings}
-    comparison = compare_path_baseline(
-        baseline_findings,
-        findings,
-        identity=identity,
-    )
-    out: list[DetectionClaim] = []
-    for claim in claims:
+    comparison = compare_path_baseline(baseline_findings, findings, identity=identity)
+    out = list(claims)
+    for claim in out:
         path = _claim_path(claim)
-        status = comparison.status_by_path.get(path) if path else None
-        if status is None:
-            out.append(_with_unknown_baseline(claim, comparison))
-            continue
-        updated = _with_baseline_status(claim, status, comparison)
-        if _should_downgrade_present_baseline_candidate(updated, by_id):
-            updated = _downgrade_claim(updated)
-        out.append(updated)
+        status = comparison.status_by_path.get(path, BASELINE_UNKNOWN) if path else BASELINE_UNKNOWN
+        claim.entity["baseline"] = {
+            "status": status,
+            "downgraded": status == BASELINE_PRESENT and _timeline_only(claim, by_id),
+        }
     return out
+
+
+def _timeline_only(claim: DetectionClaim, findings_by_id: dict[str, ToolFinding]) -> bool:
+    linked = [findings_by_id[fid] for fid in claim.source_findings if fid in findings_by_id]
+    return bool(linked) and {finding.source_type for finding in linked} == {EvidenceSource.TIMELINE}
 
 
 def _index_findings(findings: Iterable[ToolFinding]) -> dict[str, list[ToolFinding]]:
@@ -143,10 +113,10 @@ _COMPARE_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
 def _compare_rows(
     baseline_rows: list[ToolFinding],
     current_rows: list[ToolFinding],
-) -> tuple[str, tuple[str, ...]]:
+) -> str:
     comparable = _comparable_fields(baseline_rows, current_rows)
     if not comparable:
-        return BASELINE_PRESENT, ()
+        return BASELINE_PRESENT
     aliases = dict(_COMPARE_FIELDS)
     for current in current_rows:
         for baseline in baseline_rows:
@@ -154,8 +124,8 @@ def _compare_rows(
                 _logical_value(current, aliases[field]) == _logical_value(baseline, aliases[field])
                 for field in comparable
             ):
-                return BASELINE_PRESENT, comparable
-    return BASELINE_CHANGED, comparable
+                return BASELINE_PRESENT
+    return BASELINE_CHANGED
 
 
 def _comparable_fields(
@@ -177,101 +147,6 @@ def _logical_value(finding: ToolFinding, aliases: tuple[str, ...]) -> Any:
         if value not in (None, ""):
             return value
     return None
-
-
-def _with_baseline_status(
-    claim: DetectionClaim,
-    status: PathBaselineStatus,
-    comparison: BaselineComparison,
-) -> DetectionClaim:
-    entity = dict(claim.entity)
-    entity["baseline"] = {
-        "identity": comparison.identity,
-        "status": status.status,
-        "path": status.path,
-        "compared_fields": list(status.compared_fields),
-        "baseline_record_count": status.baseline_record_count,
-        "baseline_path_count": comparison.baseline_path_count,
-        "compromised_path_count": comparison.compromised_path_count,
-        "status_counts": comparison.status_counts,
-        "filter_action": "none",
-    }
-    return _replace_claim(claim, entity=entity)
-
-
-def _with_unknown_baseline(
-    claim: DetectionClaim,
-    comparison: BaselineComparison,
-) -> DetectionClaim:
-    entity = dict(claim.entity)
-    entity["baseline"] = {
-        "identity": comparison.identity,
-        "status": BASELINE_UNKNOWN,
-        "path": None,
-        "compared_fields": [],
-        "baseline_record_count": 0,
-        "baseline_path_count": comparison.baseline_path_count,
-        "compromised_path_count": comparison.compromised_path_count,
-        "status_counts": comparison.status_counts,
-        "filter_action": "none",
-    }
-    return _replace_claim(claim, entity=entity)
-
-
-def _should_downgrade_present_baseline_candidate(
-    claim: DetectionClaim,
-    findings_by_id: dict[str, ToolFinding],
-) -> bool:
-    baseline = claim.entity.get("baseline")
-    if not isinstance(baseline, dict) or baseline.get("status") != BASELINE_PRESENT:
-        return False
-    linked = [findings_by_id[fid] for fid in claim.source_findings if fid in findings_by_id]
-    if not linked:
-        return False
-    sources = {finding.source_type for finding in linked}
-    return sources == {EvidenceSource.TIMELINE}
-
-
-def _downgrade_claim(claim: DetectionClaim) -> DetectionClaim:
-    capped = min(float(claim.confidence), 0.35)
-    if capped >= float(claim.confidence):
-        # Confidence already at or below the cap: nothing to downgrade, so leave
-        # filter_action='none' rather than inflating candidate_downgrades.
-        return claim
-    entity = dict(claim.entity)
-    baseline = dict(entity.get("baseline") or {})
-    baseline["filter_action"] = "confidence_downgraded"
-    entity["baseline"] = baseline
-    notes = claim.notes
-    marker = "baseline_present_timeline_only=confidence_downgraded"
-    if marker not in notes:
-        notes = f"{notes}; {marker}" if notes else marker
-    return _replace_claim(
-        claim,
-        entity=entity,
-        confidence=capped,
-        notes=notes,
-    )
-
-
-def _replace_claim(
-    claim: DetectionClaim,
-    *,
-    entity: dict[str, Any],
-    confidence: float | None = None,
-    notes: str | None = None,
-) -> DetectionClaim:
-    return DetectionClaim(
-        claim_id=claim.claim_id,
-        run_id=claim.run_id,
-        rule_id=claim.rule_id,
-        artifact_class=claim.artifact_class,
-        entity=entity,
-        confidence=claim.confidence if confidence is None else confidence,
-        source_findings=list(claim.source_findings),
-        attck=list(claim.attck),
-        notes=claim.notes if notes is None else notes,
-    )
 
 
 def _claim_path(claim: DetectionClaim) -> str:

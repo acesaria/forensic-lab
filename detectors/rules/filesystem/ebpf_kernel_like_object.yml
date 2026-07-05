@@ -4,7 +4,6 @@ description: Flags eBPF/BPF-related filesystem objects as low-confidence kernel-
 source_types: [disk, timeline]
 artifact_classes: [file]
 attck: [T1014, T1547]
-confidence_default: 0.35
 parameters:
   path_tokens: [/sys/fs/bpf, /proc/sys/net/core/bpf, bpf, ebpf]
   benign_scope: true

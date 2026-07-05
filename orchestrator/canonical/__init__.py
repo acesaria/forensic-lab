@@ -2,9 +2,7 @@
 
 from orchestrator.canonical.io import (
     append_jsonl,
-    load_json,
     load_jsonl,
-    write_json,
     write_jsonl,
 )
 from orchestrator.canonical.models import (
@@ -12,10 +10,6 @@ from orchestrator.canonical.models import (
     DetectionClaim,
     EvidenceSource,
     GroundTruthEvent,
-    MatchLevel,
-    MatchResult,
-    ReferenceContext,
-    ScenarioStep,
     TemporalQuality,
     ToolFinding,
 )
@@ -25,15 +19,9 @@ __all__ = [
     "DetectionClaim",
     "EvidenceSource",
     "GroundTruthEvent",
-    "MatchLevel",
-    "MatchResult",
-    "ReferenceContext",
-    "ScenarioStep",
     "TemporalQuality",
     "ToolFinding",
     "append_jsonl",
-    "load_json",
     "load_jsonl",
-    "write_json",
     "write_jsonl",
 ]

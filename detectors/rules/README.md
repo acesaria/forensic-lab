@@ -12,7 +12,6 @@ Each rule is Sigma-lite YAML:
 - `source_types`: canonical evidence sources accepted by the rule;
 - `artifact_classes`: canonical artifact classes accepted by the rule;
 - `attck`: ATT&CK tags attached to resulting `DetectionClaim` rows;
-- `confidence_default`: default claim confidence;
 - `parameters`: rule-specific, non-scenario target predicates.
 
 The engine in `detectors/engine.py` loads these YAML files and emits

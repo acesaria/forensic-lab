@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
+from functools import lru_cache
 from pathlib import Path
 from types import UnionType
 from typing import Any, ClassVar, get_args, get_origin, get_type_hints
@@ -30,12 +31,6 @@ class TemporalQuality(str, Enum):
     NONE = "none"
 
 
-class MatchLevel(str, Enum):
-    INSTANCE = "instance"
-    CLASS = "class"
-    NONE = "none"
-
-
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -46,6 +41,13 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_jsonable(v) for v in value]
     return value
+
+
+# ponytail: cached per class -- validate()/from_dict() run per record, and
+# get_type_hints() reflection per row is measurable on multi-thousand-row runs.
+@lru_cache(maxsize=None)
+def _type_hints(cls: type) -> dict[str, Any]:
+    return get_type_hints(cls)
 
 
 def _is_optional(annotation: Any) -> bool:
@@ -90,8 +92,7 @@ class CanonicalRecord:
                 and name not in self.allow_empty_required_fields
             ):
                 raise ValueError(f"{self.__class__.__name__}.{name} is required")
-        hints = get_type_hints(self.__class__)
-        for name, annotation in hints.items():
+        for name, annotation in _type_hints(self.__class__).items():
             if name in ("required_fields", "allow_empty_required_fields"):
                 continue
             value = getattr(self, name, None)
@@ -109,9 +110,8 @@ class CanonicalRecord:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]):
-        hints = get_type_hints(cls)
         kwargs: dict[str, Any] = {}
-        for name, annotation in hints.items():
+        for name, annotation in _type_hints(cls).items():
             if name in ("required_fields", "allow_empty_required_fields"):
                 continue
             if name in data:
@@ -121,25 +121,6 @@ class CanonicalRecord:
     @classmethod
     def from_json(cls, text: str):
         return cls.from_dict(json.loads(text))
-
-
-@dataclass
-class ScenarioStep(CanonicalRecord):
-    required_fields: ClassVar[tuple[str, ...]] = (
-        "scenario_id",
-        "step_id",
-        "action",
-    )
-
-    scenario_id: str
-    step_id: str
-    action: str
-    executor: str = "shell"
-    command: str | None = None
-    actor: str = "attacker"
-    parameters: dict[str, Any] = field(default_factory=dict)
-    attck: list[str] = field(default_factory=list)
-    description: str = ""
 
 
 @dataclass
@@ -200,31 +181,30 @@ class ArtifactExpectation(CanonicalRecord):
     instance_constraints: dict[str, Any]
     critical: bool
     attck: list[str]
+    # Scored vs contextual (METHODOLOGY §3, §10.2): only expectations authored
+    # with required_for_scoring: true enter metric denominators. Fail safe:
+    # missing/null/non-True never scores.
+    required_for_scoring: bool = False
     temporal_quality: TemporalQuality = TemporalQuality.NONE
     notes: str = ""
 
-
-@dataclass
-class ReferenceContext(CanonicalRecord):
-    required_fields: ClassVar[tuple[str, ...]] = (
-        "ref_id",
-        "run_id",
-        "scenario_id",
-        "source",
-        "locator",
-    )
-
-    ref_id: str
-    run_id: str
-    scenario_id: str
-    source: EvidenceSource
-    locator: str
-    description: str = ""
-    provenance: dict[str, Any] = field(default_factory=dict)
+    def validate(self) -> None:
+        super().validate()
+        self.required_for_scoring = self.required_for_scoring is True
 
 
 @dataclass
 class ToolFinding(CanonicalRecord):
+    """One normalized row of raw tool output.
+
+    time_kind convention (METHODOLOGY §6.D, §10.6): when ``time`` is set, the
+    adapter records which timestamp it is in ``entity["time_kind"]`` --
+    ``crtime`` / ``mtime`` / ``ctime`` / ``atime`` for filesystem sources, the
+    plaso ``timestamp_desc`` value for timeline sources. No ``time`` (memory is
+    point-in-time) means no ``time_kind``. Adapters never collapse MACB into
+    one unlabelled timestamp. (Adapters fill this in the v3 Step 5 pass.)
+    """
+
     required_fields: ClassVar[tuple[str, ...]] = (
         "finding_id",
         "run_id",
@@ -234,7 +214,6 @@ class ToolFinding(CanonicalRecord):
         "source_type",
         "artifact_class",
         "entity",
-        "time",
         "raw_ref",
         "provenance",
     )
@@ -247,21 +226,24 @@ class ToolFinding(CanonicalRecord):
     source_type: EvidenceSource
     artifact_class: str
     entity: dict[str, Any]
-    time: str | None
     raw_ref: str
     provenance: dict[str, Any]
+    time: str | None = None
     temporal_quality: TemporalQuality = TemporalQuality.NONE
 
 
 @dataclass
 class DetectionClaim(CanonicalRecord):
+    """A GT-blind rule shortlisted findings (METHODOLOGY §3). No confidence
+    float: the only claim-level grading v3 reads is the baseline downgrade
+    flag in ``entity["baseline"]["downgraded"]`` (§6.C)."""
+
     required_fields: ClassVar[tuple[str, ...]] = (
         "claim_id",
         "run_id",
         "rule_id",
         "artifact_class",
         "entity",
-        "confidence",
         "source_findings",
         "attck",
     )
@@ -271,43 +253,6 @@ class DetectionClaim(CanonicalRecord):
     rule_id: str
     artifact_class: str
     entity: dict[str, Any]
-    confidence: float
     source_findings: list[str]
     attck: list[str]
     notes: str = ""
-
-    def validate(self) -> None:
-        super().validate()
-        if not 0.0 <= float(self.confidence) <= 1.0:
-            raise ValueError("DetectionClaim.confidence must be between 0 and 1")
-
-
-@dataclass
-class MatchResult(CanonicalRecord):
-    required_fields: ClassVar[tuple[str, ...]] = (
-        "match_id",
-        "run_id",
-        "target_id",
-        "finding_or_claim_id",
-        "match_level",
-        "relation",
-        "score",
-        "fields_matched",
-        "notes",
-    )
-    allow_empty_required_fields: ClassVar[tuple[str, ...]] = ("notes",)
-
-    match_id: str
-    run_id: str
-    target_id: str
-    finding_or_claim_id: str
-    match_level: MatchLevel
-    relation: str
-    score: float
-    fields_matched: list[str]
-    notes: str
-
-    def validate(self) -> None:
-        super().validate()
-        if not 0.0 <= float(self.score) <= 1.0:
-            raise ValueError("MatchResult.score must be between 0 and 1")

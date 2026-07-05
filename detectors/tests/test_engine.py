@@ -30,7 +30,6 @@ def test_rules_have_sigma_lite_metadata():
         assert rule.source_types
         assert rule.artifact_classes
         assert rule.attck
-        assert 0.0 <= rule.confidence_default <= 1.0
         assert yaml.safe_load(rule.path.read_text(encoding="utf-8"))["id"] == rule.id
 
 
@@ -107,8 +106,6 @@ def test_duplicate_process_library_memory_claims_collapse_to_logical_candidate()
     ]
 
     assert len(claims) == 1
-    assert claims[0].entity["collapsed_candidate_count"] == 4
-    assert claims[0].entity["source_finding_count"] == 4
     assert set(claims[0].source_findings) == {finding.finding_id for finding in findings}
 
 
@@ -152,8 +149,6 @@ def test_duplicate_process_socket_memory_claims_collapse_to_logical_candidate():
     ]
 
     assert len(claims) == 1
-    assert claims[0].entity["collapsed_candidate_count"] == 4
-    assert claims[0].entity["source_finding_count"] == 4
     assert set(claims[0].source_findings) == {finding.finding_id for finding in findings}
 
 

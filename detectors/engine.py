@@ -29,7 +29,6 @@ class Rule:
     source_types: tuple[str, ...]
     artifact_classes: tuple[str, ...]
     attck: tuple[str, ...]
-    confidence_default: float
     parameters: dict[str, Any]
     path: Path
 
@@ -51,11 +50,10 @@ def run_detectors(
         if detector is None:
             continue
         claims.extend(detector(rule, items))
-    prepared = prepare_detection_claims(claims)
+    prepared = assign_claim_ids(claims)
     if baseline_findings is not None and baseline_identity:
-        # Baseline annotation preserves each claim's id, order and dedup key, so
-        # the claims stay prepared; re-running prepare_detection_claims here would
-        # only re-sort and re-hash an identical set.
+        # Baseline annotation preserves each claim's id and order, so the
+        # claims stay prepared.
         return apply_baseline_to_claims(
             prepared,
             items,
@@ -86,7 +84,7 @@ def run_detectors_file(
 
 
 def write_detection_claims(path: str | Path, claims: Iterable[DetectionClaim]) -> Path:
-    return write_jsonl(path, prepare_detection_claims(claims))
+    return write_jsonl(path, assign_claim_ids(claims))
 
 
 def load_rules(rules_dir: str | Path | None = None) -> list[Rule]:
@@ -102,7 +100,6 @@ def load_rules(rules_dir: str | Path | None = None) -> list[Rule]:
                 source_types=tuple(str(x) for x in data.get("source_types") or []),
                 artifact_classes=tuple(str(x) for x in data.get("artifact_classes") or []),
                 attck=tuple(str(x) for x in data.get("attck") or []),
-                confidence_default=float(data.get("confidence_default", 0.5)),
                 parameters=dict(data.get("parameters") or {}),
                 path=path,
             )
@@ -121,141 +118,25 @@ def assign_claim_ids(claims: Iterable[DetectionClaim]) -> list[DetectionClaim]:
     return items
 
 
-def prepare_detection_claims(claims: Iterable[DetectionClaim]) -> list[DetectionClaim]:
-    return assign_claim_ids(_dedupe_memory_correlation_claims(claims))
-
-
-def _dedupe_memory_correlation_claims(claims: Iterable[DetectionClaim]) -> list[DetectionClaim]:
-    passthrough: list[DetectionClaim] = []
-    groups: dict[tuple[Any, ...], list[DetectionClaim]] = {}
-    for claim in claims:
-        key = _memory_correlation_key(claim)
-        if key is None:
-            passthrough.append(claim)
-        else:
-            groups.setdefault(key, []).append(claim)
-    return [*passthrough, *(_collapse_memory_group(group) for group in groups.values())]
-
-
-def _memory_correlation_key(claim: DetectionClaim) -> tuple[Any, ...] | None:
-    entity = claim.entity
-    if claim.rule_id == "flab.memory.process_library_correlation":
-        process = _entity_dict(entity, "process")
-        library = _entity_dict(entity, "library")
-        return (
-            claim.run_id,
-            claim.rule_id,
-            claim.artifact_class,
-            entity.get("type"),
-            _normalized_scalar(entity.get("pid")),
-            _process_identity(process),
-            _path_identity(library),
-            _normalized_scalar(entity.get("expectation_class") or entity.get("artifact_class")),
-        )
-    if claim.rule_id == "flab.memory.process_socket_correlation":
-        process = _entity_dict(entity, "process")
-        socket = _entity_dict(entity, "socket")
-        return (
-            claim.run_id,
-            claim.rule_id,
-            claim.artifact_class,
-            entity.get("type"),
-            _normalized_scalar(entity.get("pid")),
-            _process_identity(process),
-            _endpoint_identity(_entity_dict(socket, "local")),
-            _endpoint_identity(_entity_dict(socket, "remote")),
-            _normalized_scalar(socket.get("value")),
-            _normalized_scalar(socket.get("protocol") or entity.get("protocol")),
-            _normalized_scalar(entity.get("expectation_class") or entity.get("artifact_class")),
-        )
-    return None
-
-
-def _collapse_memory_group(group: list[DetectionClaim]) -> DetectionClaim:
-    representative = min(group, key=_claim_sort_key)
-    if len(group) == 1:
-        return representative
-
-    source_findings = sorted({fid for claim in group for fid in claim.source_findings})
-    entity = dict(representative.entity)
-    entity["collapsed_candidate_count"] = len(group)
-    entity["source_finding_count"] = len(source_findings)
-    entity["representative_source_findings"] = source_findings[:8]
-    notes = representative.notes
-    marker = f"collapsed_from={len(group)} memory-correlation candidates"
-    if marker not in notes:
-        notes = f"{notes}; {marker}" if notes else marker
-    return DetectionClaim(
-        claim_id=representative.claim_id,
-        run_id=representative.run_id,
-        rule_id=representative.rule_id,
-        artifact_class=representative.artifact_class,
-        entity=entity,
-        confidence=max(float(claim.confidence) for claim in group),
-        source_findings=source_findings,
-        attck=list(representative.attck),
-        notes=notes,
-    )
-
-
-def _entity_dict(entity: dict[str, Any], key: str) -> dict[str, Any]:
-    value = entity.get(key)
-    return dict(value) if isinstance(value, dict) else {}
-
-
-def _normalized_scalar(value: Any) -> str:
-    return str(value or "").strip().lower()
-
-
-def _process_identity(process: dict[str, Any]) -> str:
-    return _normalized_scalar(
-        process.get("name")
-        or process.get("comm")
-        or process.get("value")
-        or process.get("path")
-        or process.get("argv")
-    )
-
-
-def _path_identity(entity: dict[str, Any]) -> str:
-    return _normalized_scalar(entity.get("path") or entity.get("value"))
-
-
-def _endpoint_identity(endpoint: dict[str, Any]) -> tuple[str, str]:
-    return (
-        _normalized_scalar(endpoint.get("address") or endpoint.get("ip")),
-        _normalized_scalar(endpoint.get("port")),
-    )
-
-
 def _claim(
     rule: Rule,
     finding: ToolFinding,
     *,
     artifact_class: str | None = None,
     entity: dict[str, Any] | None = None,
-    confidence: float | None = None,
     source_findings: list[str] | None = None,
     notes: str = "",
 ) -> DetectionClaim:
     return DetectionClaim(
-        claim_id=_initial_claim_id(rule, finding),
+        claim_id="dc-pending",  # assign_claim_ids gives the real deterministic id
         run_id=finding.run_id,
         rule_id=rule.id,
         artifact_class=artifact_class or finding.artifact_class,
         entity=entity or dict(finding.entity),
-        confidence=confidence if confidence is not None else rule.confidence_default,
         source_findings=source_findings or [finding.finding_id],
         attck=list(rule.attck),
         notes=_notes(rule, notes),
     )
-
-
-def _initial_claim_id(rule: Rule, finding: ToolFinding) -> str:
-    digest = hashlib.sha1(
-        f"{finding.run_id}|{rule.id}|{finding.finding_id}|{finding.raw_ref}".encode("utf-8")
-    ).hexdigest()[:12]
-    return f"dc-{digest}"
 
 
 def _notes(rule: Rule, extra: str) -> str:
@@ -303,16 +184,8 @@ def _suspicious_temp_path(rule: Rule, findings: list[ToolFinding]) -> Iterable[D
     for finding in findings:
         if not (_source_allowed(rule, finding) and _class_allowed(rule, finding)):
             continue
-        path = _entity_path(finding)
-        if not path.startswith(prefixes):
-            continue
-        confidence = rule.confidence_default
-        mode = str(finding.entity.get("mode") or "")
-        if "x" in mode:
-            confidence = min(0.95, confidence + 0.12)
-        if finding.artifact_class == "deleted_file_candidate" or finding.entity.get("deleted"):
-            confidence = min(0.95, confidence + 0.08)
-        yield _claim(rule, finding, confidence=confidence)
+        if _entity_path(finding).startswith(prefixes):
+            yield _claim(rule, finding)
 
 
 def _userland_persistence(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
@@ -335,7 +208,7 @@ def _ebpf_object(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionC
             continue
         path = _entity_path(finding).lower()
         if any(token in path for token in tokens):
-            yield _claim(rule, finding, notes="low-confidence benign/kernel-like scope")
+            yield _claim(rule, finding, notes="benign/kernel-like scope")
 
 
 def _ld_preload_configuration(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
@@ -345,12 +218,7 @@ def _ld_preload_configuration(rule: Rule, findings: list[ToolFinding]) -> Iterab
             continue
         value = (_entity_value(finding) + " " + str(finding.entity.get("path") or "")).lower()
         if finding.artifact_class == "preload_configuration" or any(token.lower() in value for token in tokens):
-            yield _claim(
-                rule,
-                finding,
-                artifact_class="preload_configuration",
-                entity=dict(finding.entity),
-            )
+            yield _claim(rule, finding, artifact_class="preload_configuration")
 
 
 def _suspicious_shared_object(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
@@ -365,12 +233,7 @@ def _suspicious_shared_object(rule: Rule, findings: list[ToolFinding]) -> Iterab
         is_so = path.endswith(suffixes) or ".so." in path
         suspicious = path.startswith(prefixes) or any(token in lower for token in tokens)
         if is_so and suspicious:
-            yield _claim(
-                rule,
-                finding,
-                artifact_class="shared_object",
-                entity=dict(finding.entity),
-            )
+            yield _claim(rule, finding, artifact_class="shared_object")
 
 
 def _deleted_artifact_cleanup(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
@@ -393,42 +256,62 @@ def _process_from_unusual_path(rule: Rule, findings: list[ToolFinding]) -> Itera
             yield _claim(rule, finding)
 
 
-def _process_library_correlation(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
-    prefixes = tuple(rule.parameters.get("path_prefixes") or [])
-    tokens = tuple(str(x).lower() for x in rule.parameters.get("path_tokens") or [])
-    by_run_pid: dict[tuple[str, str], dict[str, list[ToolFinding]]] = {}
+def _pid_buckets(
+    rule: Rule,
+    findings: list[ToolFinding],
+    other_classes: tuple[str, ...],
+) -> Iterable[tuple[str, list[ToolFinding], list[ToolFinding]]]:
+    """Group rule-eligible findings by (run_id, pid) into process vs other rows."""
+    by_run_pid: dict[tuple[str, str], tuple[list[ToolFinding], list[ToolFinding]]] = {}
     for finding in findings:
         if not (_source_allowed(rule, finding) and _class_allowed(rule, finding)):
             continue
         pid = _pid(finding)
         if pid in (None, ""):
             continue
-        bucket = by_run_pid.setdefault((finding.run_id, str(pid)), {"process": [], "library": []})
+        procs, others = by_run_pid.setdefault((finding.run_id, str(pid)), ([], []))
         if finding.artifact_class == "process":
-            bucket["process"].append(finding)
-        elif finding.artifact_class in ("library_mapping", "shared_object"):
-            bucket["library"].append(finding)
-    for (_run_id, pid), bucket in by_run_pid.items():
-        for proc in bucket["process"]:
-            for lib in bucket["library"]:
+            procs.append(finding)
+        elif finding.artifact_class in other_classes:
+            others.append(finding)
+    for (_run_id, pid), (procs, others) in by_run_pid.items():
+        yield pid, procs, others
+
+
+def _process_name(proc: ToolFinding) -> str:
+    e = proc.entity
+    return str(e.get("name") or e.get("comm") or e.get("value") or e.get("path") or "").lower()
+
+
+def _process_library_correlation(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
+    prefixes = tuple(rule.parameters.get("path_prefixes") or [])
+    tokens = tuple(str(x).lower() for x in rule.parameters.get("path_tokens") or [])
+    for pid, procs, libs in _pid_buckets(rule, findings, ("library_mapping", "shared_object")):
+        # One claim per (process name, library path): pslist/psscan duplicates
+        # of the same logical process->library link merge into one candidate.
+        groups: dict[tuple[str, str], list[tuple[ToolFinding, ToolFinding]]] = {}
+        for proc in procs:
+            for lib in libs:
                 path = _entity_path(lib)
                 lower = path.lower()
-                if not (path.startswith(prefixes) or any(token in lower for token in tokens)):
-                    continue
-                entity = {
-                    "type": "process_library",
-                    "value": f"{proc.entity.get('value')} -> {path}",
-                    "pid": pid,
-                    "process": dict(proc.entity),
-                    "library": dict(lib.entity),
-                }
-                yield _claim(
-                    rule,
-                    lib,
-                    artifact_class="library_mapping",
-                    entity=entity,
-                    source_findings=[proc.finding_id, lib.finding_id],
-                )
+                if path.startswith(prefixes) or any(token in lower for token in tokens):
+                    groups.setdefault((_process_name(proc), lower), []).append((proc, lib))
+        for pairs in groups.values():
+            proc, lib = pairs[0]
+            entity = {
+                "type": "process_library",
+                "value": f"{proc.entity.get('value')} -> {_entity_path(lib)}",
+                "pid": pid,
+                "process": dict(proc.entity),
+                "library": dict(lib.entity),
+            }
+            yield _claim(
+                rule,
+                lib,
+                artifact_class="library_mapping",
+                entity=entity,
+                source_findings=sorted({f.finding_id for pair in pairs for f in pair}),
+            )
 
 
 def _is_remote_connection(finding: ToolFinding) -> bool:
@@ -459,35 +342,32 @@ def _is_remote_connection(finding: ToolFinding) -> bool:
 
 
 def _process_socket_correlation(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
-    by_run_pid: dict[tuple[str, Any], dict[str, list[ToolFinding]]] = {}
-    for finding in findings:
-        if not (_source_allowed(rule, finding) and _class_allowed(rule, finding)):
-            continue
-        pid = _pid(finding)
-        if pid in (None, ""):
-            continue
-        if finding.artifact_class == "socket" and not _is_remote_connection(finding):
-            continue
-        bucket = by_run_pid.setdefault((finding.run_id, str(pid)), {"process": [], "socket": []})
-        if finding.artifact_class in bucket:
-            bucket[finding.artifact_class].append(finding)
-    for (_run_id, pid), bucket in by_run_pid.items():
-        for proc in bucket["process"]:
-            for sock in bucket["socket"]:
-                entity = {
-                    "type": "process_socket",
-                    "value": f"{proc.entity.get('value')} -> {sock.entity.get('value')}",
-                    "pid": pid,
-                    "process": dict(proc.entity),
-                    "socket": dict(sock.entity),
-                }
-                yield _claim(
-                    rule,
-                    sock,
-                    artifact_class="process_socket_correlation",
-                    entity=entity,
-                    source_findings=[proc.finding_id, sock.finding_id],
-                )
+    for pid, procs, socks in _pid_buckets(rule, findings, ("socket",)):
+        # One claim per (process name, endpoint): duplicate scans of the same
+        # logical process->connection link merge into one candidate.
+        groups: dict[tuple[str, str], list[tuple[ToolFinding, ToolFinding]]] = {}
+        for proc in procs:
+            for sock in socks:
+                if not _is_remote_connection(sock):
+                    continue
+                key = (_process_name(proc), _entity_value(sock).lower())
+                groups.setdefault(key, []).append((proc, sock))
+        for pairs in groups.values():
+            proc, sock = pairs[0]
+            entity = {
+                "type": "process_socket",
+                "value": f"{proc.entity.get('value')} -> {sock.entity.get('value')}",
+                "pid": pid,
+                "process": dict(proc.entity),
+                "socket": dict(sock.entity),
+            }
+            yield _claim(
+                rule,
+                sock,
+                artifact_class="process_socket_correlation",
+                entity=entity,
+                source_findings=sorted({f.finding_id for pair in pairs for f in pair}),
+            )
 
 
 def _suspicious_shell_history(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:

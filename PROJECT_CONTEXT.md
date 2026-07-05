@@ -24,6 +24,9 @@ incident-response system, and must not grow toward one.
 7. GT-aware expectation matching (matcher/)
 8. metrics + score report
 
+Evaluation semantics (vocabulary, matching rules, metric definitions) are
+normative in METHODOLOGY.md; matcher/metrics code implements that page.
+
 ## Evidence terminology
 
 - Raw finding      = ToolFinding. Broad extracted evidence. Never a result.

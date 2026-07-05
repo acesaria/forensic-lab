@@ -130,21 +130,13 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     )
     match_canonical.add_argument("--expectations", required=True)
     match_canonical.add_argument("--tool-findings", required=True)
+    match_canonical.add_argument("--detection-claims", required=True)
     match_canonical.add_argument(
-        "--detection-claims",
+        "--execution-truth",
         default=None,
-        help="Canonical DetectionClaim JSONL; required for thesis metric reporting",
+        help="Optional execution_truth.jsonl enabling the temporal block (RQ4)",
     )
     match_canonical.add_argument("--out-dir", required=True)
-    match_canonical.add_argument("--time-window-s", type=float, default=120.0)
-    match_canonical.add_argument(
-        "--debug-raw-findings",
-        action="store_true",
-        help=(
-            "DEBUG ONLY: score raw ToolFinding records when no detection claims "
-            "are supplied; not for thesis metric reporting"
-        ),
-    )
 
     return parser
 
@@ -254,26 +246,16 @@ def _cmd_run_detectors(args: argparse.Namespace) -> int:
 def _cmd_match_canonical(args: argparse.Namespace) -> int:
     from matcher.engine import render_console_summary, run_matcher_files
 
-    if not args.detection_claims and not args.debug_raw_findings:
-        print(
-            "error: match-canonical requires --detection-claims for claim-level "
-            "thesis scoring; use --debug-raw-findings only for debug raw "
-            "ToolFinding fallback",
-            file=sys.stderr,
-        )
-        return 2
-
     result = run_matcher_files(
         expectations_path=args.expectations,
         tool_findings_path=args.tool_findings,
         detection_claims_path=args.detection_claims,
+        execution_truth_path=args.execution_truth,
         out_dir=args.out_dir,
-        time_window_s=args.time_window_s,
-        allow_raw_finding_fallback=args.debug_raw_findings,
     )
     for line in render_console_summary(result["metrics"]):
         print(line)
-    print(f"wrote matches.jsonl + metrics.json + score_report.md to {args.out_dir}")
+    print(f"wrote outcomes.jsonl + metrics.json + report.md to {args.out_dir}")
     return 0
 
 

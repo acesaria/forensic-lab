@@ -7,7 +7,7 @@ artifact_expectations:
     required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -27,7 +27,7 @@ artifact_expectations:
     required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -46,7 +46,7 @@ artifact_expectations:
     required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -68,7 +68,7 @@ artifact_expectations:
     required_for_scoring: true
     artifact_class: shared_object
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -86,7 +86,7 @@ artifact_expectations:
     required_for_scoring: true
     artifact_class: shared_object
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -104,7 +104,7 @@ artifact_expectations:
     required_for_scoring: true
     artifact_class: preload_configuration
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -123,7 +123,7 @@ artifact_expectations:
     required_for_scoring: true
     artifact_class: process
     observable_kind: process
-    source_eligibility: [memory, log]
+    source_eligibility: [memory]
     persistence: volatile
     observability: expected_if_acquired_live
     instance_constraints:
@@ -145,7 +145,7 @@ artifact_expectations:
     required_for_scoring: true
     artifact_class: library_mapping
     observable_kind: memory_mapping
-    source_eligibility: [memory, log]
+    source_eligibility: [memory]
     persistence: volatile
     observability: expected_if_acquired_live
     instance_constraints:
@@ -163,7 +163,7 @@ artifact_expectations:
     required_for_scoring: true
     artifact_class: process_socket_correlation
     observable_kind: process_socket
-    source_eligibility: [memory, log]
+    source_eligibility: [memory]
     persistence: volatile
     observability: expected_if_acquired_live
     instance_constraints:
@@ -187,7 +187,7 @@ artifact_expectations:
     required_for_scoring: true
     artifact_class: process
     observable_kind: process
-    source_eligibility: [memory, log]
+    source_eligibility: [memory]
     persistence: volatile
     observability: expected_if_acquired_live
     instance_constraints:
@@ -207,7 +207,7 @@ artifact_expectations:
     required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -225,7 +225,7 @@ artifact_expectations:
     required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -244,7 +244,7 @@ artifact_expectations:
     required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:
@@ -264,7 +264,7 @@ artifact_expectations:
     required_for_scoring: false
     artifact_class: file
     observable_kind: filesystem_path
-    source_eligibility: [disk, timeline, log]
+    source_eligibility: [disk, timeline]
     persistence: persistent
     observability: direct
     instance_constraints:

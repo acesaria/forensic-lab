@@ -4,6 +4,5 @@ description: Correlates a process with an active remote network connection (peer
 source_types: [memory]
 artifact_classes: [process, socket]
 attck: [T1059.004, T1071]
-confidence_default: 0.72
 parameters:
   require_pid: true

@@ -163,7 +163,6 @@ def test_declarative_evaluation_passes_verified_baseline_to_detector(
                 rule_id="fixture",
                 artifact_class="preload_configuration",
                 entity={"type": "path", "value": "/etc/ld.so.preload"},
-                confidence=0.8,
                 source_findings=["tf-1"],
                 attck=[],
                 notes="fixture",

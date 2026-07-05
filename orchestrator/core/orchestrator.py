@@ -367,7 +367,7 @@ class ForensicOrchestrator:
         Canonical detect -> match -> metrics over the acquired images. Best-effort:
         the acquisition is already on disk, so a failure here is logged and
         swallowed. Writes tool_findings.jsonl, detection_claims.jsonl,
-        matches.jsonl, metrics.json and score_report.md under analysis/.
+        outcomes.jsonl, metrics.json and report.md under analysis/.
         """
         run_dir = self.dumper.run_dir(run_id)
         analysis_dir = self._paths.run_analysis_dir(run_id)
@@ -398,6 +398,7 @@ class ForensicOrchestrator:
                 expectations_path=expectations_path,
                 tool_findings_path=tf_path,
                 detection_claims_path=dc_path,
+                execution_truth_path=run_dir / "execution_truth.jsonl",
                 out_dir=analysis_dir,
             )
         except Exception as exc:

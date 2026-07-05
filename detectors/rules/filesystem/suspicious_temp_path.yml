@@ -4,7 +4,6 @@ description: Flags files or deleted-file candidates under world-writable tempora
 source_types: [disk, timeline]
 artifact_classes: [file, deleted_file_candidate]
 attck: [T1059.004, T1105, T1070.004]
-confidence_default: 0.70
 parameters:
   prefixes: [/tmp/, /var/tmp/, /dev/shm/]
   executable_mode_contains: x

@@ -11,17 +11,6 @@ from orchestrator.canonical.models import CanonicalRecord
 T = TypeVar("T", bound=CanonicalRecord)
 
 
-def write_json(path: str | Path, record: CanonicalRecord) -> Path:
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(record.to_json() + "\n", encoding="utf-8")
-    return p
-
-
-def load_json(path: str | Path, record_type: type[T]) -> T:
-    return record_type.from_dict(json.loads(Path(path).read_text(encoding="utf-8")))
-
-
 def append_jsonl(path: str | Path, record: CanonicalRecord) -> Path:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)

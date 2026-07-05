@@ -178,15 +178,15 @@ def test_userland_father_cached_pipeline_reaches_detectors_and_matcher(tmp_path:
         expectations_path=ctx.artifact_expectations_path,
         tool_findings_path=findings_path,
         detection_claims_path=claims_path,
+        execution_truth_path=ctx.execution_truth_path,
         out_dir=tmp_path / "score",
-        time_window_s=120,
     )
 
-    assert result["matches_path"].is_file()
+    assert result["outcomes_path"].is_file()
     assert result["metrics_path"].is_file()
     assert result["report_path"].is_file()
-    assert result["metrics"]["counts"]["tp"] >= 3
-    assert result["metrics"]["critical_recall"]["recall"] > 0
+    assert result["metrics"]["expectations"]["scored"] == 7
+    assert result["metrics"]["coverage"]["identified"] >= 3
 
 
 def _load_steps():

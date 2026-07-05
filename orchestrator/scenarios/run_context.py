@@ -120,6 +120,8 @@ class RunContext:
             persistence=rendered.get("persistence", "unknown"),
             observability=rendered.get("observability", "expected"),
             instance_constraints=dict(rendered.get("instance_constraints") or {}),
+            # Fail safe (METHODOLOGY 10.2): only an authored literal true scores.
+            required_for_scoring=rendered.get("required_for_scoring") is True,
             critical=bool(rendered.get("critical", False)),
             attck=[str(x) for x in rendered.get("attck", [])],
             notes=str(rendered.get("notes") or ""),

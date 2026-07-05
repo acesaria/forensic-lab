@@ -30,12 +30,9 @@ def test_baseline_comparison_classifies_new_changed_and_present_paths():
         identity="lab-test:baseline",
     )
 
-    assert comparison.status_by_path["/etc/new.conf"].status == BASELINE_NEW
-    assert comparison.status_by_path["/etc/demo.conf"].status == BASELINE_PRESENT
-    assert comparison.status_by_path["/etc/changed.conf"].status == BASELINE_CHANGED
-    assert comparison.status_counts[BASELINE_NEW] == 1
-    assert comparison.status_counts[BASELINE_PRESENT] == 1
-    assert comparison.status_counts[BASELINE_CHANGED] == 1
+    assert comparison.status_by_path["/etc/new.conf"] == BASELINE_NEW
+    assert comparison.status_by_path["/etc/demo.conf"] == BASELINE_PRESENT
+    assert comparison.status_by_path["/etc/changed.conf"] == BASELINE_CHANGED
 
 
 def test_size_and_size_bytes_are_compared_across_adapter_naming():
@@ -49,8 +46,8 @@ def test_size_and_size_bytes_are_compared_across_adapter_naming():
     changed = compare_path_baseline(baseline, grown, identity="lab-test:baseline")
     unchanged = compare_path_baseline(baseline, same, identity="lab-test:baseline")
 
-    assert changed.status_by_path["/usr/lib/x.so"].status == BASELINE_CHANGED
-    assert unchanged.status_by_path["/usr/lib/x.so"].status == BASELINE_PRESENT
+    assert changed.status_by_path["/usr/lib/x.so"] == BASELINE_CHANGED
+    assert unchanged.status_by_path["/usr/lib/x.so"] == BASELINE_PRESENT
 
 
 def test_present_in_baseline_timeline_only_candidate_is_downgraded():
@@ -63,7 +60,7 @@ def test_present_in_baseline_timeline_only_candidate_is_downgraded():
             artifact_class="service_unit_file",
         )
     ]
-    claim = _claim("c-service", "/etc/systemd/system/demo.service", confidence=0.84)
+    claim = _claim("c-service", "/etc/systemd/system/demo.service")
 
     claims = apply_baseline_to_claims(
         [claim],
@@ -73,9 +70,10 @@ def test_present_in_baseline_timeline_only_candidate_is_downgraded():
     )
 
     assert len(claims) == 1
-    assert claims[0].confidence == 0.35
-    assert claims[0].entity["baseline"]["status"] == BASELINE_PRESENT
-    assert claims[0].entity["baseline"]["filter_action"] == "confidence_downgraded"
+    assert claims[0].entity["baseline"] == {
+        "status": BASELINE_PRESENT,
+        "downgraded": True,
+    }
 
 
 def test_memory_correlation_claim_classifies_on_nested_library_path():
@@ -96,7 +94,6 @@ def test_memory_correlation_claim_classifies_on_nested_library_path():
             "process": {"type": "path", "value": "/usr/sbin/sshd"},
             "library": {"type": "path", "value": "/usr/lib/x.so"},
         },
-        confidence=0.6,
         source_findings=["c-lib"],
         attck=["T1574.006"],
         notes="fixture correlation claim",
@@ -107,30 +104,6 @@ def test_memory_correlation_claim_classifies_on_nested_library_path():
     )
 
     assert claims[0].entity["baseline"]["status"] == BASELINE_PRESENT
-    assert claims[0].entity["baseline"]["path"] == "/usr/lib/x.so"
-
-
-def test_downgrade_is_noop_when_confidence_already_at_cap():
-    # A present_in_baseline timeline-only candidate already at/below the 0.35 cap
-    # must not be flagged as downgraded, or candidate_downgrades is inflated.
-    baseline = [_finding("b-service", "/etc/systemd/system/demo.service")]
-    compromised = [
-        _finding(
-            "c-service",
-            "/etc/systemd/system/demo.service",
-            source=EvidenceSource.TIMELINE,
-            artifact_class="service_unit_file",
-        )
-    ]
-    claim = _claim("c-service", "/etc/systemd/system/demo.service", confidence=0.35)
-
-    claims = apply_baseline_to_claims(
-        [claim], compromised, baseline, identity="lab-test:baseline"
-    )
-
-    assert claims[0].confidence == 0.35
-    assert claims[0].entity["baseline"]["status"] == BASELINE_PRESENT
-    assert claims[0].entity["baseline"]["filter_action"] == "none"
 
 
 def test_present_in_baseline_disk_candidate_is_not_downgraded():
@@ -143,7 +116,7 @@ def test_present_in_baseline_disk_candidate_is_not_downgraded():
             artifact_class="service_unit_file",
         )
     ]
-    claim = _claim("c-service", "/etc/systemd/system/demo.service", confidence=0.84)
+    claim = _claim("c-service", "/etc/systemd/system/demo.service")
 
     claims = apply_baseline_to_claims(
         [claim],
@@ -152,9 +125,10 @@ def test_present_in_baseline_disk_candidate_is_not_downgraded():
         identity="lab-test:baseline",
     )
 
-    assert claims[0].confidence == 0.84
-    assert claims[0].entity["baseline"]["status"] == BASELINE_PRESENT
-    assert claims[0].entity["baseline"]["filter_action"] == "none"
+    assert claims[0].entity["baseline"] == {
+        "status": BASELINE_PRESENT,
+        "downgraded": False,
+    }
 
 
 def _finding(
@@ -190,14 +164,13 @@ def _finding(
     )
 
 
-def _claim(finding_id: str, path: str, *, confidence: float) -> DetectionClaim:
+def _claim(finding_id: str, path: str) -> DetectionClaim:
     return DetectionClaim(
         claim_id=f"dc-{finding_id}",
         run_id="run-baseline-test",
         rule_id="flab.filesystem.userland_persistence",
         artifact_class="service_unit_file",
         entity={"type": "path", "value": path},
-        confidence=confidence,
         source_findings=[finding_id],
         attck=["T1543.002"],
         notes="fixture claim",
