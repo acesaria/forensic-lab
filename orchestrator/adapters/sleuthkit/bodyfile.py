@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from orchestrator.adapters.common import iso_from_epoch, make_tool_finding
-from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding
+from orchestrator.canonical import EvidenceSource, ToolFinding
 
 _SERVICE_DIRS = (
     "/etc/systemd/",
@@ -50,10 +50,12 @@ def parse_bodyfile(lines: Iterable[str]) -> list[dict[str, Any]]:
                 "inode": parts[2],
                 "mode": parts[3],
                 "size": _to_int(parts[6]),
+                "atime": _to_float(parts[7]),
                 "mtime": _to_float(parts[8]),
                 "ctime": _to_float(parts[9]),
                 "crtime": _to_float(parts[10]),
                 "deleted": deleted,
+                "reallocated": "(deleted-realloc)" in name,
             }
         )
     return rows
@@ -73,6 +75,9 @@ def _to_float(s: str) -> float | None:
         return None
 
 
+_TIME_KINDS = ("atime", "mtime", "ctime", "crtime")
+
+
 def adapt_bodyfile(
     lines: Iterable[str],
     *,
@@ -80,10 +85,32 @@ def adapt_bodyfile(
     tool_version: str = "unknown",
     input_name: str = "bodyfile",
 ) -> list[ToolFinding]:
+    # Bodyfile rows are disk *objects*, not timeline events (plaso owns those):
+    # one finding per row, typed MACB metadata under entity["timestamps"], and
+    # no scalar event time is claimed for the row.
     findings: list[ToolFinding] = []
     for idx, row in enumerate(parse_bodyfile(lines), start=1):
         path = row["path"]
-        time = iso_from_epoch(row.get("crtime") or row.get("mtime") or row.get("ctime"))
+        entity: dict[str, Any] = {
+            "type": "path",
+            "value": path,
+            "inode": row.get("inode"),
+            "mode": row.get("mode"),
+            "size": row.get("size"),
+            "deleted": bool(row.get("deleted")),
+        }
+        if row.get("reallocated"):
+            # A reallocated inode's metadata belongs to the new file, not the
+            # deleted name: record no timestamps, offsets stay absent.
+            entity["reallocated"] = True
+        else:
+            timestamps = {
+                kind: ts
+                for kind in _TIME_KINDS
+                if (ts := iso_from_epoch(row.get(kind))) is not None
+            }
+            if timestamps:
+                entity["timestamps"] = timestamps
         findings.append(
             make_tool_finding(
                 run_id=run_id,
@@ -91,15 +118,7 @@ def adapt_bodyfile(
                 tool_version=tool_version,
                 source_type=EvidenceSource.DISK,
                 artifact_class=_artifact_class(path, bool(row.get("deleted"))),
-                entity={
-                    "type": "path",
-                    "value": path,
-                    "inode": row.get("inode"),
-                    "mode": row.get("mode"),
-                    "size": row.get("size"),
-                    "deleted": bool(row.get("deleted")),
-                },
-                time=time,
+                entity=entity,
                 raw_ref=f"bodyfile:{input_name}:line={idx}:inode={row.get('inode')}",
                 provenance={
                     "adapter": "sleuthkit.bodyfile",
@@ -107,7 +126,6 @@ def adapt_bodyfile(
                     "row_index": idx,
                     "parser": "fls -m bodyfile",
                 },
-                temporal_quality=TemporalQuality.EXACT if time else TemporalQuality.NONE,
             )
         )
     return findings

@@ -25,9 +25,12 @@ def filter_findings_to_window(
 
     Drops findings whose timestamp falls outside the window -- on a full disk
     image this removes baseline files created at image-build time, leaving the
-    artifacts created during the run. Findings with no usable timestamp, and
-    those from always_keep sources (memory is point-in-time, not on a
-    creation timeline), are kept regardless.
+    artifacts created during the run. Event findings are judged on their scalar
+    ``time``; object findings (no scalar time, MACB metadata under
+    ``entity["timestamps"]``) are kept when *any* of their timestamps falls in
+    the window. Findings with no usable timestamp at all, and those from
+    always_keep sources (memory is point-in-time, not on a creation timeline),
+    are kept regardless.
     """
     lo = parse_iso_utc(start_iso)
     hi = parse_iso_utc(end_iso)
@@ -36,16 +39,19 @@ def filter_findings_to_window(
         if finding.source_type in always_keep:
             kept.append(finding)
             continue
-        time = finding.time
-        if not time or time == UNKNOWN_TIME:
-            kept.append(finding)
-            continue
-        try:
-            ts = parse_iso_utc(str(time))
-        except ValueError:
-            kept.append(finding)
-            continue
-        if lo <= ts <= hi:
+        candidates: list[Any] = [finding.time]
+        stamps = finding.entity.get("timestamps")
+        if isinstance(stamps, dict):
+            candidates.extend(stamps.values())
+        epochs: list[float] = []
+        for value in candidates:
+            if not value or value == UNKNOWN_TIME:
+                continue
+            try:
+                epochs.append(parse_iso_utc(str(value)))
+            except ValueError:
+                continue
+        if not epochs or any(lo <= ts <= hi for ts in epochs):
             kept.append(finding)
     return kept
 
@@ -105,9 +111,11 @@ def make_tool_finding(
     adapter_version: str = ADAPTER_VERSION,
     temporal_quality: TemporalQuality | None = None,
 ) -> ToolFinding:
-    observed_time = time or UNKNOWN_TIME
+    # Untimed findings are normal (METHODOLOGY §10.6): keep None as None so it
+    # serializes as null; never default to a sentinel value.
+    observed_time = None if time in (None, UNKNOWN_TIME) else time
     quality = temporal_quality or (
-        TemporalQuality.EXACT if time else TemporalQuality.NONE
+        TemporalQuality.EXACT if observed_time else TemporalQuality.NONE
     )
     initial_id = "tf-" + hashlib.sha1(
         "|".join(
@@ -156,7 +164,7 @@ def write_tool_findings(path: str | Path, findings: Iterable[ToolFinding]) -> Pa
 
 def _sort_key(finding: ToolFinding) -> tuple[Any, ...]:
     return (
-        finding.time,
+        finding.time or "",
         finding.tool,
         finding.artifact_class,
         str(finding.entity.get("type")),
