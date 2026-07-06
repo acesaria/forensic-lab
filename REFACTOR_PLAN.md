@@ -28,12 +28,24 @@ regress" guardrail list.** This file is disposable once the refactor lands.
   `observability`, `critical`) from models.py, run_context authoring, the
   scenario YAML, and tests. Offline check: `run-scenario` re-emits
   expectations; matcher parity unchanged.
-- **6.1 Live re-run + cache refresh.** `python cli.py run` on the live lab —
-  the first real execution of the 5a–5d adapters. Regenerate the clean
-  baseline cache from the new adapters (the cached clean-baseline dumps
-  allow this offline; otherwise re-acquire). Explain any outcome changes
-  line by line (the 5b reclassification will move claim counts). Then
-  delete the pre-5 cached run and the matcher's legacy
+- **6.1a Offline pipeline harness.** Add a `run-adapters` CLI subcommand
+  (reuse the existing adapter functions + window filter; ≤50 LOC, no new
+  module) so the full chain runs offline from cached raw outputs:
+  run-adapters → run-detectors → match-canonical. The cached run has
+  everything needed (analysis/{bodyfile,vol3.json,timeline.jsonl} +
+  dumps/reference_context.json). Re-adapt the cached run with the new
+  adapters and explain every outcome delta vs the cached 4/1/2 line by
+  line (the 5b reclassification will move claim counts — explain, never
+  tune back). Plus ONE self-contained end-to-end smoke test (inline raw
+  rows → adapters → detectors → matcher), the cross-layer drift guard.
+  No live-VM pytest — live validation stays `cli.py run` by policy.
+- **6.1b Baseline regen + live re-run + legacy deletions.** Rebuild
+  shared/baselines/<id>/tool_findings.jsonl via run-adapters over the
+  cache's own analysis/ raw outputs (no re-acquisition); confirm block-C
+  downgrades still behave. Then one live `cli.py run` — the first real
+  execution of the 5a–5d adapters — with metric deltas attributed
+  (adapter change vs fresh-run variance vs baseline rebuild). Only after
+  it is green: delete the pre-5 cached run and the matcher's legacy
   `f.time == "unknown"` guard (matcher/engine.py:323), which exists only
   for that cache.
 - **6.2 Temporal/classification review** (audit findings 3+4, one session).
