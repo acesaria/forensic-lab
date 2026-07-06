@@ -20,12 +20,8 @@ def _exp(ae_id: str, artifact_class: str, constraints: dict, *, scored: bool = T
         scenario_id="s",
         step_id="S1",
         artifact_class=artifact_class,
-        observable_kind="filesystem_path",
         source_eligibility=[EvidenceSource.DISK, EvidenceSource.TIMELINE],
-        persistence="persistent",
-        observability="direct",
         instance_constraints=constraints,
-        critical=False,
         attck=list(attck),
         required_for_scoring=scored,
     )

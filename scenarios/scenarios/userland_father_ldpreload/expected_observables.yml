@@ -6,16 +6,12 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: false
     artifact_class: file
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{source_dir}/{archive_name}"
       sha256: 90e440a2ff8264a3f39c5c2b63ee7b8def9b85f87a7b79c666bfb46f25a2c125
       upstream_url: https://github.com/mav8557/Father
       pinned_commit: 4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
-    critical: false
     attck: [T1014]
     notes: "provenance/not-scored: pinned upstream Father archive."
 
@@ -26,15 +22,11 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: false
     artifact_class: file
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{source_dir}/{lock_name}"
       repository_patches_father_source: false
       run_local_configuration_only: true
-    critical: false
     attck: [T1014]
     notes: "provenance/not-scored: source lock copied into the run workspace."
 
@@ -45,10 +37,7 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: false
     artifact_class: file
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{source_dir}/{source_tree_name}/src/config.h"
       resolved_config_path: "{config_dir}/father_resolved_parameters.txt"
@@ -56,7 +45,6 @@ artifact_expectations:
       file_prefix: "{prefix}"
       password: "{password}"
       install_location: "{lib_dir}/{library_name}"
-    critical: false
     attck: [T1574.006, T1014, T1059.004]
     notes: "contextual/not-scored: run-local Father build configuration."
 
@@ -67,14 +55,10 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: true
     artifact_class: shared_object
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{source_dir}/{source_tree_name}/rk.so"
       build_command: make father
-    critical: true
     attck: [T1574.006, T1014]
     notes: "attack-core/scored: Father rk.so built from the run-local source tree."
 
@@ -85,14 +69,10 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: true
     artifact_class: shared_object
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{lib_dir}/{library_name}"
       copied_from: "{source_dir}/{source_tree_name}/rk.so"
-    critical: true
     attck: [T1574.006, T1014]
     notes: "attack-core/scored: installed shared object used for LD_PRELOAD activation."
 
@@ -103,15 +83,11 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: true
     artifact_class: preload_configuration
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{run_dir}/{preload_artifact_name}"
       contains: "{lib_dir}/{library_name}"
       system_wide_preload_modified: false
-    critical: true
     attck: [T1574.006]
     notes: "attack-core/scored: scenario-local preload artifact records LD_PRELOAD activation."
 
@@ -122,10 +98,7 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: true
     artifact_class: process
-    observable_kind: process
     source_eligibility: [memory]
-    persistence: volatile
-    observability: expected_if_acquired_live
     instance_constraints:
       process: python3
       argv_contains: "{source_dir}/{listener_name}"
@@ -133,7 +106,6 @@ artifact_expectations:
       listen_host: "{listen_host}"
       listen_port: "{listen_port}"
       requires_mapped_library: "{lib_dir}/{library_name}"
-    critical: true
     attck: [T1574.006, T1014]
     notes: "attack-core/scored: preloaded localhost listener tied to the mapped shared object."
 
@@ -144,14 +116,10 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: true
     artifact_class: library_mapping
-    observable_kind: memory_mapping
     source_eligibility: [memory]
-    persistence: volatile
-    observability: expected_if_acquired_live
     instance_constraints:
       path: "{lib_dir}/{library_name}"
       process_pid_path: "{run_dir}/accept_listener.pid"
-    critical: true
     attck: [T1574.006, T1014]
     notes: "attack-core/scored: installed shared object mapped into the hooked process."
 
@@ -162,10 +130,7 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: true
     artifact_class: process_socket_correlation
-    observable_kind: process_socket
     source_eligibility: [memory]
-    persistence: volatile
-    observability: expected_if_acquired_live
     instance_constraints:
       listener_pid_path: "{run_dir}/accept_listener.pid"
       client_pid_path: "{run_dir}/accept_client.pid"
@@ -175,7 +140,6 @@ artifact_expectations:
       source_port: "{source_port}"
       shell_spawned: true
       localhost_only: true
-    critical: true
     attck: [T1574.006, T1059.004]
     notes: "attack-core/scored: source-port accept hook creates a bounded localhost shell/session."
 
@@ -186,16 +150,12 @@ artifact_expectations:
     indicator_strength: strong
     required_for_scoring: true
     artifact_class: process
-    observable_kind: process
     source_eligibility: [memory]
-    persistence: volatile
-    observability: expected_if_acquired_live
     instance_constraints:
       process: /bin/sh
       pid_file: "{run_dir}/accept_shell.pid"
       parent_pid_file: "{run_dir}/accept_listener.pid"
       bounded_by_seconds: "{process_duration_seconds}"
-    critical: true
     attck: [T1059.004]
     notes: "attack-core/scored: bounded shell/session process kept alive for memory acquisition."
 
@@ -206,14 +166,10 @@ artifact_expectations:
     indicator_strength: contextual
     required_for_scoring: false
     artifact_class: file
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{run_dir}/accept_shell_session.log"
       sent_correct_password: true
-    critical: false
     attck: [T1059.004]
     notes: "contextual/not-scored: lab log for the bounded localhost shell/session."
 
@@ -224,15 +180,11 @@ artifact_expectations:
     indicator_strength: contextual
     required_for_scoring: false
     artifact_class: file
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{observed_dir}/{prefix}_session_note.txt"
       file_prefix: "{prefix}"
       live_userland_hiding_observed: true
-    critical: false
     attck: [T1014]
     notes: "contextual/not-scored: prefix-hidden file remains present on disk."
 
@@ -243,16 +195,12 @@ artifact_expectations:
     indicator_strength: contextual
     required_for_scoring: false
     artifact_class: file
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       paths:
         - "{run_dir}/file_listing_without_preload.txt"
         - "{run_dir}/file_listing_with_preload.txt"
       expected_difference: "{prefix} entry appears without Father preload and is omitted with Father preload"
-    critical: false
     attck: [T1014]
     notes: "contextual/not-scored: live listing comparison."
 
@@ -263,14 +211,10 @@ artifact_expectations:
     indicator_strength: contextual
     required_for_scoring: false
     artifact_class: file
-    observable_kind: filesystem_path
     source_eligibility: [disk, timeline]
-    persistence: persistent
-    observability: direct
     instance_constraints:
       path: "{run_dir}/postconditions.txt"
       cleanup_evasion_default: disabled
       accept_hook_shell_session: bounded_localhost
-    critical: false
     attck: [T1574.006, T1014, T1059.004]
     notes: "provenance/not-scored: run summary, hashes, and relevant PIDs."

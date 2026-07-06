@@ -48,7 +48,7 @@ def test_userland_father_scenario_plan_and_expectations():
         "process_socket_correlation",
     } <= classes
     assert "deleted_file_candidate" not in classes
-    critical = {row["ae_id"] for row in expectations if row.get("critical")}
+    scored = {row["ae_id"] for row in expectations if row.get("required_for_scoring") is True}
     assert {
         "AE-father-built-rk-so",
         "AE-father-installed-library",
@@ -57,8 +57,8 @@ def test_userland_father_scenario_plan_and_expectations():
         "AE-father-mapped-shared-object",
         "AE-father-accept-hook-session",
         "AE-father-shell-session-process",
-    } <= critical
-    assert "AE-father-run-config" not in critical
+    } == scored
+    assert "AE-father-run-config" not in scored
 
 
 def test_fake_father_source_is_not_present():

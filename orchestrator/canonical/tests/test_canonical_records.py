@@ -35,12 +35,8 @@ def _expectation() -> ArtifactExpectation:
         scenario_id="scenario_01",
         step_id="S1",
         artifact_class="ld_preload_payload",
-        observable_kind="filesystem_path",
         source_eligibility=[EvidenceSource.DISK, EvidenceSource.TIMELINE],
-        persistence="until_cleanup",
-        observability="direct",
         instance_constraints={"path": "/tmp/payload.so"},
-        critical=True,
         attck=["T1574.006"],
         required_for_scoring=True,
     )
@@ -147,5 +143,4 @@ def test_missing_required_field_rejected():
             evidence_basis=[EvidenceSource.DISK],
             attck=["T1574.006"],
         )
-
 

@@ -153,12 +153,8 @@ class ArtifactExpectation(CanonicalRecord):
         "scenario_id",
         "step_id",
         "artifact_class",
-        "observable_kind",
         "source_eligibility",
-        "persistence",
-        "observability",
         "instance_constraints",
-        "critical",
         "attck",
     )
 
@@ -166,12 +162,8 @@ class ArtifactExpectation(CanonicalRecord):
     scenario_id: str
     step_id: str
     artifact_class: str
-    observable_kind: str
     source_eligibility: list[EvidenceSource]
-    persistence: str
-    observability: str
     instance_constraints: dict[str, Any]
-    critical: bool
     attck: list[str]
     # Scored vs contextual (METHODOLOGY §3, §10.2): only expectations authored
     # with required_for_scoring: true enter metric denominators. Fail safe:
