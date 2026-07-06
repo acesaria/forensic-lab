@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
 from orchestrator.canonical import EvidenceSource, ToolFinding, write_jsonl
-from orchestrator.forensics.timeutil import epoch_us_to_iso_ms, parse_iso_utc
+from orchestrator.forensics.timeutil import epoch_us_to_iso_ms, iso_utc_ms, parse_iso_utc
 
 ADAPTER_VERSION = "canonical-adapters-v1"
 
@@ -31,6 +32,35 @@ def classify_fs_path(path: str) -> str:
     if any(path.startswith(d) for d in _SERVICE_DIRS) and path.endswith(_SERVICE_SUFFIXES):
         return "service_unit_file"
     return "file"
+
+
+def case_window_from_command_log(
+    log_path, margin_s: float = 600.0
+) -> tuple[str, str] | None:
+    """Derive [start, end] from the scenario command_log step times, padded by
+    a margin. Returns None if the log is missing or has no usable times."""
+    if not log_path.is_file():
+        return None
+    times: list[float] = []
+    for line in log_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        for key in ("started_at", "ended_at"):
+            value = row.get(key)
+            if value:
+                try:
+                    times.append(parse_iso_utc(str(value)))
+                except ValueError:
+                    pass
+    if not times:
+        return None
+    lo = datetime.fromtimestamp(min(times) - margin_s, timezone.utc)
+    hi = datetime.fromtimestamp(max(times) + margin_s, timezone.utc)
+    return iso_utc_ms(lo), iso_utc_ms(hi)
 
 
 def filter_findings_to_window(

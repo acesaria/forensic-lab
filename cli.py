@@ -93,6 +93,18 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     run_scenario.add_argument("--out-dir", default=None)
     run_scenario.add_argument("--run-id", default=None)
 
+    run_adapters = sub.add_parser(
+        "run-adapters",
+        help="Adapt cached raw tool outputs to canonical tool_findings.jsonl",
+    )
+    run_adapters.add_argument("--bodyfile", default=None)
+    run_adapters.add_argument("--vol3-json", default=None)
+    run_adapters.add_argument("--plaso-jsonl", default=None)
+    run_adapters.add_argument("--run-id", required=True)
+    run_adapters.add_argument("--out", required=True)
+    run_adapters.add_argument("--command-log", default=None)
+    run_adapters.add_argument("--margin-s", type=float, default=600.0)
+
     run_detectors = sub.add_parser(
         "run-detectors",
         help="Run GT-blind detector rule packs over canonical tool_findings.jsonl",
@@ -217,6 +229,42 @@ def _cmd_run_scenario(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_run_adapters(args: argparse.Namespace) -> int:
+    from orchestrator.adapters import (
+        case_window_from_command_log,
+        filter_findings_to_window,
+        write_tool_findings,
+    )
+    from orchestrator.adapters.plaso import adapt_plaso_jsonl_file
+    from orchestrator.adapters.sleuthkit import adapt_bodyfile_file
+    from orchestrator.adapters.volatility3 import adapt_volatility_json_file
+
+    if not (args.bodyfile or args.vol3_json or args.plaso_jsonl):
+        print("error: at least one raw output path is required", file=sys.stderr)
+        return 2
+    findings = []
+    if args.bodyfile:
+        findings += adapt_bodyfile_file(args.bodyfile, run_id=args.run_id)
+    if args.vol3_json:
+        findings += adapt_volatility_json_file(args.vol3_json, run_id=args.run_id)
+    if args.plaso_jsonl:
+        findings += adapt_plaso_jsonl_file(args.plaso_jsonl, run_id=args.run_id)
+    window = None
+    if args.command_log:
+        window = case_window_from_command_log(Path(args.command_log), args.margin_s)
+        if window:
+            findings = filter_findings_to_window(findings, *window)
+    write_tool_findings(args.out, findings)
+    counts: dict[str, int] = {}
+    for finding in findings:
+        counts[finding.tool] = counts.get(finding.tool, 0) + 1
+    for tool in sorted(counts):
+        print(f"{tool}: {counts[tool]}")
+    print(f"total: {len(findings)}")
+    print(f"window: {window[0]}..{window[1]}" if window else "window: no window")
+    return 0
+
+
 def _cmd_run_detectors(args: argparse.Namespace) -> int:
     from detectors.engine import run_detectors_file, write_detection_claims
 
@@ -265,6 +313,7 @@ def _cmd_match_canonical(args: argparse.Namespace) -> int:
 _OFFLINE_HANDLERS = {
     "verify": _cmd_verify,
     "run-scenario": _cmd_run_scenario,
+    "run-adapters": _cmd_run_adapters,
     "run-detectors": _cmd_run_detectors,
     "match-canonical": _cmd_match_canonical,
 }

@@ -29,7 +29,7 @@ _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
 run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=False
 """
 
-from datetime import datetime, timezone
+from datetime import datetime
 import functools
 import json
 from pathlib import Path
@@ -37,7 +37,11 @@ from typing import Any
 
 from detectors.engine import run_detectors_file, write_detection_claims
 from matcher.engine import render_console_summary, run_matcher_files
-from orchestrator.adapters import filter_findings_to_window, write_tool_findings
+from orchestrator.adapters import (
+    case_window_from_command_log,
+    filter_findings_to_window,
+    write_tool_findings,
+)
 from orchestrator.adapters.plaso import adapt_plaso_events
 from orchestrator.adapters.sleuthkit import adapt_bodyfile
 from orchestrator.adapters.volatility3 import adapt_plugin_rows
@@ -74,7 +78,6 @@ from orchestrator.forensics.plaso_runner import (
 )
 from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
 from orchestrator.forensics.pipeline_config import load_pipeline_config
-from orchestrator.forensics.timeutil import iso_utc_ms, parse_iso_utc
 from orchestrator.scenarios import run_scenario
 from orchestrator.scenarios.executors import SSHClientExecutor
 
@@ -564,31 +567,8 @@ class ForensicOrchestrator:
     def _case_window_from_command_log(
         self, run_id: str, margin_s: float = 600.0
     ) -> tuple[str, str] | None:
-        """Derive [start, end] from the scenario command_log step times, padded by
-        a margin. Returns None if the log is missing or has no usable times."""
         log_path = self.dumper.run_dir(run_id) / "command_log.jsonl"
-        if not log_path.is_file():
-            return None
-        times: list[float] = []
-        for line in log_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            try:
-                row = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            for key in ("started_at", "ended_at"):
-                value = row.get(key)
-                if value:
-                    try:
-                        times.append(parse_iso_utc(str(value)))
-                    except ValueError:
-                        pass
-        if not times:
-            return None
-        lo = datetime.fromtimestamp(min(times) - margin_s, timezone.utc)
-        hi = datetime.fromtimestamp(max(times) + margin_s, timezone.utc)
-        return iso_utc_ms(lo), iso_utc_ms(hi)
+        return case_window_from_command_log(log_path, margin_s)
 
     def _volatility_context(
         self, distro_id: str | None, kernel_release: str | None = None
