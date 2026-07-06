@@ -4,6 +4,61 @@ Working plan for the heavy refactor of the detection / matching / metrics /
 adapter layers. **METHODOLOGY.md (§1–§10) is the spec; §10 is the "must not
 regress" guardrail list.** This file is disposable once the refactor lands.
 
+## Status (2026-07-06, post step-5 closeout audit)
+
+- Steps 1–5 are DONE. Step 5 ran as sub-steps 5a–5d (handoff: refactor-5.md);
+  5a merged as PR #6, 5b–5d committed on main (15deabaf).
+- Offline parity holds on the cached run: 4 identified / 1 supported /
+  2 missed over 7 scored, metrics byte-identical before/after 5d.
+- NOT yet validated end-to-end: the new adapter output. The cached
+  tool_findings.jsonl (run 20260703-115003) and the clean-baseline cache
+  under shared/baselines/ both predate 5a; adapters have unit-fixture
+  coverage only until the live re-run (6.1).
+- Branch policy: main only. All other branches, worktrees, and the stash
+  were deleted 2026-07-06; old experiment dirs pruned to the acceptance
+  run + the clean-baseline acquisition run (its dumps can regenerate the
+  baseline cache without a VM acquisition).
+- Step 6 re-scoped below ("Remaining work"); the original Step 6 section is
+  superseded by it.
+
+## Remaining work (re-scoped 2026-07-06; ordered)
+
+- **6.0 AE model prune** (first after tree clean). Delete the write-only
+  `ArtifactExpectation` fields (`observable_kind`, `persistence`,
+  `observability`, `critical`) from models.py, run_context authoring, the
+  scenario YAML, and tests. Offline check: `run-scenario` re-emits
+  expectations; matcher parity unchanged.
+- **6.1 Live re-run + cache refresh.** `python cli.py run` on the live lab —
+  the first real execution of the 5a–5d adapters. Regenerate the clean
+  baseline cache from the new adapters (the cached clean-baseline dumps
+  allow this offline; otherwise re-acquire). Explain any outcome changes
+  line by line (the 5b reclassification will move claim counts). Then
+  delete the pre-5 cached run and the matcher's legacy
+  `f.time == "unknown"` guard (matcher/engine.py:323), which exists only
+  for that cache.
+- **6.2 Temporal/classification review** (audit findings 3+4, one session).
+  Plaso data_type fallback is the decided design, but close the crash edge
+  (empty data_type → artifact_class="" → ValueError kills the adapter run);
+  one focused test. Verify plaso actually supplies the MACB events
+  (filestat timestamp_desc) that RQ4 relies on now that bodyfile emits
+  untimed object findings; if it does not, decide matcher-side
+  entity["timestamps"] consumption. Align §6.D wording with the decision.
+- **6.3 Wire, report, docs** (the original Step 6). match-canonical console
+  summary, §6 report renderer check, figures; check figure scripts for v2
+  metrics keys (AUDIT_NOTES open question 2). PROJECT_CONTEXT/README v3
+  vocabulary already fixed 2026-07-06; TODO.md still needs the same pass.
+- **6.4 Rule/classification review** (audit findings 5+9 — the detection
+  layer is thin and possibly broken). Prefer standard taxonomies over
+  hand-rolled path classification (plaso parser/data_type; community Sigma
+  rules via the planned pySigma+SQLite path). Re-review
+  suspicious_shell_history after the 5b class narrowing. AEs + rules are
+  placeholders by decision — this is where they stop being placeholders.
+  docs/detection_rule_audit.md is the input document.
+- **6.5 Test-design review** (bounded, report-first). The suites are
+  AI-authored and unreviewed. One session, report only: per test file —
+  what it protects, over-specification/bloat, right directory,
+  keep/rewrite/delete. Then apply the minimal cut.
+
 ## Strategy (read once)
 
 - **Delete-and-rewrite, don't patch.** The v2 matcher (`matcher/engine.py`,

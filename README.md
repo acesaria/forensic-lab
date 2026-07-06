@@ -81,9 +81,9 @@ scenario key remains `userland_father_ldpreload`.
   never a final result.
 - `DetectionClaim`: GT-blind candidate/supporting evidence emitted by rules.
   Not a verdict.
-- `MatchResult`: GT-aware relationship between candidate evidence and expected
-  artifacts.
-- `metrics.json` and `score_report.md`: reconstruction metrics and reporting.
+- Per-expectation outcomes (`outcomes.jsonl`): GT-aware match of candidate
+  evidence against expected artifacts (identified / supported / missed).
+- `metrics.json` and `report.md`: schema-v3 reconstruction metrics and reporting.
 
 Detectors, adapters, and YAML rules must not read ground truth, expectations,
 target paths, hashes, step names, or seeds. Ground truth belongs in matching,

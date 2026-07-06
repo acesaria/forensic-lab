@@ -31,15 +31,16 @@ normative in METHODOLOGY.md; matcher/metrics code implements that page.
 
 - Raw finding      = ToolFinding. Broad extracted evidence. Never a result.
 - Candidate evidence = DetectionClaim. GT-blind, supporting only. Not a verdict.
-- Matched reconstruction = MatchResult (instance vs class-only support).
-- Metric result    = metrics.json / score_report.md, schema v2.
+- Matched outcome  = per-expectation outcome in outcomes.jsonl
+  (identified / supported / missed; contextual if not scored).
+- Metric result    = metrics.json / report.md, schema v3 (METHODOLOGY §6).
 
 Ground truth is read ONLY by matching, metrics, reports, and explicit
 scenario/execution-truth generation. Detectors, adapters, and rules must
 never read expectations, target paths, hashes, step names, or seeds.
 
 There is no persisted FinalClaim model. Final reconstruction is derived from
-strong instance matches.
+identified expectations.
 
 ## Current architecture map
 
