@@ -4,7 +4,6 @@ from pathlib import Path
 from orchestrator.canonical import (
     DetectionClaim,
     EvidenceSource,
-    TemporalQuality,
     ToolFinding,
     write_jsonl,
 )
@@ -90,10 +89,9 @@ def test_clean_baseline_cache_without_comparable_paths_is_not_reused(tmp_path):
                 source_type=EvidenceSource.MEMORY,
                 artifact_class="process",
                 entity={"type": "pid", "value": "1"},
-                time="unknown",
+                time=None,
                 raw_ref="fixture:tf-proc",
                 provenance={"adapter": "fixture"},
-                temporal_quality=TemporalQuality.NONE,
             )
         ],
     )
@@ -249,8 +247,7 @@ def _finding(
         source_type=EvidenceSource.DISK,
         artifact_class="file",
         entity=entity,
-        time="unknown",
+        time=None,
         raw_ref=f"fixture:{finding_id}",
         provenance={"adapter": "fixture"},
-        temporal_quality=TemporalQuality.NONE,
     )

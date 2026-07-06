@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 
-from orchestrator.adapters.common import UNKNOWN_TIME, load_json_or_jsonl, make_tool_finding
-from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding
+from orchestrator.adapters.common import load_json_or_jsonl, make_tool_finding
+from orchestrator.canonical import EvidenceSource, ToolFinding
 
 
 def adapt_yara_matches(
@@ -36,7 +36,6 @@ def adapt_yara_matches(
                     "namespace": match.get("namespace"),
                     "tags": list(match.get("tags") or []),
                 },
-                time=UNKNOWN_TIME,
                 raw_ref=f"yara:{input_name}:rule={rule}:path={path}",
                 provenance={
                     "adapter": "yara.matches",
@@ -44,7 +43,6 @@ def adapt_yara_matches(
                     "row_index": idx,
                     "meta": dict(match.get("meta") or {}),
                 },
-                temporal_quality=TemporalQuality.NONE,
             )
         )
     return findings

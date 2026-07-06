@@ -8,7 +8,6 @@ from detectors.baseline import (
 from orchestrator.canonical import (
     DetectionClaim,
     EvidenceSource,
-    TemporalQuality,
     ToolFinding,
 )
 
@@ -157,10 +156,9 @@ def _finding(
         source_type=source,
         artifact_class=artifact_class,
         entity=entity,
-        time="unknown",
+        time=None,
         raw_ref=f"fixture:{finding_id}",
         provenance={"adapter": "fixture"},
-        temporal_quality=TemporalQuality.NONE,
     )
 
 

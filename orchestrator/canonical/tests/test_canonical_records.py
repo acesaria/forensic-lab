@@ -7,7 +7,6 @@ from orchestrator.canonical import (
     DetectionClaim,
     EvidenceSource,
     GroundTruthEvent,
-    TemporalQuality,
     ToolFinding,
     append_jsonl,
     load_jsonl,
@@ -27,7 +26,6 @@ def _truth() -> GroundTruthEvent:
         time="2026-06-18T10:00:00.000Z",
         evidence_basis=[EvidenceSource.DISK],
         attck=["T1574.006"],
-        temporal_quality=TemporalQuality.EXACT,
     )
 
 
@@ -61,7 +59,6 @@ def _finding() -> ToolFinding:
         time="2026-06-18T10:00:01.000Z",
         raw_ref="bodyfile:inode=42",
         provenance={"source": "bodyfile"},
-        temporal_quality=TemporalQuality.BOUNDED,
     )
 
 
@@ -111,6 +108,15 @@ def test_tool_finding_accepts_missing_time():
     data = _finding().to_dict()
     del data["time"]
     assert ToolFinding.from_dict(data).time is None
+
+
+def test_loading_drops_historical_temporal_quality_key():
+    # Cached JSONL artifacts written before temporal_quality was deleted may
+    # still carry the key; loading must tolerate and drop it.
+    data = _finding().to_dict()
+    data["temporal_quality"] = "bounded"
+    loaded = ToolFinding.from_dict(data)
+    assert not hasattr(loaded, "temporal_quality")
 
 
 def test_other_canonical_records_validate_and_serialize():

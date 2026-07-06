@@ -6,8 +6,14 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from orchestrator.adapters.common import iso_from_plaso_timestamp, make_tool_finding
-from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding
+from orchestrator.adapters.common import (
+    classify_fs_path,
+    iso_from_plaso_timestamp,
+    make_tool_finding,
+)
+from orchestrator.canonical import EvidenceSource, ToolFinding
+
+_SHELL_HISTORY_NAMES = (".bash_history", ".zsh_history", ".sh_history")
 
 
 def adapt_plaso_events(
@@ -19,7 +25,7 @@ def adapt_plaso_events(
 ) -> list[ToolFinding]:
     findings: list[ToolFinding] = []
     for idx, event in enumerate(events, start=1):
-        path = event.get("filename") or event.get("display_name")
+        path = event.get("filename") or _strip_display_name_type(event.get("display_name"))
         message = event.get("message")
         entity_value = str(path or message or "").strip()
         if not entity_value:
@@ -50,7 +56,6 @@ def adapt_plaso_events(
                     "data_type": event.get("data_type"),
                     "timestamp_desc": event.get("timestamp_desc"),
                 },
-                temporal_quality=TemporalQuality.EXACT if time else TemporalQuality.NONE,
             )
         )
     return findings
@@ -80,14 +85,25 @@ def _classify(event: dict[str, Any], value: str) -> tuple[str, str]:
     data_type = str(event.get("data_type") or "")
     parser = str(event.get("parser") or "")
     filename = str(event.get("filename") or "")
-    if "ld.so.preload" in filename or filename.endswith(".preload") or "preload" in filename.rsplit("/", 1)[-1]:
-        return "preload_configuration", "path"
-    if filename.endswith(".so") or ".so." in filename:
-        return "shared_object", "path"
-    if filename.endswith((".service", ".timer", ".socket", ".path", ".mount")):
-        return "service_unit_file", "path"
-    if "/.bash_history" in filename or filename.startswith("/var/log/"):
-        return "shell_history_log_event", "path"
+    path = filename or (value if value.startswith("/") else "")
+    fs_class = classify_fs_path(path) if path else "file"
+    if fs_class != "file":
+        return fs_class, "path"
+    base = path.rsplit("/", 1)[-1]
+    if (
+        parser == "bash_history"
+        or data_type.startswith("bash:history")
+        or base in _SHELL_HISTORY_NAMES
+    ):
+        return "shell_history_log_event", "path" if path else "log_line"
     if data_type.startswith("fs:") or parser == "filestat":
         return "file", "path"
-    return "shell_history_log_event", "log_line"
+    return data_type, "log_line"
+
+
+def _strip_display_name_type(display_name: Any) -> str:
+    text = str(display_name or "")
+    _, sep, rest = text.partition(":")
+    if sep and rest.startswith("/"):
+        return rest
+    return text

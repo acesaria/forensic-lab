@@ -24,13 +24,6 @@ class EvidenceSource(str, Enum):
     UNKNOWN = "unknown"
 
 
-class TemporalQuality(str, Enum):
-    EXACT = "exact"
-    BOUNDED = "bounded"
-    RELATIVE_ORDER = "relative_order"
-    NONE = "none"
-
-
 def _jsonable(value: Any) -> Any:
     if isinstance(value, Enum):
         return value.value
@@ -150,7 +143,6 @@ class GroundTruthEvent(CanonicalRecord):
     time: str
     evidence_basis: list[EvidenceSource]
     attck: list[str]
-    temporal_quality: TemporalQuality = TemporalQuality.EXACT
     details: dict[str, Any] = field(default_factory=dict)
 
 
@@ -185,7 +177,6 @@ class ArtifactExpectation(CanonicalRecord):
     # with required_for_scoring: true enter metric denominators. Fail safe:
     # missing/null/non-True never scores.
     required_for_scoring: bool = False
-    temporal_quality: TemporalQuality = TemporalQuality.NONE
     notes: str = ""
 
     def validate(self) -> None:
@@ -229,7 +220,6 @@ class ToolFinding(CanonicalRecord):
     raw_ref: str
     provenance: dict[str, Any]
     time: str | None = None
-    temporal_quality: TemporalQuality = TemporalQuality.NONE
 
 
 @dataclass

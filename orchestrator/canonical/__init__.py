@@ -10,7 +10,6 @@ from orchestrator.canonical.models import (
     DetectionClaim,
     EvidenceSource,
     GroundTruthEvent,
-    TemporalQuality,
     ToolFinding,
 )
 
@@ -19,7 +18,6 @@ __all__ = [
     "DetectionClaim",
     "EvidenceSource",
     "GroundTruthEvent",
-    "TemporalQuality",
     "ToolFinding",
     "append_jsonl",
     "load_jsonl",

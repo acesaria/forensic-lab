@@ -7,11 +7,30 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
-from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding, write_jsonl
+from orchestrator.canonical import EvidenceSource, ToolFinding, write_jsonl
 from orchestrator.forensics.timeutil import epoch_us_to_iso_ms, parse_iso_utc
 
 ADAPTER_VERSION = "canonical-adapters-v1"
-UNKNOWN_TIME = "unknown"
+
+_SERVICE_DIRS = (
+    "/etc/systemd/",
+    "/usr/lib/systemd/",
+    "/lib/systemd/",
+)
+_SERVICE_SUFFIXES = (".service", ".timer", ".socket", ".path", ".mount")
+
+
+def classify_fs_path(path: str) -> str:
+    """Classify a filesystem path using the closed section 5 vocabulary."""
+    if "ld.so.preload" in path or path.endswith(".preload"):
+        return "preload_configuration"
+    if path.endswith(".so") or ".so." in path:
+        return "shared_object"
+    if "preload" in path.rsplit("/", 1)[-1]:
+        return "preload_configuration"
+    if any(path.startswith(d) for d in _SERVICE_DIRS) and path.endswith(_SERVICE_SUFFIXES):
+        return "service_unit_file"
+    return "file"
 
 
 def filter_findings_to_window(
@@ -45,7 +64,7 @@ def filter_findings_to_window(
             candidates.extend(stamps.values())
         epochs: list[float] = []
         for value in candidates:
-            if not value or value == UNKNOWN_TIME:
+            if not value:
                 continue
             try:
                 epochs.append(parse_iso_utc(str(value)))
@@ -109,30 +128,13 @@ def make_tool_finding(
     provenance: dict[str, Any],
     time: str | None = None,
     adapter_version: str = ADAPTER_VERSION,
-    temporal_quality: TemporalQuality | None = None,
 ) -> ToolFinding:
-    # Untimed findings are normal (METHODOLOGY §10.6): keep None as None so it
-    # serializes as null; never default to a sentinel value.
-    observed_time = None if time in (None, UNKNOWN_TIME) else time
-    quality = temporal_quality or (
-        TemporalQuality.EXACT if observed_time else TemporalQuality.NONE
-    )
-    initial_id = "tf-" + hashlib.sha1(
-        "|".join(
-            str(x)
-            for x in (
-                run_id,
-                tool,
-                source_type.value,
-                artifact_class,
-                entity.get("type"),
-                entity.get("value"),
-                raw_ref,
-            )
-        ).encode("utf-8")
-    ).hexdigest()[:12]
+    # Untimed findings are normal (METHODOLOGY §10.6): time stays None so it
+    # serializes as null; never a sentinel value.
     return ToolFinding(
-        finding_id=initial_id,
+        # placeholder; write_tool_findings/assign_tool_finding_ids assigns the
+        # canonical final id.
+        finding_id="tf-unassigned",
         run_id=run_id,
         tool=tool,
         tool_version=tool_version,
@@ -140,10 +142,9 @@ def make_tool_finding(
         source_type=source_type,
         artifact_class=artifact_class,
         entity=entity,
-        time=observed_time,
+        time=time,
         raw_ref=raw_ref,
         provenance=provenance,
-        temporal_quality=quality,
     )
 
 

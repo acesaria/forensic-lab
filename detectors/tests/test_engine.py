@@ -4,7 +4,7 @@ from pathlib import Path
 import yaml
 
 from detectors.engine import load_rules, run_detectors, run_detectors_file, write_detection_claims
-from orchestrator.canonical import DetectionClaim, EvidenceSource, TemporalQuality, ToolFinding, load_jsonl
+from orchestrator.canonical import DetectionClaim, EvidenceSource, ToolFinding, load_jsonl
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -176,8 +176,7 @@ def _memory_finding(finding_id: str, artifact_class: str, entity: dict) -> ToolF
         source_type=EvidenceSource.MEMORY,
         artifact_class=artifact_class,
         entity=entity,
-        time="unknown",
+        time=None,
         raw_ref=f"vol3:{finding_id}",
         provenance={"adapter": "fixture"},
-        temporal_quality=TemporalQuality.NONE,
     )

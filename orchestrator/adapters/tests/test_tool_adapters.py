@@ -4,8 +4,9 @@ from orchestrator.adapters import write_tool_findings
 from orchestrator.adapters.plaso import adapt_plaso_jsonl_file
 from orchestrator.adapters.sleuthkit import adapt_bodyfile_file
 from orchestrator.adapters.volatility3 import adapt_volatility_json_file
+from orchestrator.adapters.volatility3.json_output import adapt_plugin_rows
 from orchestrator.adapters.yara import adapt_yara_matches_file
-from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding, load_jsonl
+from orchestrator.canonical import EvidenceSource, ToolFinding, load_jsonl
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -42,7 +43,6 @@ def test_sleuthkit_bodyfile_adapter_converts_file_and_deleted_candidate(tmp_path
     assert realloc.entity["reallocated"] is True
     assert "timestamps" not in realloc.entity
     assert realloc.time is None
-    assert realloc.temporal_quality == TemporalQuality.NONE
 
 
 def test_volatility3_adapter_converts_process_socket_and_bash_history(tmp_path: Path):
@@ -81,6 +81,25 @@ def test_volatility3_adapter_accepts_single_renderer_rows_file(tmp_path: Path):
     assert len(findings) == 1
     assert findings[0].artifact_class == "process"
     assert findings[0].raw_ref.startswith("vol3:linux.pslist")
+
+
+def test_volatility3_maps_only_shared_objects_to_library_mapping():
+    findings = adapt_plugin_rows(
+        {
+            "linux.proc.Maps": [
+                {"PID": 7, "Path": "/tmp/preload_marker"},
+                {"PID": 7, "Path": "/lib/x86_64-linux-gnu/libc.so.6"},
+            ]
+        },
+        run_id="run-adapter",
+    )
+
+    by_path = {finding.entity["value"]: finding for finding in findings}
+    assert by_path["/tmp/preload_marker"].artifact_class == "file"
+    assert (
+        by_path["/lib/x86_64-linux-gnu/libc.so.6"].artifact_class
+        == "library_mapping"
+    )
 
 
 def test_plaso_and_yara_adapters_convert_cached_outputs():

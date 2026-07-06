@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any
 
-from orchestrator.adapters.common import UNKNOWN_TIME, load_json_or_jsonl, make_tool_finding
-from orchestrator.canonical import EvidenceSource, TemporalQuality, ToolFinding
+from orchestrator.adapters.common import (
+    classify_fs_path,
+    load_json_or_jsonl,
+    make_tool_finding,
+)
+from orchestrator.canonical import EvidenceSource, ToolFinding
 
 _ADDR_RE = re.compile(r"(?P<ip>[0-9a-fA-F:.]+):(?P<port>\d+)")
 
@@ -91,7 +94,11 @@ def _row_to_finding(
         if path in (None, ""):
             return None
         entity = {"type": "path", "value": str(path), "pid": _pid(row)}
-        artifact_class = "library_mapping" if _looks_like_shared_object(str(path)) else "file"
+        artifact_class = (
+            "library_mapping"
+            if classify_fs_path(str(path)) == "shared_object"
+            else "file"
+        )
     else:
         return None
 
@@ -102,15 +109,13 @@ def _row_to_finding(
         source_type=EvidenceSource.MEMORY,
         artifact_class=artifact_class,
         entity=entity,
-        time=UNKNOWN_TIME,
+        time=None,
         raw_ref=f"vol3:{plugin}:row={idx}:pid={_pid(row)}",
         provenance={
             "adapter": "volatility3.json",
             "plugin": plugin,
             "row_index": idx,
-            "row": _jsonable_row(row),
         },
-        temporal_quality=TemporalQuality.NONE,
     )
 
 
@@ -159,11 +164,3 @@ def _first(row: dict[str, Any], *keys: str) -> Any:
 
 def _pid(row: dict[str, Any]) -> Any:
     return _first(row, "PID", "Pid", "pid")
-
-
-def _jsonable_row(row: dict[str, Any]) -> dict[str, Any]:
-    return json.loads(json.dumps(row, default=str))
-
-
-def _looks_like_shared_object(path: str) -> bool:
-    return path.endswith(".so") or ".so." in path or "preload" in path.lower()

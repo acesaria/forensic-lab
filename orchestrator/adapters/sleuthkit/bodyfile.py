@@ -10,22 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Iterable
 
-from orchestrator.adapters.common import iso_from_epoch, make_tool_finding
+from orchestrator.adapters.common import classify_fs_path, iso_from_epoch, make_tool_finding
 from orchestrator.canonical import EvidenceSource, ToolFinding
-
-_SERVICE_DIRS = (
-    "/etc/systemd/",
-    "/usr/lib/systemd/",
-    "/lib/systemd/",
-)
-_SERVICE_SUFFIXES = (".service", ".timer", ".socket", ".path", ".mount")
-_HISTORY_NAMES = (
-    ".bash_history",
-    ".zsh_history",
-    ".sh_history",
-    ".python_history",
-)
-
 
 # bodyfile columns: MD5|name|inode|mode|UID|GID|size|atime|mtime|ctime|crtime
 # fls -m appends "(deleted)" / "(deleted-realloc)" to the name of unallocated
@@ -149,15 +135,4 @@ def adapt_bodyfile_file(
 def _artifact_class(path: str, deleted: bool) -> str:
     if deleted:
         return "deleted_file_candidate"
-    if "ld.so.preload" in path or path.endswith(".preload"):
-        return "preload_configuration"
-    if path.endswith(".so") or ".so." in path:
-        return "shared_object"
-    if "preload" in path.rsplit("/", 1)[-1]:
-        return "preload_configuration"
-    if any(path.startswith(d) for d in _SERVICE_DIRS) and path.endswith(_SERVICE_SUFFIXES):
-        return "service_unit_file"
-    base = path.rsplit("/", 1)[-1]
-    if base in _HISTORY_NAMES or path.startswith("/var/log/"):
-        return "shell_history_log_event"
-    return "file"
+    return classify_fs_path(path)
