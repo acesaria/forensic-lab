@@ -98,7 +98,7 @@ def _classify(event: dict[str, Any], value: str) -> tuple[str, str]:
         return "shell_history_log_event", "path" if path else "log_line"
     if data_type.startswith("fs:") or parser == "filestat":
         return "file", "path"
-    return data_type, "log_line"
+    return (data_type or "timeline_event"), "log_line"
 
 
 def _strip_display_name_type(display_name: Any) -> str:

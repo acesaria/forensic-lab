@@ -135,9 +135,11 @@ Per run, four blocks plus one table. Nothing else.
   residual claims per rule; baseline-differencing effect (claims
   downgraded against the clean baseline).
 - **D. Temporal (RQ4, lite):** for each identified expectation having both a
-  GT action time and an evidence timestamp: signed offset in seconds and the
-  timestamp kind that supplied it (crtime/mtime/ctime, plaso
-  timestamp_desc); summary = median and maximum absolute offset.
+  GT action time and an event-finding timestamp: signed offset in seconds and
+  the timestamp kind that supplied it (Plaso `timestamp_desc`, including
+  filestat MACB kinds such as crtime/mtime/ctime); summary = median and
+  maximum absolute offset. Bodyfile object `entity["timestamps"]` metadata and
+  memory findings do not contribute offsets.
 
 **Per-expectation table** (the report's core):
 `expectation | outcome | observed by | claimed by (rules) | sources | time offset`.

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from orchestrator.adapters import write_tool_findings
-from orchestrator.adapters.plaso import adapt_plaso_jsonl_file
+from orchestrator.adapters.plaso import adapt_plaso_events, adapt_plaso_jsonl_file
 from orchestrator.adapters.sleuthkit import adapt_bodyfile_file
 from orchestrator.adapters.volatility3 import adapt_volatility_json_file
 from orchestrator.adapters.volatility3.json_output import adapt_plugin_rows
@@ -114,6 +114,16 @@ def test_plaso_and_yara_adapters_convert_cached_outputs():
     assert yara[0].tool == "yara"
     assert yara[0].entity["rule"] == "Suspicious_Linux_SO"
     assert yara[0].raw_ref.startswith("yara:")
+
+
+def test_plaso_empty_data_type_uses_inert_timeline_event_class():
+    findings = adapt_plaso_events(
+        [{"message": "boot noise", "timestamp": 1751536194000000}],
+        run_id="run-adapter",
+    )
+
+    assert len(findings) == 1
+    assert findings[0].artifact_class == "timeline_event"
 
 
 def test_adapters_do_not_import_ground_truth_modules():
