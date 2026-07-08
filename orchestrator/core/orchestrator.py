@@ -35,6 +35,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from detectors.baseline import apply_baseline_filter
 from detectors.engine import run_detectors_file, write_detection_claims
 from matcher.engine import render_console_summary, run_matcher_files
 from orchestrator.adapters import (
@@ -386,14 +387,17 @@ class ForensicOrchestrator:
                 run_id, distro_id, manifest_path, analysis_dir
             )
             tf_path = write_tool_findings(analysis_dir / "tool_findings.jsonl", findings)
+            # Detectors consume the baseline-filtered stream; the matcher keeps
+            # the unfiltered one so observed/funnel semantics (§10.7) hold.
+            detect_path, baseline_filter = tf_path, None
             if baseline_cache is not None:
-                claims = run_detectors_file(
-                    tf_path,
-                    baseline_findings_path=baseline_cache.tool_findings_path,
-                    baseline_identity=baseline_cache.identity,
+                detect_path, baseline_filter = apply_baseline_filter(
+                    findings,
+                    baseline_cache.tool_findings_path,
+                    analysis_dir,
+                    identity=baseline_cache.identity,
                 )
-            else:
-                claims = run_detectors_file(tf_path)
+            claims = run_detectors_file(detect_path)
             dc_path = write_detection_claims(
                 analysis_dir / "detection_claims.jsonl", claims
             )
@@ -403,6 +407,7 @@ class ForensicOrchestrator:
                 detection_claims_path=dc_path,
                 execution_truth_path=run_dir / "execution_truth.jsonl",
                 out_dir=analysis_dir,
+                baseline_filter=baseline_filter,
             )
         except Exception as exc:
             console.warn(f"canonical evaluation failed (acquisition is intact): {exc}")
@@ -478,7 +483,7 @@ class ForensicOrchestrator:
         if entry is None:
             console.warn(
                 "clean baseline cache unavailable: extracted baseline has no "
-                "comparable filesystem paths"
+                "disk findings"
             )
             return None, True
         console.ok(f"clean baseline cache written: {entry.tool_findings_path}")
@@ -543,7 +548,7 @@ class ForensicOrchestrator:
             console.warn(f"tsk extraction degraded: {exc}")
 
         try:
-            events = self._build_timeline(run_id, disk_path)
+            events = self._build_timeline(disk_path, analysis_dir)
             disk_timeline.extend(
                 adapt_plaso_events(
                     events,
@@ -581,14 +586,13 @@ class ForensicOrchestrator:
             return {"symbols": None, "profile": None}
         return {"symbols": str(isf), "profile": isf.name}
 
-    def _build_timeline(self, run_id: str, disk_path: Path) -> list[dict]:
+    def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> list[dict]:
         """
         Run the Plaso pipeline over the acquired disk and return the events.
-        Mirrors _verify_plaso but keeps the timeline as a named run artifact
-        (analysis/<run_id>/timeline.jsonl).
+        Mirrors _verify_plaso but keeps timeline.plaso/timeline.jsonl in the
+        caller's analysis dir (run analysis or baseline cache analysis).
         """
 
-        analysis_dir = self._paths.run_analysis_dir(run_id)
         storage_path = analysis_dir / "timeline.plaso"
         timeline_path = analysis_dir / "timeline.jsonl"
 
@@ -699,7 +703,7 @@ class ForensicOrchestrator:
         self._vol_runner.probe(memory_path, distro_id)
         self._sleuth_runner.probe(disk_path)
         # Plaso probe: confirm the toolchain can ingest the disk and emit events.
-        self._build_timeline(run_id, disk_path)
+        self._build_timeline(disk_path, self._paths.run_analysis_dir(run_id))
         console.ok(f"pipeline verified for '{distro_id}'")
 
     # --- private: experiment helpers -------------------------------------

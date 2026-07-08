@@ -16,7 +16,6 @@ from typing import Any, Callable, Iterable
 import yaml
 
 from orchestrator.canonical import DetectionClaim, ToolFinding, load_jsonl, write_jsonl
-from detectors.baseline import apply_baseline_to_claims
 
 _RULES_DIR = Path(__file__).resolve().parent / "rules"
 
@@ -39,9 +38,6 @@ DetectorFn = Callable[[Rule, list[ToolFinding]], Iterable[DetectionClaim]]
 def run_detectors(
     findings: Iterable[ToolFinding],
     rules_dir: str | Path | None = None,
-    *,
-    baseline_findings: Iterable[ToolFinding] | None = None,
-    baseline_identity: str | None = None,
 ) -> list[DetectionClaim]:
     items = list(findings)
     claims: list[DetectionClaim] = []
@@ -50,37 +46,15 @@ def run_detectors(
         if detector is None:
             continue
         claims.extend(detector(rule, items))
-    prepared = assign_claim_ids(claims)
-    if baseline_findings is not None and baseline_identity:
-        # Baseline annotation preserves each claim's id and order, so the
-        # claims stay prepared.
-        return apply_baseline_to_claims(
-            prepared,
-            items,
-            baseline_findings,
-            identity=baseline_identity,
-        )
-    return prepared
+    return assign_claim_ids(claims)
 
 
 def run_detectors_file(
     findings_path: str | Path,
     *,
     rules_dir: str | Path | None = None,
-    baseline_findings_path: str | Path | None = None,
-    baseline_identity: str | None = None,
 ) -> list[DetectionClaim]:
-    baseline_findings = (
-        load_jsonl(baseline_findings_path, ToolFinding)
-        if baseline_findings_path is not None and baseline_identity
-        else None
-    )
-    return run_detectors(
-        load_jsonl(findings_path, ToolFinding),
-        rules_dir=rules_dir,
-        baseline_findings=baseline_findings,
-        baseline_identity=baseline_identity,
-    )
+    return run_detectors(load_jsonl(findings_path, ToolFinding), rules_dir=rules_dir)
 
 
 def write_detection_claims(path: str | Path, claims: Iterable[DetectionClaim]) -> Path:

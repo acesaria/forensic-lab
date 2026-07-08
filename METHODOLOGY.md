@@ -78,8 +78,9 @@ side by side, never averaged into a single number. Hardened guests
 ## 4. Pipeline and GT-blindness contract
 
 scenario execution → GT written → acquisition (memory VM ON, disk VM OFF) →
-extraction → ToolFindings (adapters) → DetectionClaims (GT-blind rules) →
-matching + metrics + report (GT-aware).
+extraction → ToolFindings (adapters) → clean-baseline known-good filtering
+(GT-blind, per evidence source, never on memory) → DetectionClaims (GT-blind
+rules) → matching + metrics + report (GT-aware).
 
 Detectors, adapters, and rules never read GT, expectations, target
 paths/hashes, step names, or seeds; rules never contain scenario instance
@@ -90,6 +91,42 @@ millisecond precision) end to end; guests run with UTC clocks (recorded in
 `reference_context.json`); comparisons happen on epoch values. Adapters must
 never emit local time. Memory evidence is point-in-time and carries no event
 timestamps.
+
+**Clean-baseline known-good filtering.** This is *known-file filtering*
+(NSRL/RDS and EnCase/Autopsy "known good" hash sets) combined with *attribute
+differencing* (the Tripwire/AIDE integrity-monitor model), specialised to a
+purpose-built lab baseline instead of a shared reference set. A run finding is
+dropped only when an identical baseline finding exists in the **same evidence
+source**; families are never merged. Per-source signatures:
+
+- **Disk (TSK bodyfile):** `(artifact_class, type, value, inode, mode, size,
+  deleted, reallocated, mtime, ctime, crtime)`. **atime is stored but excluded
+  from the key on purpose.** Baseline and scenario are two separate boots from
+  the same snapshot, taken minutes apart; booting and running *reads* files,
+  which under `relatime` bumps atime to each boot's wall-clock while
+  mtime/ctime/crtime stay at the snapshot values. Keying on atime would leave
+  every merely-read baseline file unmatched (empirically ~5,000 of ~6,600
+  in-window disk rows), collapsing the filter to noise. The exclusion loses no
+  attacker signal: any *deliberate* atime change also updates ctime (which is
+  keyed), and genuine read events survive as timeline findings (below), not as
+  disk objects. No SHA-256 is computed, so this is attribute differencing, not
+  hash integrity — same-size in-place edits with unchanged mtime/ctime evade it
+  (§9).
+- **Timeline (Plaso):** `(artifact_class, type, value, time, time_kind)`.
+- **Memory (Volatility):** never filtered — a different boot means pids,
+  addresses, and sockets all differ, so cross-boot row equality is meaningless.
+
+**Division of labour, TSK vs. Plaso.** The two overlap on filesystem MACB
+stamps by nature (Plaso's filestat parser re-emits them as events); the split
+is **state vs. events**, not "which timestamps". The disk family answers *which
+objects differ from known-good state* (inode, deleted/reallocated flags,
+low-level attributes; no scalar event time is claimed for a bodyfile row). The
+timeline family answers *what happened, when, in what order*. Consequently the
+disk filter does nearly all the reduction work (baseline files read at boot are
+byte-identical objects); the timeline filter removes almost nothing, because
+**case-window scoping already discards pre-scenario events before the baseline
+filter runs**. The timeline branch is kept as a cheap invariant that becomes
+load-bearing only if the window is widened.
 
 ## 5. Matching semantics (normative)
 
@@ -132,8 +169,8 @@ Per run, four blocks plus one table. Nothing else.
   ≥2 sources); **combination gain** = `coverage_identified(all sources)` −
   `max over single sources of coverage_identified(that source alone)`.
 - **C. Triage (RQ3):** raw finding count → claim count (reduction ratio);
-  residual claims per rule; baseline-differencing effect (claims
-  downgraded against the clean baseline).
+  residual claims per rule; baseline-differencing effect (per-source
+  ToolFinding counts before/after clean-baseline known-good filtering).
 - **D. Temporal (RQ4, lite):** for each identified expectation having both a
   GT action time and an event-finding timestamp: signed offset in seconds and
   the timestamp kind that supplied it (Plaso `timestamp_desc`, including
@@ -181,6 +218,10 @@ evolves.
 - **MITRE ATT&CK** labels expectations and rules; technique overlap is part
   of the "supported" definition (§5).
 - Community detection standards (Sigma, YARA) supply rule content (§7).
+- **Known-file filtering / integrity monitoring:** the clean-baseline filter
+  (§4) is the lab-scale analogue of NSRL/RDS known-good hash sets and the
+  Tripwire/AIDE attribute-differencing model; it uses a purpose-built baseline
+  rather than a shared reference set, and attribute tuples rather than hashes.
 
 ## 9. Limitations and non-goals
 
@@ -193,6 +234,20 @@ evolves.
   tables only.
 - The framework is not a SIEM/EDR/live-response system and must not grow
   toward one; anti-forensics/evasion arms races are out of scope.
+- The clean-baseline filter (§4) is **one-directional** (run minus baseline):
+  it flags objects present or changed relative to known-good, but cannot by
+  itself report an artifact that existed in the baseline and is now *gone*.
+  Deleted inodes still surviving on disk are covered (they carry the
+  `deleted`/`reallocated` flag and pass through); a fully wiped/reallocated
+  file vanishes silently. A bidirectional diff emitting "missing-from-run"
+  findings is a possible extension, not implemented — the current scenarios add
+  or modify artifacts rather than erase baseline ones, so it would report
+  nothing.
+- No shared reference corpus (NSRL/RDS) and no cryptographic integrity baseline
+  are used; filtering is attribute-level against a self-built baseline, chosen
+  to keep the framework light. Memory state is not baseline-diffed; a known-good
+  set over stable fields (module names, process names) is conceivable but
+  unimplemented.
 
 ## 10. Implementation guardrails (normative — must not regress)
 
@@ -250,8 +305,10 @@ defect in the retired schema-v2 matcher; none may be reintroduced.
    or defaulted time is a defect.
 
 7. **`observed` is computed over raw ToolFindings, rule-independent.** It is
-   an identity-field search over findings, never over the claim stream, so it
-   stays valid as the rule profile (§7) changes.
+   an identity-field search over the *unfiltered* finding stream (never the
+   claim stream, never the baseline-filtered stream), so it stays valid as
+   the rule profile (§7) changes and a baseline-filtered expectation still
+   reads observed=yes / claimed=no — a detection gap, not an acquisition gap.
 
 8. **No ground-truth fields in the GT-blind stream.** Claim and finding
    entities never carry `step_id`, seeds, target paths/hashes, or other GT,

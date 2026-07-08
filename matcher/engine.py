@@ -159,6 +159,7 @@ def run_matcher_files(
     detection_claims_path: str | Path,
     execution_truth_path: str | Path | None = None,
     out_dir: str | Path,
+    baseline_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     truth: list[GroundTruthEvent] = []
     if execution_truth_path and Path(execution_truth_path).is_file():
@@ -169,6 +170,7 @@ def run_matcher_files(
         load_jsonl(detection_claims_path, DetectionClaim),
         truth,
         out_dir=out_dir,
+        baseline_filter=baseline_filter,
     )
 
 
@@ -179,6 +181,7 @@ def run_matcher(
     truth_events: Iterable[GroundTruthEvent] = (),
     *,
     out_dir: str | Path,
+    baseline_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -206,7 +209,7 @@ def run_matcher(
     ]
 
     run_id = next((c.run_id for c in claims), next((f.run_id for f in findings), ""))
-    metrics = _metrics(rows, findings, claims, run_id)
+    metrics = _metrics(rows, findings, claims, run_id, baseline_filter)
     paths = {
         "outcomes_path": out / "outcomes.jsonl",
         "metrics_path": out / "metrics.json",
@@ -344,6 +347,7 @@ def _metrics(
     findings: list[ToolFinding],
     claims: list[DetectionClaim],
     run_id: str,
+    baseline_filter: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     scored = [r for r in rows if r["scored"]]
     n = len(scored)
@@ -370,11 +374,6 @@ def _metrics(
     # Residual claims (§3): claims matching no scored expectation.
     matched_ids = {cid for r in scored for cid in r["matched_claims"]}
     residual = [c for c in claims if c.claim_id not in matched_ids]
-    downgraded = sum(
-        1 for c in claims
-        if isinstance(c.entity.get("baseline"), dict)
-        and c.entity["baseline"].get("downgraded") is True
-    )
     offsets = [r["time_offset_s"] for r in identified if r["time_offset_s"] is not None]
 
     return {
@@ -411,7 +410,10 @@ def _metrics(
             "residual_claims_per_rule": dict(
                 sorted(Counter(c.rule_id for c in residual).items())
             ),
-            "baseline_downgraded_claims": downgraded,
+            # Baseline-differencing effect (§6.C): per-source ToolFinding
+            # counts before/after clean-baseline filtering; null when no
+            # verified baseline was available.
+            "baseline_filter": baseline_filter,
         },
         "temporal": {
             "expectations_with_offset": len(offsets),
@@ -462,7 +464,7 @@ def render_report(metrics: dict[str, Any], rows: list[dict[str, Any]]) -> str:
         f"- raw findings: {tri['raw_findings']} -> claims: {tri['claims']} "
         f"(reduction {fmt(tri['reduction_ratio'])})",
         f"- residual claims: {tri['residual_claims']}",
-        f"- baseline-downgraded claims: {tri['baseline_downgraded_claims']}",
+        _baseline_filter_line(tri.get("baseline_filter")),
         "",
         "| rule | residual claims |",
         "|---|---:|",
@@ -490,6 +492,16 @@ def render_report(metrics: dict[str, Any], rows: list[dict[str, Any]]) -> str:
         ),
     ]
     return "\n".join(lines) + "\n"
+
+
+def _baseline_filter_line(bf: dict[str, Any] | None) -> str:
+    if not bf:
+        return "- clean-baseline filter: not applied"
+    parts = ", ".join(
+        f"{source} {counts['pre']} -> {counts['post']}"
+        for source, counts in sorted((bf.get("per_source") or {}).items())
+    )
+    return f"- clean-baseline filter ({bf.get('identity')}): {parts}"
 
 
 def render_console_summary(metrics: dict[str, Any]) -> list[str]:

@@ -35,7 +35,7 @@ Working rules:
 - Work directly on main (main-only policy). Commit with the repository's
   configured git identity. No Co-Authored-By trailers, no AI mentions.
 - Test command: python -m pytest orchestrator/ detectors/ matcher/ -q
-  (must end green).
+  (must end green). Activate venv before running python commands.
 - Shell variables used below:
   RUN=shared/experiments/ubuntu-22.04_userland_father_ldpreload_20260703-115003
   BASE=shared/baselines/lab-ubuntu-22.04-baseline-c94f1200087a

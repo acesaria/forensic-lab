@@ -1,152 +1,121 @@
-from detectors.baseline import (
-    BASELINE_CHANGED,
-    BASELINE_NEW,
-    BASELINE_PRESENT,
-    apply_baseline_to_claims,
-    compare_path_baseline,
-)
-from orchestrator.canonical import (
-    DetectionClaim,
-    EvidenceSource,
-    ToolFinding,
-)
+from detectors.baseline import filter_findings_against_baseline
+from orchestrator.canonical import EvidenceSource, ToolFinding
 
 
-def test_baseline_comparison_classifies_new_changed_and_present_paths():
+def test_disk_filtering_drops_exact_rows_and_keeps_new_or_changed():
     baseline = [
-        _finding("b-present", "/etc/demo.conf", sha256="same", size=10),
-        _finding("b-changed", "/etc/changed.conf", sha256="old", size=10),
+        _disk("b-same", "/etc/demo.conf", size=10, mtime="2026-01-01T00:00:00.000Z"),
+        _disk("b-grown", "/etc/grown.conf", size=10, mtime="2026-01-01T00:00:00.000Z"),
     ]
-    compromised = [
-        _finding("c-new", "/etc/new.conf", sha256="new", size=1),
-        _finding("c-present", "/etc/demo.conf", sha256="same", size=10),
-        _finding("c-changed", "/etc/changed.conf", sha256="new", size=10),
+    run = [
+        _disk("c-same", "/etc/demo.conf", size=10, mtime="2026-01-01T00:00:00.000Z"),
+        _disk("c-grown", "/etc/grown.conf", size=99, mtime="2026-01-01T00:00:00.000Z"),
+        _disk("c-new", "/etc/new.conf", size=1),
     ]
 
-    comparison = compare_path_baseline(
-        baseline,
-        compromised,
-        identity="lab-test:baseline",
+    kept, stats = filter_findings_against_baseline(
+        run, baseline, identity="lab-test:baseline"
     )
 
-    assert comparison.status_by_path["/etc/new.conf"] == BASELINE_NEW
-    assert comparison.status_by_path["/etc/demo.conf"] == BASELINE_PRESENT
-    assert comparison.status_by_path["/etc/changed.conf"] == BASELINE_CHANGED
+    assert [f.finding_id for f in kept] == ["c-grown", "c-new"]
+    assert stats["identity"] == "lab-test:baseline"
+    assert stats["per_source"]["disk"] == {"pre": 3, "post": 2}
 
 
-def test_size_and_size_bytes_are_compared_across_adapter_naming():
-    # Baseline records the file size as ``size`` while the run's adapter records
-    # it as ``size_bytes``. The two names are one logical field, so a real size
-    # change must surface as changed_vs_baseline rather than present_in_baseline.
-    baseline = [_finding("b-lib", "/usr/lib/x.so", size=100)]
-    grown = [_finding("c-lib", "/usr/lib/x.so", size_bytes=200)]
-    same = [_finding("c-lib", "/usr/lib/x.so", size_bytes=100)]
-
-    changed = compare_path_baseline(baseline, grown, identity="lab-test:baseline")
-    unchanged = compare_path_baseline(baseline, same, identity="lab-test:baseline")
-
-    assert changed.status_by_path["/usr/lib/x.so"] == BASELINE_CHANGED
-    assert unchanged.status_by_path["/usr/lib/x.so"] == BASELINE_PRESENT
-
-
-def test_present_in_baseline_timeline_only_candidate_is_downgraded():
-    baseline = [_finding("b-service", "/etc/systemd/system/demo.service")]
-    compromised = [
-        _finding(
-            "c-service",
-            "/etc/systemd/system/demo.service",
-            source=EvidenceSource.TIMELINE,
-            artifact_class="service_unit_file",
-        )
+def test_atime_only_change_is_still_known_good_but_mtime_change_is_kept():
+    baseline = [
+        _disk("b", "/usr/bin/tool", size=5,
+              atime="2026-01-01T00:00:00.000Z", mtime="2026-01-01T00:00:00.000Z"),
     ]
-    claim = _claim("c-service", "/etc/systemd/system/demo.service")
+    read_only = _disk("c-read", "/usr/bin/tool", size=5,
+                      atime="2026-06-01T12:00:00.000Z", mtime="2026-01-01T00:00:00.000Z")
+    modified = _disk("c-mod", "/usr/bin/tool", size=5,
+                     atime="2026-06-01T12:00:00.000Z", mtime="2026-06-01T12:00:00.000Z")
 
-    claims = apply_baseline_to_claims(
-        [claim],
-        compromised,
-        baseline,
-        identity="lab-test:baseline",
+    kept, _ = filter_findings_against_baseline(
+        [read_only, modified], baseline, identity="lab-test:baseline"
     )
 
-    assert len(claims) == 1
-    assert claims[0].entity["baseline"] == {
-        "status": BASELINE_PRESENT,
-        "downgraded": True,
-    }
+    assert [f.finding_id for f in kept] == ["c-mod"]
 
 
-def test_memory_correlation_claim_classifies_on_nested_library_path():
-    # The correlation detector stores a composite "<process> -> <library>" in
-    # entity['value'], and the process value can itself be a path. _claim_path
-    # must ignore the composite and classify on the nested library path so the
-    # claim is recognised as present_in_baseline rather than unknown.
-    baseline = [_finding("b-lib", "/usr/lib/x.so", sha256="same")]
-    compromised = [_finding("c-lib", "/usr/lib/x.so", sha256="same")]
-    claim = DetectionClaim(
-        claim_id="dc-corr",
-        run_id="run-baseline-test",
-        rule_id="flab.memory.process_library_correlation",
-        artifact_class="library_mapping",
-        entity={
-            "type": "process_library",
-            "value": "/usr/sbin/sshd -> /usr/lib/x.so",
-            "process": {"type": "path", "value": "/usr/sbin/sshd"},
-            "library": {"type": "path", "value": "/usr/lib/x.so"},
-        },
-        source_findings=["c-lib"],
-        attck=["T1574.006"],
-        notes="fixture correlation claim",
+def test_symlink_value_string_participates_and_retarget_is_kept():
+    baseline = [_disk("b-link", "/bin -> usr/bin", size=7)]
+    unchanged = _disk("c-link", "/bin -> usr/bin", size=7)
+    retargeted = _disk("c-evil", "/bin -> /tmp/evil", size=9)
+
+    kept, _ = filter_findings_against_baseline(
+        [unchanged, retargeted], baseline, identity="lab-test:baseline"
     )
 
-    claims = apply_baseline_to_claims(
-        [claim], compromised, baseline, identity="lab-test:baseline"
-    )
-
-    assert claims[0].entity["baseline"]["status"] == BASELINE_PRESENT
+    assert [f.finding_id for f in kept] == ["c-evil"]
 
 
-def test_present_in_baseline_disk_candidate_is_not_downgraded():
-    baseline = [_finding("b-service", "/etc/systemd/system/demo.service")]
-    compromised = [
-        _finding(
-            "c-service",
-            "/etc/systemd/system/demo.service",
-            source=EvidenceSource.DISK,
-            artifact_class="service_unit_file",
-        )
+def test_sources_are_never_merged_and_memory_passes_through():
+    # A baseline timeline event for a path must not vouch for a disk object at
+    # the same path, and memory rows are never filtered.
+    baseline = [
+        _event("b-ev", "/etc/demo.conf", time="2026-01-01T00:00:00.000Z"),
     ]
-    claim = _claim("c-service", "/etc/systemd/system/demo.service")
+    disk_row = _disk("c-disk", "/etc/demo.conf", size=10)
+    same_event = _event("c-ev-same", "/etc/demo.conf", time="2026-01-01T00:00:00.000Z")
+    new_event = _event("c-ev-new", "/etc/demo.conf", time="2026-06-01T12:00:00.000Z")
+    memory_row = _memory("c-mem")
 
-    claims = apply_baseline_to_claims(
-        [claim],
-        compromised,
+    kept, stats = filter_findings_against_baseline(
+        [disk_row, same_event, new_event, memory_row],
         baseline,
         identity="lab-test:baseline",
     )
 
-    assert claims[0].entity["baseline"] == {
-        "status": BASELINE_PRESENT,
-        "downgraded": False,
-    }
+    assert [f.finding_id for f in kept] == ["c-disk", "c-ev-new", "c-mem"]
+    assert stats["per_source"]["timeline"] == {"pre": 2, "post": 1}
+    assert stats["per_source"]["memory"] == {"pre": 1, "post": 1}
+
+
+def _disk(
+    finding_id: str,
+    path: str,
+    *,
+    size: int | None = None,
+    atime: str | None = None,
+    mtime: str | None = None,
+) -> ToolFinding:
+    entity = {"type": "path", "value": path, "size": size, "deleted": False}
+    timestamps = {k: v for k, v in (("atime", atime), ("mtime", mtime)) if v}
+    if timestamps:
+        entity["timestamps"] = timestamps
+    return _finding(finding_id, EvidenceSource.DISK, "file", entity, time=None)
+
+
+def _event(finding_id: str, value: str, *, time: str) -> ToolFinding:
+    return _finding(
+        finding_id,
+        EvidenceSource.TIMELINE,
+        "file",
+        {"type": "path", "value": value, "time_kind": "mtime"},
+        time=time,
+    )
+
+
+def _memory(finding_id: str) -> ToolFinding:
+    return _finding(
+        finding_id,
+        EvidenceSource.MEMORY,
+        "process",
+        {"type": "pid", "value": "1234"},
+        time=None,
+    )
 
 
 def _finding(
     finding_id: str,
-    path: str,
+    source: EvidenceSource,
+    artifact_class: str,
+    entity: dict,
     *,
-    sha256: str | None = None,
-    size: int | None = None,
-    size_bytes: int | None = None,
-    source: EvidenceSource = EvidenceSource.DISK,
-    artifact_class: str = "file",
+    time: str | None,
 ) -> ToolFinding:
-    entity = {"type": "path", "value": path}
-    if sha256 is not None:
-        entity["sha256"] = sha256
-    if size is not None:
-        entity["size"] = size
-    if size_bytes is not None:
-        entity["size_bytes"] = size_bytes
     return ToolFinding(
         finding_id=finding_id,
         run_id="run-baseline-test",
@@ -156,20 +125,7 @@ def _finding(
         source_type=source,
         artifact_class=artifact_class,
         entity=entity,
-        time=None,
+        time=time,
         raw_ref=f"fixture:{finding_id}",
         provenance={"adapter": "fixture"},
-    )
-
-
-def _claim(finding_id: str, path: str) -> DetectionClaim:
-    return DetectionClaim(
-        claim_id=f"dc-{finding_id}",
-        run_id="run-baseline-test",
-        rule_id="flab.filesystem.userland_persistence",
-        artifact_class="service_unit_file",
-        entity={"type": "path", "value": path},
-        source_findings=[finding_id],
-        attck=["T1543.002"],
-        notes="fixture claim",
     )

@@ -1,174 +1,128 @@
-"""Conservative clean-baseline comparison for GT-blind detector output.
+"""Clean-baseline known-good filtering of canonical ToolFinding rows.
 
-This module consumes canonical ToolFinding rows from an already-acquired clean
-baseline run. It does not acquire a baseline, create cache directories, or read
-scenario ground truth.
+Consumes ToolFinding rows from an already-acquired clean baseline and drops
+run findings whose per-source signature is present in the baseline. It does
+not acquire a baseline, manage cache directories, or read ground truth.
 
-Per-claim output is exactly what metrics block C (METHODOLOGY §6) reads:
-``entity["baseline"] = {"status": <status>, "downgraded": <bool>}``. A claim is
-downgraded only when its path is present unchanged in the clean baseline and
-every linked finding is timeline-sourced — a conservative benign-noise marker
-that never drops the claim.
+Source families are never merged: a disk object is vouched only by an
+identical baseline disk object, a timeline event only by an identical
+baseline event. Memory rows always pass through — Volatility observations
+come from a different boot (pids, addresses, sockets all differ), so row
+equality across boots is meaningless.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Iterable
 
-from orchestrator.canonical import DetectionClaim, EvidenceSource, ToolFinding
-from orchestrator.canonical.baseline_paths import (
-    BASELINE_FILESYSTEM_CLASSES,
-    normalize_baseline_path,
-)
+from orchestrator.canonical import EvidenceSource, ToolFinding, load_jsonl, write_jsonl
 
 _log = logging.getLogger(__name__)
 
-BASELINE_NEW = "new_vs_baseline"
-BASELINE_CHANGED = "changed_vs_baseline"
-BASELINE_PRESENT = "present_in_baseline"
-BASELINE_UNKNOWN = "unknown_baseline_status"
+_FILTERED_SOURCES = (EvidenceSource.DISK, EvidenceSource.TIMELINE)
 
 
-@dataclass(frozen=True)
-class BaselineComparison:
-    identity: str
-    status_by_path: dict[str, str]
-
-
-def compare_path_baseline(
-    baseline_findings: Iterable[ToolFinding],
-    compromised_findings: Iterable[ToolFinding],
+def apply_baseline_filter(
+    findings: Iterable[ToolFinding],
+    baseline_findings_path: str | Path,
+    out_dir: str | Path,
     *,
     identity: str,
-) -> BaselineComparison:
-    baseline_index = _index_findings(baseline_findings)
-    current_index = _index_findings(compromised_findings)
-    if current_index and not baseline_index:
+) -> tuple[Path, dict[str, Any]]:
+    """Filter ``findings`` and persist the two filter artifacts in ``out_dir``.
+
+    Writes ``tool_findings_filtered.jsonl`` (rows keep their canonical ids so
+    claims still resolve against the unfiltered stream at match time) and
+    ``baseline_filter.json``; returns ``(filtered_path, stats)``.
+    """
+    out_dir = Path(out_dir)
+    kept, stats = filter_findings_against_baseline(
+        findings,
+        load_jsonl(baseline_findings_path, ToolFinding),
+        identity=identity,
+    )
+    filtered_path = write_jsonl(out_dir / "tool_findings_filtered.jsonl", kept)
+    (out_dir / "baseline_filter.json").write_text(
+        json.dumps(stats, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    return filtered_path, stats
+
+
+def filter_findings_against_baseline(
+    findings: Iterable[ToolFinding],
+    baseline_findings: Iterable[ToolFinding],
+    *,
+    identity: str,
+) -> tuple[list[ToolFinding], dict[str, Any]]:
+    """Return ``(kept, stats)``: findings minus exact baseline matches.
+
+    ``stats`` records the baseline identity and per-source pre/post counts;
+    it is what metrics block C (METHODOLOGY §6) reports as the
+    baseline-differencing effect.
+    """
+    known_good: dict[EvidenceSource, set[tuple]] = {s: set() for s in _FILTERED_SOURCES}
+    for row in baseline_findings:
+        if row.source_type in known_good:
+            known_good[row.source_type].add(_signature(row))
+    if not any(known_good.values()):
         _log.warning(
-            "baseline '%s' has no comparable filesystem findings; every path will "
-            "be reported as %s",
+            "baseline '%s' has no disk/timeline rows; nothing will be filtered",
             identity,
-            BASELINE_NEW,
         )
-    status_by_path = {
-        path: _compare_rows(baseline_index[path], rows)
-        if path in baseline_index
-        else BASELINE_NEW
-        for path, rows in current_index.items()
+
+    pre: dict[str, int] = {}
+    post: dict[str, int] = {}
+    kept: list[ToolFinding] = []
+    for row in findings:
+        source = row.source_type.value
+        pre[source] = pre.get(source, 0) + 1
+        signatures = known_good.get(row.source_type)
+        if signatures is not None and _signature(row) in signatures:
+            continue
+        post[source] = post.get(source, 0) + 1
+        kept.append(row)
+
+    stats = {
+        "identity": identity,
+        "per_source": {
+            source: {"pre": count, "post": post.get(source, 0)}
+            for source, count in sorted(pre.items())
+        },
     }
-    return BaselineComparison(identity=identity, status_by_path=status_by_path)
+    return kept, stats
 
 
-def apply_baseline_to_claims(
-    claims: Iterable[DetectionClaim],
-    compromised_findings: Iterable[ToolFinding],
-    baseline_findings: Iterable[ToolFinding],
-    *,
-    identity: str,
-) -> list[DetectionClaim]:
-    findings = list(compromised_findings)
-    by_id = {finding.finding_id: finding for finding in findings}
-    comparison = compare_path_baseline(baseline_findings, findings, identity=identity)
-    out = list(claims)
-    for claim in out:
-        path = _claim_path(claim)
-        status = comparison.status_by_path.get(path, BASELINE_UNKNOWN) if path else BASELINE_UNKNOWN
-        claim.entity["baseline"] = {
-            "status": status,
-            "downgraded": status == BASELINE_PRESENT and _timeline_only(claim, by_id),
-        }
-    return out
-
-
-def _timeline_only(claim: DetectionClaim, findings_by_id: dict[str, ToolFinding]) -> bool:
-    linked = [findings_by_id[fid] for fid in claim.source_findings if fid in findings_by_id]
-    return bool(linked) and {finding.source_type for finding in linked} == {EvidenceSource.TIMELINE}
-
-
-def _index_findings(findings: Iterable[ToolFinding]) -> dict[str, list[ToolFinding]]:
-    out: dict[str, list[ToolFinding]] = {}
-    for finding in findings:
-        if finding.artifact_class not in BASELINE_FILESYSTEM_CLASSES:
-            continue
-        path = _finding_path(finding)
-        if not path:
-            continue
-        out.setdefault(path, []).append(finding)
-    return out
-
-
-# Content fields used to decide whether a path's bytes changed against the
-# baseline. ``size`` and ``size_bytes`` are the same quantity under two adapter
-# names, so they collapse to one logical field; otherwise a baseline that
-# records ``size`` never compares against a run that records ``size_bytes`` and a
-# genuinely changed file is misreported as present_in_baseline.
-_COMPARE_FIELDS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("sha256", ("sha256",)),
-    ("size", ("size", "size_bytes")),
-)
-
-
-def _compare_rows(
-    baseline_rows: list[ToolFinding],
-    current_rows: list[ToolFinding],
-) -> str:
-    comparable = _comparable_fields(baseline_rows, current_rows)
-    if not comparable:
-        return BASELINE_PRESENT
-    aliases = dict(_COMPARE_FIELDS)
-    for current in current_rows:
-        for baseline in baseline_rows:
-            if all(
-                _logical_value(current, aliases[field]) == _logical_value(baseline, aliases[field])
-                for field in comparable
-            ):
-                return BASELINE_PRESENT
-    return BASELINE_CHANGED
-
-
-def _comparable_fields(
-    baseline_rows: list[ToolFinding],
-    current_rows: list[ToolFinding],
-) -> tuple[str, ...]:
-    fields: list[str] = []
-    for field, aliases in _COMPARE_FIELDS:
-        if any(_logical_value(row, aliases) is not None for row in baseline_rows) and any(
-            _logical_value(row, aliases) is not None for row in current_rows
-        ):
-            fields.append(field)
-    return tuple(fields)
-
-
-def _logical_value(finding: ToolFinding, aliases: tuple[str, ...]) -> Any:
-    for field in aliases:
-        value = _entity_value(finding, field)
-        if value not in (None, ""):
-            return value
-    return None
-
-
-def _claim_path(claim: DetectionClaim) -> str:
-    entity = claim.entity
-    direct = normalize_baseline_path(entity.get("path") or entity.get("value"))
-    if direct:
-        return direct
-    for key in ("library", "process", "file", "source"):
-        value = entity.get(key)
-        if isinstance(value, dict):
-            path = normalize_baseline_path(value.get("path") or value.get("value"))
-            if path:
-                return path
-    return ""
-
-
-def _finding_path(finding: ToolFinding) -> str:
+def _signature(finding: ToolFinding) -> tuple:
     entity = finding.entity
-    return normalize_baseline_path(entity.get("path") or entity.get("value"))
-
-
-def _entity_value(finding: ToolFinding, field: str) -> Any:
-    if field in finding.entity:
-        return finding.entity.get(field)
-    return finding.provenance.get(field)
+    if finding.source_type is EvidenceSource.TIMELINE:
+        return (
+            finding.artifact_class,
+            entity.get("type"),
+            entity.get("value"),
+            finding.time,
+            entity.get("time_kind"),
+        )
+    # Disk objects: identity + content fields. atime is excluded on purpose —
+    # a benign file merely read during the case window is still the baseline
+    # object. Symlinks keep the adapter's "path -> target" value string, so a
+    # retargeted link changes signature. ponytail: same-size in-place edits
+    # with unchanged mtime/ctime evade this; per-file content hashing if
+    # anti-forensics ever enters scope.
+    stamps = entity.get("timestamps")
+    stamps = stamps if isinstance(stamps, dict) else {}
+    return (
+        finding.artifact_class,
+        entity.get("type"),
+        entity.get("value"),
+        entity.get("inode"),
+        entity.get("mode"),
+        entity.get("size"),
+        bool(entity.get("deleted")),
+        bool(entity.get("reallocated")),
+        stamps.get("mtime"),
+        stamps.get("ctime"),
+        stamps.get("crtime"),
+    )

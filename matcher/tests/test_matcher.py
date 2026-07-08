@@ -96,12 +96,25 @@ def test_many_to_one_identity_and_scored_denominators(tmp_path: Path):
     assert metrics["coverage"]["missed"] == 1
     assert metrics["sources"]["corroboration_rate"] == 1.0
     assert metrics["triage"]["residual_claims_per_rule"] == {"rule.c-residual": 1}
+    assert metrics["triage"]["baseline_filter"] is None  # no baseline supplied
     # No detection-theoretic vocabulary anywhere in the output (§10.3).
     flat = str(metrics)
     assert "precision" not in flat and "f1" not in flat and "fp" not in flat
     assert (tmp_path / "outcomes.jsonl").is_file()
     assert (tmp_path / "metrics.json").is_file()
     assert (tmp_path / "report.md").is_file()
+
+
+def test_baseline_filter_stats_pass_through_to_triage_block(tmp_path: Path):
+    stats = {
+        "identity": "lab-test:baseline",
+        "per_source": {"disk": {"pre": 10, "post": 2}},
+    }
+
+    result = run_matcher([], [], [], out_dir=tmp_path, baseline_filter=stats)
+
+    assert result["metrics"]["triage"]["baseline_filter"] == stats
+    assert "lab-test:baseline" in (tmp_path / "report.md").read_text()
 
 
 def test_temporal_offset_only_from_identity_matching_truth_event(tmp_path: Path):

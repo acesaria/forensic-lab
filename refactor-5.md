@@ -41,7 +41,6 @@ Expected effect:
 * Some raw finding counts may increase because one bodyfile row can now generate multiple timestamp-kind findings.
 * Coverage outcomes should remain unchanged; offsets may shift or become absent where the previous value was unsafe.
 
-Step 5b — Plaso/bodyfile artifact classes
 
 Purpose:
 Fix the artifact-class conflation where generic timeline/log events were being labeled as shell history.

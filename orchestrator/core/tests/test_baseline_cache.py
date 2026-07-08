@@ -28,6 +28,8 @@ def test_clean_baseline_cache_manifest_is_written_and_reused_with_identity(tmp_p
         cache_dir / "tool_findings.jsonl",
         [_finding("tf-1", "/etc/ld.so.preload", sha256="abc", size=12)],
     )
+    (cache_dir / "analysis").mkdir(parents=True)
+    (cache_dir / "analysis" / "bodyfile").write_text("0|/etc|2|d|0|0|4096|1|1|1|1\n")
 
     entry = write_cache_manifest(
         paths,
@@ -39,9 +41,12 @@ def test_clean_baseline_cache_manifest_is_written_and_reused_with_identity(tmp_p
     assert entry is not None
     assert entry.identity == identity
     assert entry.manifest["baseline_identity"] == identity
-    assert entry.manifest["comparable_path_count"] == 1
+    assert entry.manifest["source_counts"] == {"disk": 1}
+    assert entry.manifest["adapter_version"]
     manifest = json.loads(entry.manifest_path.read_text(encoding="utf-8"))
     assert manifest["tool_findings"] == str(tf_path)
+    assert set(manifest["raw_channels"]) == {"bodyfile"}
+    assert len(manifest["raw_channels"]["bodyfile"]["sha256"]) == 64
 
     reused = load_compatible_cache(paths, expected)
 
@@ -72,7 +77,7 @@ def test_clean_baseline_cache_rejects_incompatible_identity_fields(tmp_path):
     assert load_compatible_cache(paths, changed_tools) is None
 
 
-def test_clean_baseline_cache_without_comparable_paths_is_not_reused(tmp_path):
+def test_clean_baseline_cache_without_disk_findings_is_not_reused(tmp_path):
     paths = _paths(tmp_path)
     identity = baseline_identity("ubuntu-22.04", vm_prefix="lab", snapshot="baseline")
     expected = _expected(identity)
@@ -107,7 +112,7 @@ def test_clean_baseline_cache_without_comparable_paths_is_not_reused(tmp_path):
     assert load_compatible_cache(paths, expected) is None
 
 
-def test_declarative_evaluation_passes_verified_baseline_to_detector(
+def test_declarative_evaluation_filters_findings_against_verified_baseline(
     tmp_path, monkeypatch
 ):
     paths = _paths(tmp_path)
@@ -125,8 +130,10 @@ def test_declarative_evaluation_passes_verified_baseline_to_detector(
         ),
         encoding="utf-8",
     )
-    baseline_tf = tmp_path / "baseline_tool_findings.jsonl"
-    baseline_tf.write_text("", encoding="utf-8")
+    baseline_tf = write_jsonl(
+        tmp_path / "baseline_tool_findings.jsonl",
+        [_finding("b-1", "/etc/hosts", size=12)],
+    )
     baseline_entry = BaselineCacheEntry(
         identity="lab-ubuntu-22.04:baseline",
         cache_dir=tmp_path,
@@ -147,13 +154,15 @@ def test_declarative_evaluation_passes_verified_baseline_to_detector(
     monkeypatch.setattr(
         orch,
         "_collect_tool_findings",
-        lambda *args, **kwargs: [_finding("tf-1", "/etc/ld.so.preload")],
+        lambda *args, **kwargs: [
+            _finding("tf-known", "/etc/hosts", size=12),
+            _finding("tf-new", "/etc/ld.so.preload"),
+        ],
     )
     captured: dict[str, object] = {}
 
     def fake_run_detectors_file(path, **kwargs):
-        captured["findings_path"] = path
-        captured.update(kwargs)
+        captured["findings_path"] = Path(path)
         return [
             DetectionClaim(
                 claim_id="dc-1",
@@ -161,18 +170,21 @@ def test_declarative_evaluation_passes_verified_baseline_to_detector(
                 rule_id="fixture",
                 artifact_class="preload_configuration",
                 entity={"type": "path", "value": "/etc/ld.so.preload"},
-                source_findings=["tf-1"],
+                source_findings=["tf-new"],
                 attck=[],
                 notes="fixture",
             )
         ]
 
+    def fake_run_matcher_files(**kwargs):
+        captured["matcher_kwargs"] = kwargs
+        return {"metrics": {"schema": "forensic-lab.matcher.metrics.v3"}}
+
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.run_detectors_file", fake_run_detectors_file
     )
     monkeypatch.setattr(
-        "orchestrator.core.orchestrator.run_matcher_files",
-        lambda **kwargs: {"metrics": {"schema": "forensic-lab.matcher.metrics.v2"}},
+        "orchestrator.core.orchestrator.run_matcher_files", fake_run_matcher_files
     )
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.render_console_summary", lambda metrics: []
@@ -185,8 +197,28 @@ def test_declarative_evaluation_passes_verified_baseline_to_detector(
         baseline_cache=baseline_entry,
     )
 
-    assert captured["baseline_findings_path"] == baseline_tf
-    assert captured["baseline_identity"] == "lab-ubuntu-22.04:baseline"
+    analysis_dir = paths.run_analysis_dir(run_id)
+    stats = json.loads((analysis_dir / "baseline_filter.json").read_text())
+    filtered = [
+        json.loads(line)
+        for line in (analysis_dir / "tool_findings_filtered.jsonl").read_text().splitlines()
+    ]
+
+    # Detectors consume the filtered stream; the matcher keeps the unfiltered
+    # one plus the filter stats.
+    assert captured["findings_path"] == analysis_dir / "tool_findings_filtered.jsonl"
+    assert [f["entity"]["value"] for f in filtered] == ["/etc/ld.so.preload"]
+    # Filtered rows keep their canonical ids so claim.source_findings resolve
+    # against the unfiltered stream the matcher loads.
+    unfiltered_ids = {
+        json.loads(line)["finding_id"]
+        for line in (analysis_dir / "tool_findings.jsonl").read_text().splitlines()
+    }
+    assert {f["finding_id"] for f in filtered} <= unfiltered_ids
+    assert stats["per_source"]["disk"] == {"pre": 2, "post": 1}
+    matcher_kwargs = captured["matcher_kwargs"]
+    assert matcher_kwargs["tool_findings_path"] == analysis_dir / "tool_findings.jsonl"
+    assert matcher_kwargs["baseline_filter"] == stats
 
 
 class _DummyDumper:

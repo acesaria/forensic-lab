@@ -2,7 +2,10 @@
 
 The cache is keyed by the existing VM/snapshot identity, e.g.
 ``lab-ubuntu-22.04:baseline``. It stores canonical ToolFinding rows extracted
-from the pristine baseline state; it does not create a second baseline concept.
+from the pristine baseline state plus the raw channel outputs that produced
+them (analysis/bodyfile, vol3.json, timeline.jsonl, timeline.plaso), so the
+rows can be re-adapted offline when adapters change; it does not create a
+second baseline concept.
 """
 
 from __future__ import annotations
@@ -10,19 +13,22 @@ from __future__ import annotations
 import hashlib
 import json
 import time
+from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from orchestrator.adapters.common import ADAPTER_VERSION
 from orchestrator.canonical import ToolFinding, load_jsonl
-from orchestrator.canonical.baseline_paths import (
-    BASELINE_FILESYSTEM_CLASSES,
-    normalize_baseline_path,
-)
 from orchestrator.core.paths import ProjectPaths
 
-SCHEMA = "forensic-lab.baseline-cache.v1"
+SCHEMA = "forensic-lab.baseline-cache.v2"
 EXTRACTION_PROFILE = "canonical-tool-findings-v1"
+
+# Raw channel files preserved under <cache_dir>/analysis for audit and
+# offline re-adaptation.
+RAW_CHANNELS = ("bodyfile", "vol3.json", "timeline.jsonl", "timeline.plaso")
+
 
 @dataclass(frozen=True)
 class BaselineCacheEntry:
@@ -63,6 +69,7 @@ def expected_manifest(
         "baseline_snapshot": snapshot,
         "baseline_identity": identity,
         "extraction_profile": EXTRACTION_PROFILE,
+        "adapter_version": ADAPTER_VERSION,
         "source_image": dict((profile or {}).get("image") or {}),
         "guest": guest or {},
         "tool_versions": tool_versions or {},
@@ -86,7 +93,7 @@ def load_compatible_cache(
         return None
     if not _manifest_compatible(manifest, expected):
         return None
-    if int(manifest.get("comparable_path_count") or 0) <= 0:
+    if int((manifest.get("source_counts") or {}).get("disk") or 0) <= 0:
         return None
     return BaselineCacheEntry(
         identity=str(expected["baseline_identity"]),
@@ -108,8 +115,8 @@ def write_cache_manifest(
     cache_dir = cache_dir_for_identity(paths, str(expected["baseline_identity"]))
     cache_dir.mkdir(parents=True, exist_ok=True)
     records = load_jsonl(tool_findings_path, ToolFinding)
-    comparable_paths = _comparable_paths(records)
-    if not comparable_paths:
+    source_counts = Counter(record.source_type.value for record in records)
+    if source_counts.get("disk", 0) <= 0:
         return None
     manifest = {
         **expected,
@@ -117,7 +124,8 @@ def write_cache_manifest(
         "tool_findings": str(tool_findings_path),
         "acquisition_manifest": str(acquisition_manifest_path) if acquisition_manifest_path else None,
         "tool_finding_count": len(records),
-        "comparable_path_count": len(comparable_paths),
+        "source_counts": dict(sorted(source_counts.items())),
+        "raw_channels": _raw_channels(cache_dir),
     }
     manifest_path = cache_dir / "manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -131,7 +139,29 @@ def write_cache_manifest(
     )
 
 
+def _raw_channels(cache_dir: Path) -> dict[str, dict[str, Any]]:
+    """Path, sha256 and size of each preserved raw channel file (cheap
+    whole-file hashes for audit/reproducibility, not per-file content hashes
+    of the imaged filesystem)."""
+    out: dict[str, dict[str, Any]] = {}
+    for name in RAW_CHANNELS:
+        path = cache_dir / "analysis" / name
+        if not path.is_file():
+            continue
+        with path.open("rb") as fh:
+            digest = hashlib.file_digest(fh, "sha256")
+        out[name] = {
+            "path": str(path),
+            "sha256": digest.hexdigest(),
+            "size_bytes": path.stat().st_size,
+        }
+    return out
+
+
 def _manifest_compatible(manifest: dict[str, Any], expected: dict[str, Any]) -> bool:
+    # adapter_version is part of the identity: stale-format rows must never be
+    # reused silently. A mismatch forces a rebuild (offline re-adaptation of
+    # the preserved raw channels is enough; no VM re-acquisition is required).
     keys = (
         "schema",
         "distro",
@@ -139,6 +169,7 @@ def _manifest_compatible(manifest: dict[str, Any], expected: dict[str, Any]) -> 
         "baseline_snapshot",
         "baseline_identity",
         "extraction_profile",
+        "adapter_version",
         "source_image",
         "guest",
         "tool_versions",
@@ -164,16 +195,3 @@ def _identity_warnings(
     if not tool_versions:
         warnings.append("tool version identity unavailable")
     return warnings
-
-
-def _comparable_paths(findings: list[ToolFinding]) -> set[str]:
-    out: set[str] = set()
-    for finding in findings:
-        if finding.artifact_class not in BASELINE_FILESYSTEM_CLASSES:
-            continue
-        path = normalize_baseline_path(
-            finding.entity.get("path") or finding.entity.get("value")
-        )
-        if path:
-            out.add(path)
-    return out
