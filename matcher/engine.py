@@ -375,6 +375,8 @@ def _metrics(
     matched_ids = {cid for r in scored for cid in r["matched_claims"]}
     residual = [c for c in claims if c.claim_id not in matched_ids]
     offsets = [r["time_offset_s"] for r in identified if r["time_offset_s"] is not None]
+    bf_pre = sum(c["pre"] for c in (baseline_filter or {}).get("per_source", {}).values())
+    bf_warning = f"baseline_filter pre-total ({bf_pre}) != raw findings ({len(findings)})"
 
     return {
         "schema": _METRICS_SCHEMA,
@@ -414,6 +416,8 @@ def _metrics(
             # counts before/after clean-baseline filtering; null when no
             # verified baseline was available.
             "baseline_filter": baseline_filter,
+            "baseline_filter_warning": bf_warning
+            if baseline_filter is not None and bf_pre != len(findings) else None,
         },
         "temporal": {
             "expectations_with_offset": len(offsets),
@@ -465,6 +469,8 @@ def render_report(metrics: dict[str, Any], rows: list[dict[str, Any]]) -> str:
         f"(reduction {fmt(tri['reduction_ratio'])})",
         f"- residual claims: {tri['residual_claims']}",
         _baseline_filter_line(tri.get("baseline_filter")),
+        *([f"- clean-baseline warning: {tri['baseline_filter_warning']}"]
+          if tri.get("baseline_filter_warning") else []),
         "",
         "| rule | residual claims |",
         "|---|---:|",

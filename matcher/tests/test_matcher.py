@@ -117,6 +117,21 @@ def test_baseline_filter_stats_pass_through_to_triage_block(tmp_path: Path):
     assert "lab-test:baseline" in (tmp_path / "report.md").read_text()
 
 
+def test_stale_baseline_filter_stats_are_flagged(tmp_path: Path):
+    stats = {
+        "identity": "lab-test:baseline",
+        "per_source": {"disk": {"pre": 2, "post": 1}},
+    }
+    findings = [_finding("tf-1", EvidenceSource.DISK, "/tmp/x/rk.so")]
+
+    result = run_matcher([], findings, [], out_dir=tmp_path, baseline_filter=stats)
+
+    warning = result["metrics"]["triage"]["baseline_filter_warning"]
+    assert warning == "baseline_filter pre-total (2) != raw findings (1)"
+    assert result["metrics"]["triage"]["baseline_filter"] == stats
+    assert f"- clean-baseline warning: {warning}" in (tmp_path / "report.md").read_text()
+
+
 def test_temporal_offset_only_from_identity_matching_truth_event(tmp_path: Path):
     # §6.D: GT action time is taken only from a truth event describing the
     # same object; a same-step event about a different object supplies nothing.
