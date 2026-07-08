@@ -175,8 +175,10 @@ Per run, four blocks plus one table. Nothing else.
   GT action time and an event-finding timestamp: signed offset in seconds and
   the timestamp kind that supplied it (Plaso `timestamp_desc`, including
   filestat MACB kinds such as crtime/mtime/ctime); summary = median and
-  maximum absolute offset. Bodyfile object `entity["timestamps"]` metadata and
-  memory findings do not contribute offsets.
+  maximum absolute offset. When several findings supply a timestamp, the
+  smallest absolute offset is reported (best evidence placement). Bodyfile
+  object `entity["timestamps"]` metadata and memory findings do not contribute
+  offsets.
 
 **Per-expectation table** (the report's core):
 `expectation | outcome | observed by | claimed by (rules) | sources | time offset`.
