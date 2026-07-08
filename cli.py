@@ -1,6 +1,7 @@
 """CLI entry point for forensic-lab."""
 
 import argparse
+import json
 import logging
 import shutil
 import sys
@@ -120,7 +121,9 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         "--baseline-findings",
         default=None,
         help=(
-            "Optional clean baseline canonical tool_findings.jsonl. Filtering is "
+            "Optional clean baseline canonical tool_findings.jsonl. Known-good "
+            "findings are filtered out before rules run (writes "
+            "tool_findings_filtered.jsonl + baseline_filter.json next to --out); "
             "applied only when --baseline-identity is also supplied."
         ),
     )
@@ -147,6 +150,14 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         "--execution-truth",
         default=None,
         help="Optional execution_truth.jsonl enabling the temporal block (RQ4)",
+    )
+    match_canonical.add_argument(
+        "--baseline-filter",
+        default=None,
+        help=(
+            "Optional baseline_filter.json (written by run-detectors) embedded "
+            "into metrics block C"
+        ),
     )
     match_canonical.add_argument("--out-dir", required=True)
 
@@ -268,24 +279,27 @@ def _cmd_run_adapters(args: argparse.Namespace) -> int:
 def _cmd_run_detectors(args: argparse.Namespace) -> int:
     from detectors.engine import run_detectors_file, write_detection_claims
 
-    if args.baseline_findings and not args.baseline_identity:
+    if bool(args.baseline_findings) != bool(args.baseline_identity):
         print(
-            "warning: --baseline-findings supplied without --baseline-identity; "
-            "baseline filtering disabled",
+            "warning: --baseline-findings and --baseline-identity must be "
+            "supplied together; baseline filtering disabled",
             file=sys.stderr,
         )
-    if args.baseline_identity and not args.baseline_findings:
-        print(
-            "warning: --baseline-identity supplied without --baseline-findings; "
-            "baseline filtering disabled",
-            file=sys.stderr,
+        return 2
+    findings_path = Path(args.findings)
+    if args.baseline_findings and args.baseline_identity:
+        from detectors.baseline import apply_baseline_filter
+        from orchestrator.canonical import ToolFinding, load_jsonl
+
+        findings_path, stats = apply_baseline_filter(
+            load_jsonl(findings_path, ToolFinding),
+            args.baseline_findings,
+            Path(args.out).parent,
+            identity=args.baseline_identity,
         )
-    claims = run_detectors_file(
-        args.findings,
-        rules_dir=args.rules_dir,
-        baseline_findings_path=args.baseline_findings,
-        baseline_identity=args.baseline_identity,
-    )
+        for source, counts in stats["per_source"].items():
+            print(f"baseline filter {source}: {counts['pre']} -> {counts['post']}")
+    claims = run_detectors_file(findings_path, rules_dir=args.rules_dir)
     out = write_detection_claims(args.out, claims)
     print(f"wrote {len(claims)} detection claim(s): {out}")
     return 0
@@ -294,12 +308,22 @@ def _cmd_run_detectors(args: argparse.Namespace) -> int:
 def _cmd_match_canonical(args: argparse.Namespace) -> int:
     from matcher.engine import render_console_summary, run_matcher_files
 
+    baseline_filter = None
+    if args.baseline_filter:
+        baseline_filter = json.loads(
+            Path(args.baseline_filter).read_text(encoding="utf-8")
+        )
+    else:
+        default_filter = Path(args.detection_claims).parent / "baseline_filter.json"
+        if default_filter.exists():
+            baseline_filter = json.loads(default_filter.read_text(encoding="utf-8"))
     result = run_matcher_files(
         expectations_path=args.expectations,
         tool_findings_path=args.tool_findings,
         detection_claims_path=args.detection_claims,
         execution_truth_path=args.execution_truth,
         out_dir=args.out_dir,
+        baseline_filter=baseline_filter,
     )
     for line in render_console_summary(result["metrics"]):
         print(line)
