@@ -106,7 +106,8 @@ source**; families are never merged. Per-source signatures:
   which under `relatime` bumps atime to each boot's wall-clock while
   mtime/ctime/crtime stay at the snapshot values. Keying on atime would leave
   every merely-read baseline file unmatched (empirically ~5,000 of ~6,600
-  in-window disk rows), collapsing the filter to noise. The exclusion loses no
+  in-window disk rows, measured on the canonical Ubuntu 22.04 case study,
+  2026-07), collapsing the filter to noise. The exclusion loses no
   attacker signal: any *deliberate* atime change also updates ctime (which is
   keyed), and genuine read events survive as timeline findings (below), not as
   disk objects. No SHA-256 is computed, so this is attribute differencing, not
