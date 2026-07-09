@@ -1,5 +1,8 @@
 # Detection Rule Provenance and Evidence-Strength Audit
 
+> Historical/partially stale: verify against TODO.md, METHODOLOGY.md,
+> docs/repo_map.md, and latest metrics before using.
+
 Date: 2026-06-27
 Scope: GT-blind detector rules under `detectors/rules/**` and their semantics in
 `detectors/engine.py`. This is a review document. No rule behavior is changed

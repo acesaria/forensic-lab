@@ -1,5 +1,8 @@
 # Father LD_PRELOAD Walkthrough
 
+> Historical/partially stale: verify against TODO.md, METHODOLOGY.md,
+> docs/repo_map.md, and latest metrics before using.
+
 Status: this is a historical walkthrough for a cached run. The current
 `userland_father_ldpreload` scenario uses the real Father source, a
 scenario-local LD_PRELOAD activation artifact, and a bounded localhost-only
