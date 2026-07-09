@@ -53,11 +53,12 @@ Guardrails:
 ## Next Phases
 
 1. Father cleanup variant.
-2. One second full-depth scenario, preferably malicious LKM unless CopyFail is
+2. Recheck baseline logic. Check if sha256 is implemented and working. Implement 'two way' diff. Add baseline also for memory (Ex. proclist and lkm.. nothing too complex)
+3. One second full-depth scenario, preferably malicious LKM unless CopyFail is
    already stable.
-3. Shallow OS/profile matrix.
-4. Thesis figures and tables.
-5. Writing and freeze.
+4. Shallow OS/profile matrix.
+5. Thesis figures and tables.
+6. Writing and freeze.
 
 ## Explicit Deferrals
 
