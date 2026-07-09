@@ -172,6 +172,14 @@ Per run, four blocks plus one table. Nothing else.
 - **C. Triage (RQ3):** raw finding count → claim count (reduction ratio);
   residual claims per rule; baseline-differencing effect (per-source
   ToolFinding counts before/after clean-baseline known-good filtering).
+  The refinement reduced candidate claims from 768 to 23 and residual claims
+  from 502 to 0, while expectation coverage stayed unchanged at 4 identified,
+  1 supported, and 2 missed; this is reported as noise reduction through more
+  specific GT-blind gates, not as metric tuning. For this single no-cleanup
+  scenario, residual_claims = 0, corroboration_rate = 1.0, and
+  combination_gain = 0.0 are scenario-saturated descriptive values, not
+  optimization targets; later cleanup/evasion variants are expected to stress
+  these values.
 - **D. Temporal (RQ4, lite):** for each identified expectation having both a
   GT action time and an event-finding timestamp: signed offset in seconds and
   the timestamp kind that supplied it (Plaso `timestamp_desc`, including

@@ -187,8 +187,6 @@ def _userland_persistence(rule: Rule, findings: list[ToolFinding]) -> Iterable[D
     for finding in findings:
         if not (_source_allowed(rule, finding) and _class_allowed(rule, finding)):
             continue
-        if str(finding.source_type.value) != "disk":
-            continue
         path = _entity_path(finding)
         home_user_service = "/.config/systemd/user/" in path and path.endswith(suffixes)
         systemd_unit = path.startswith(prefixes) and (path.endswith(suffixes) or "/cron" in path)

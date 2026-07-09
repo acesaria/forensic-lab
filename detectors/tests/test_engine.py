@@ -82,7 +82,7 @@ def test_noisy_filesystem_rules_are_gated_to_specific_evidence():
             "tf-workspace",
             "disk",
             "file",
-            {"type": "path", "value": "/tmp/work/father_ldpreload/src/config.h"},
+            {"type": "path", "value": "/tmp/work/preload_kit/src/config.h"},
         ),
         _finding(
             "tf-preload",
