@@ -1,6 +1,6 @@
 id: flab.filesystem.suspicious_temp_path
 name: Suspicious executable or staged object in temporary path
-description: Flags files or deleted-file candidates under world-writable temporary directories.
+description: Flags executable, library-like, or deleted-file candidates under world-writable temporary directories.
 source_types: [disk, timeline]
 artifact_classes: [file, deleted_file_candidate]
 attck: [T1059.004, T1105, T1070.004]

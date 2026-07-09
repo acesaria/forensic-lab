@@ -153,12 +153,31 @@ def _pid(finding: ToolFinding) -> Any:
     return finding.entity.get("pid")
 
 
+def _is_executable_regular_file(finding: ToolFinding) -> bool:
+    mode = str(finding.entity.get("mode") or "")
+    return bool(mode) and not mode.startswith("d/") and "x" in mode
+
+
+def _library_like_path(path: str) -> bool:
+    lower = path.lower()
+    return lower.endswith(".so") or ".so." in lower
+
+
 def _suspicious_temp_path(rule: Rule, findings: list[ToolFinding]) -> Iterable[DetectionClaim]:
     prefixes = tuple(rule.parameters.get("prefixes") or [])
     for finding in findings:
         if not (_source_allowed(rule, finding) and _class_allowed(rule, finding)):
             continue
-        if _entity_path(finding).startswith(prefixes):
+        path = _entity_path(finding)
+        if not path.startswith(prefixes):
+            continue
+        is_deleted_candidate = (
+            finding.artifact_class == "deleted_file_candidate"
+            and finding.entity.get("deleted") is not False
+        )
+        if is_deleted_candidate:
+            yield _claim(rule, finding)
+        elif _is_executable_regular_file(finding) or _library_like_path(path):
             yield _claim(rule, finding)
 
 
@@ -167,6 +186,8 @@ def _userland_persistence(rule: Rule, findings: list[ToolFinding]) -> Iterable[D
     suffixes = tuple(rule.parameters.get("suffixes") or [])
     for finding in findings:
         if not (_source_allowed(rule, finding) and _class_allowed(rule, finding)):
+            continue
+        if str(finding.source_type.value) != "disk":
             continue
         path = _entity_path(finding)
         home_user_service = "/.config/systemd/user/" in path and path.endswith(suffixes)
@@ -190,8 +211,9 @@ def _ld_preload_configuration(rule: Rule, findings: list[ToolFinding]) -> Iterab
     for finding in findings:
         if not (_source_allowed(rule, finding) and _class_allowed(rule, finding)):
             continue
+        path = _entity_path(finding).lower()
         value = (_entity_value(finding) + " " + str(finding.entity.get("path") or "")).lower()
-        if finding.artifact_class == "preload_configuration" or any(token.lower() in value for token in tokens):
+        if "ld.so.preload" in path or any(token in value for token in tokens):
             yield _claim(rule, finding, artifact_class="preload_configuration")
 
 

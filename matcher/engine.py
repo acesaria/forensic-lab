@@ -374,6 +374,9 @@ def _metrics(
     # Residual claims (§3): claims matching no scored expectation.
     matched_ids = {cid for r in scored for cid in r["matched_claims"]}
     residual = [c for c in claims if c.claim_id not in matched_ids]
+    residual_by_rule: dict[str, list[DetectionClaim]] = {}
+    for claim in residual:
+        residual_by_rule.setdefault(claim.rule_id, []).append(claim)
     offsets = [r["time_offset_s"] for r in identified if r["time_offset_s"] is not None]
     bf_pre = sum(c["pre"] for c in (baseline_filter or {}).get("per_source", {}).values())
     bf_warning = f"baseline_filter pre-total ({bf_pre}) != raw findings ({len(findings)})"
@@ -412,6 +415,10 @@ def _metrics(
             "residual_claims_per_rule": dict(
                 sorted(Counter(c.rule_id for c in residual).items())
             ),
+            "residual_examples_per_rule": {
+                rule: [_residual_example(c) for c in items[:3]]
+                for rule, items in sorted(residual_by_rule.items())
+            },
             # Baseline-differencing effect (§6.C): per-source ToolFinding
             # counts before/after clean-baseline filtering; null when no
             # verified baseline was available.
@@ -427,6 +434,13 @@ def _metrics(
             if offsets else None,
         },
     }
+
+
+def _residual_example(claim: DetectionClaim) -> str:
+    value = str(claim.entity.get("value") or claim.entity.get("path") or claim.claim_id)
+    if len(value) > 96:
+        value = value[:93] + "..."
+    return f"{claim.claim_id}: {claim.artifact_class} {value}"
 
 
 # --- report ------------------------------------------------------------------
@@ -472,9 +486,31 @@ def render_report(metrics: dict[str, Any], rows: list[dict[str, Any]]) -> str:
         *([f"- clean-baseline warning: {tri['baseline_filter_warning']}"]
           if tri.get("baseline_filter_warning") else []),
         "",
-        "| rule | residual claims |",
-        "|---|---:|",
-        *(f"| {rule} | {count} |" for rule, count in tri["residual_claims_per_rule"].items()),
+        *(
+            [
+                "| rule | residual claims |",
+                "|---|---:|",
+                *(
+                    f"| {rule} | {count} |"
+                    for rule, count in tri["residual_claims_per_rule"].items()
+                ),
+            ]
+            if tri["residual_claims_per_rule"] else ["No residual claims."]
+        ),
+        *(
+            [
+                "",
+                "Representative residual examples (first deterministic claims per rule):",
+                "",
+                "| rule | examples |",
+                "|---|---|",
+                *(
+                    f"| {rule} | {'<br>'.join(examples)} |"
+                    for rule, examples in tri["residual_examples_per_rule"].items()
+                ),
+            ]
+            if tri.get("residual_examples_per_rule") else []
+        ),
         "",
         "## D. Temporal (RQ4, lite)",
         "",

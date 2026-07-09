@@ -76,6 +76,75 @@ def test_run_detectors_cli_writes_claims(tmp_path: Path):
     assert claims
 
 
+def test_noisy_filesystem_rules_are_gated_to_specific_evidence():
+    findings = [
+        _finding(
+            "tf-workspace",
+            "disk",
+            "file",
+            {"type": "path", "value": "/tmp/work/father_ldpreload/src/config.h"},
+        ),
+        _finding(
+            "tf-preload",
+            "disk",
+            "preload_configuration",
+            {"type": "path", "value": "/tmp/work/run/ld.so.preload"},
+        ),
+        _finding(
+            "tf-temp-dir",
+            "disk",
+            "file",
+            {"type": "path", "value": "/tmp/.X11-unix", "mode": "d/drwxrwxrwt"},
+        ),
+        _finding(
+            "tf-temp-exec",
+            "disk",
+            "file",
+            {"type": "path", "value": "/tmp/run.sh", "mode": "r/rrwxr-xr-x"},
+        ),
+        _finding(
+            "tf-temp-deleted",
+            "disk",
+            "deleted_file_candidate",
+            {"type": "path", "value": "/tmp/gone", "deleted": True},
+        ),
+        _finding(
+            "tf-service-timeline",
+            "timeline",
+            "service_unit_file",
+            {"type": "path", "value": "/etc/systemd/system/cloud-init.service"},
+        ),
+        _finding(
+            "tf-service-disk",
+            "disk",
+            "service_unit_file",
+            {"type": "path", "value": "/etc/systemd/system/new.service"},
+        ),
+    ]
+
+    by_rule = {}
+    for claim in run_detectors(findings):
+        by_rule.setdefault(claim.rule_id, []).append(claim)
+
+    preload_values = {
+        claim.entity["value"]
+        for claim in by_rule["flab.filesystem.ld_preload_configuration"]
+    }
+    assert preload_values == {"/tmp/work/run/ld.so.preload"}
+
+    temp_values = {
+        claim.entity["value"]
+        for claim in by_rule["flab.filesystem.suspicious_temp_path"]
+    }
+    assert temp_values == {"/tmp/run.sh", "/tmp/gone"}
+
+    persistence_values = {
+        claim.entity["value"]
+        for claim in by_rule["flab.filesystem.userland_persistence"]
+    }
+    assert persistence_values == {"/etc/systemd/system/new.service"}
+
+
 def test_duplicate_process_library_memory_claims_collapse_to_logical_candidate():
     findings = [
         _memory_finding(
@@ -178,5 +247,21 @@ def _memory_finding(finding_id: str, artifact_class: str, entity: dict) -> ToolF
         entity=entity,
         time=None,
         raw_ref=f"vol3:{finding_id}",
+        provenance={"adapter": "fixture"},
+    )
+
+
+def _finding(finding_id: str, source: str, artifact_class: str, entity: dict) -> ToolFinding:
+    return ToolFinding(
+        finding_id=finding_id,
+        run_id="run-detector-gates",
+        tool="fixture",
+        tool_version="fixture",
+        adapter_version="fixture",
+        source_type=EvidenceSource(source),
+        artifact_class=artifact_class,
+        entity=entity,
+        time=None,
+        raw_ref=f"fixture:{finding_id}",
         provenance={"adapter": "fixture"},
     )
