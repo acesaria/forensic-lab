@@ -97,14 +97,18 @@ Full thesis run:
 
 A scenario run writes:
 
-- `execution_truth.jsonl`
-- `artifact_expectations.jsonl`
-- `reference_context.json`
+- `manifest.json`
 - `command_log.jsonl`
 
 Full VM-backed runs then acquire RAM and disk while the listener and bounded
-shell/session are still alive and extract raw TSK, Plaso, and Volatility output
-for manual filesystem, timeline, and memory investigation.
+shell/session are still alive and extract raw outputs for manual filesystem,
+timeline, and memory investigation:
+
+- `analysis/bodyfile`
+- `analysis/timeline.plaso`
+- `analysis/timeline.jsonl`
+- `analysis/vol3.json`
+- `analysis/raw_extraction_status.json`
 
 Cleanup/evasion and deterministic randomization of paths, ports, prefixes, and
 related values are future variants, not the default scenario.

@@ -10,10 +10,4 @@ cryptography>=40.0
 
 libvirt-python
 
-# detector -> matcher -> metrics pipeline (orchestrator/evaluation/)
-jsonschema>=4.0           # contract validation at every stage boundary
-pysigma>=1.0              # compile Sigma rules to SQL (plaso_sigma detector)
-pysigma-backend-sqlite>=1.1   # SQLite backend used by that compilation
-# Optional, feature-detected at runtime:
-#   yara-python  YARA scanning of icat-extracted files
-pytest>=7.0               # orchestrator/evaluation/tests
+pytest>=7.0

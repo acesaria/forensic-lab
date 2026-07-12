@@ -186,7 +186,13 @@ class RunContext:
         }
         self._write_manifest()
 
-    def record_raw_analysis_outputs(self, analysis_dir: str | Path) -> None:
+    def record_raw_analysis_outputs(
+        self,
+        analysis_dir: str | Path,
+        *,
+        status: dict[str, Any] | None = None,
+        status_path: str | Path | None = None,
+    ) -> None:
         analysis = Path(analysis_dir)
         outputs = {
             "volatility_json": analysis / "vol3.json",
@@ -194,9 +200,15 @@ class RunContext:
             "plaso_storage": analysis / "timeline.plaso",
             "plaso_jsonl": analysis / "timeline.jsonl",
         }
-        self.outputs["raw_analysis"] = {
+        files = {
             name: str(path) for name, path in outputs.items() if path.exists()
         }
+        raw_analysis: dict[str, Any] = {"files": files}
+        if status:
+            raw_analysis["status"] = status
+        if status_path is not None:
+            raw_analysis["status_manifest"] = str(status_path)
+        self.outputs["raw_analysis"] = raw_analysis
         self._write_manifest()
 
     def _write_manifest(self) -> None:

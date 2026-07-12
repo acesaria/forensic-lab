@@ -1,9 +1,0 @@
-id: flab.memory.process_from_unusual_path
-name: Process or mapping from unusual writable path
-description: Flags memory-observed processes, mappings, or backing files launched from temporary writable locations.
-source_types: [memory]
-artifact_classes: [process, file]
-attck: [T1059.004, T1036, T1070.004]
-parameters:
-  path_prefixes: [/tmp/, /var/tmp/, /dev/shm/]
-  deleted_marker: "(deleted)"

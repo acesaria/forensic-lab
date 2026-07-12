@@ -1,16 +1,12 @@
 # orchestrator/forensics/pipeline.yaml
 #
-# Reproducibility manifest. Pins tool versions, parser/plugin lists, rule-set
-# git refs, and paths. `cli.py verify` checks installed versions against these
-# pins (orchestrator/forensics/pipeline_config.py).
+# Reproducibility manifest for raw extraction. `cli.py verify` checks installed
+# raw tool versions against these pins (orchestrator/forensics/pipeline_config.py).
 
 versions:
   plaso: "20240826"          # log2timeline.py / psort.py
   volatility3: "2.7.0"
   sleuthkit: "4.12.1"        # fls/icat/istat
-  pysigma: "1.3.3"           # Sigma rule -> SQL compilation (required)
-  pysigma_backend_sqlite: "1.1.3"  # SQLite backend for the plaso_sigma detector
-  yara_python: "4.5.0"       # optional; YARA scanning of icat-extracted files
 
 # Whether a version mismatch aborts (strict) or only warns. Strict is the
 # pre-registered default for paper runs.
@@ -32,31 +28,3 @@ extract:
       - linux.proc.Maps
   tsk:
     fls_flags: "-r -m"
-
-rulesets:
-  sigma_ref: "r2024-09-01"   # SigmaHQ/sigma git tag the community rules pin to
-  # Vendored SigmaHQ Linux subset (pinned in vendor/sigma/COMMIT.txt). The
-  # plaso_sigma detector compiles each rule to SQL (pySigma sqlite backend) and
-  # runs it against the Plaso timeline.
-  sigma_vendored_dirs:
-    - vendor/sigma/rules/linux
-  tagging_files:
-    - orchestrator/evaluation/config/rules/tagging/project_tags.txt
-  # Vendored Neo23x0 signature-base subset (pinned in
-  # vendor/yara/signature-base/COMMIT.txt), compiled by the YARA runner.
-  yara_rules_dir: vendor/yara/signature-base
-
-# Detector tuning that is NOT a matching threshold (those live in matching.yaml).
-detect:
-  vol3:
-    # Extra private ranges treated as non-external for the socket heuristic.
-    private_ranges:
-      - 192.168.100.0/24      # the lab's host-only forensics-isolated network
-    # An outbound TCP connection (ephemeral local port) whose remote port is not
-    # one of these well-known services is suspicious even on a private/lab net:
-    # the classic reverse-shell pattern. Behavioral classes only, no instance port.
-    service_ports: [22, 53, 80, 123, 443, 853, 3128, 8080]
-    ephemeral_min_port: 32768   # Linux default ip_local_port_range floor
-
-paths:
-  matching_config: orchestrator/evaluation/config/matching.yaml

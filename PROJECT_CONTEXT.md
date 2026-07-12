@@ -23,8 +23,9 @@ not grow toward one.
 
 The repository is temporarily in a migration state. Documentation now describes
 the target manual-investigation architecture. The old automatic
-detection/matching/reconstruction pipeline still exists in source and generated
-artifacts so it can be removed deliberately in later commits.
+detection/matching/reconstruction pipeline has been removed from current
+runtime source. Historical documentation and generated artifacts may still
+refer to it.
 
 Previous automatic reconstruction work is preserved by the immutable tag
 `automatic-reconstruction-v3-final`. Treat that tag as the reference for the
@@ -69,24 +70,20 @@ terms. They are not normative requirements for the current thesis.
 
 ## Current architecture map
 
-- cli.py                     entry point; VM commands and migration-era legacy commands
+- cli.py                     entry point; setup, VM, verification, scenario and acquisition commands
 - infra/                     libvirt/QEMU, Ansible, distro profiles
-- orchestrator/core/         lifecycle, VM state, paths, config, baseline cache
+- orchestrator/core/         lifecycle, VM state, paths, config
 - orchestrator/scenarios/    declarative scenario engine
 - orchestrator/forensics/    acquisition + tool runners (plaso/vol3/tsk)
-- orchestrator/adapters/     legacy normalization layer; do not extend
-- orchestrator/canonical/    legacy canonical record models; do not extend
-- detectors/                 legacy automatic rule layer; do not extend
-- matcher/                   legacy automatic matching/metrics layer; do not extend
-- scenarios/scenarios/       scenario.yml + expected_observables.yml + steps.py
+- scenarios/scenarios/       scenario.yml + steps.py
 
 Registered thesis scenario:
 - userland_father_ldpreload  scenarios/scenarios/userland_father_ldpreload/scenario.yml
 
 The old detect/match/metrics stack under `orchestrator/evaluation/`, the
-ART/module execution path under `orchestrator/scenario_execution/`, and the
-`gt_manifest` migration shim have already been removed. The remaining
-detector/matcher/canonical source is legacy migration residue.
+ART/module execution path under `orchestrator/scenario_execution/`, the
+`gt_manifest` migration shim, the detector/matcher/canonical source packages,
+and the automatic finding-baseline cache have been removed.
 
 Generated outputs under shared/ are disposable artifacts, not source.
 

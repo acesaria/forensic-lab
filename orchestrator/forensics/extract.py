@@ -1,8 +1,8 @@
 # orchestrator/forensics/extract.py
 #
 # Thin extraction wrappers over the in-tree forensic runners. They produce the
-# raw tool output the canonical adapters normalize into ToolFinding records.
-# Extraction is GT-blind by construction: no planted value is read here.
+# raw TSK and Volatility outputs used for manual source-family investigation.
+# Extraction is scenario-blind by construction: no planted value is read here.
 
 from __future__ import annotations
 
@@ -30,6 +30,7 @@ def extract_plugins(
     distro_id: str,
     plugins: tuple[str, ...] = DEFAULT_PLUGINS,
     kernel_release: str | None = None,
+    errors: dict[str, str] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {}
     for plugin in plugins:
@@ -37,9 +38,11 @@ def extract_plugins(
             out[plugin] = vol.run_plugin(
                 memory_path, distro_id, plugin, kernel_release=kernel_release
             )
-        except RuntimeError:
-            # A plugin missing for this kernel build is not fatal: the adapters
-            # degrade gracefully to whatever plugins did run.
+        except RuntimeError as exc:
+            # A plugin missing for this kernel build is not fatal; the run keeps
+            # the raw output from whichever plugins did succeed.
+            if errors is not None:
+                errors[plugin] = str(exc)
             out[plugin] = []
     return out
 

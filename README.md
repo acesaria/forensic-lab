@@ -13,8 +13,8 @@ platform.
 
 The project has pivoted from automatic detection/evaluation to reproducible
 manual multi-source investigation. Documentation now reflects the target
-architecture. Some legacy automatic detector, canonical matching, and metrics
-code remains in the repository until later cleanup commits.
+architecture. The old automatic detector, canonical matching, and metrics
+source pipeline has been removed from current runtime code.
 
 Previous automatic reconstruction work is preserved by the immutable tag
 `automatic-reconstruction-v3-final`.
@@ -54,11 +54,7 @@ forensic-lab/
 ├── orchestrator/
 │   ├── core/                      # lifecycle, VM state, paths, provenance
 │   ├── scenarios/                 # declarative scenario engine
-│   ├── forensics/                 # acquisition and raw tool runners
-│   ├── adapters/                  # legacy normalization layer
-│   └── canonical/                 # legacy canonical record models
-├── detectors/                     # legacy automatic rule layer
-├── matcher/                       # legacy automatic matching/metrics layer
+│   └── forensics/                 # acquisition and raw tool runners
 ├── docs/                          # methodology and orientation
 ├── shared/                        # generated experiment outputs
 └── vendor/                        # vendored third-party rule/test data
@@ -88,10 +84,11 @@ python cli.py run-scenario \
 python cli.py destroy --distro ubuntu-22.04
 ```
 
-During migration, full runs may still emit legacy normalized, detector, matcher,
-or metric artifacts. Current thesis use is the scenario log, run manifest,
-acquired evidence, raw TSK/Plaso/Volatility exports, hashes, tool failures, and
-manual investigation notes.
+Full runs now stop after scenario execution, acquisition, and raw
+TSK/Plaso/Volatility extraction. Current thesis use is the scenario log, run
+manifest, acquired evidence, raw exports, hashes, tool failures, and manual
+investigation notes. Legacy detector/matcher artifacts may still exist only in
+old generated run directories or in the `automatic-reconstruction-v3-final` tag.
 
 Scenario keys come from `scenarios.yaml`. The current registered thesis
 scenario key remains `userland_father_ldpreload`.

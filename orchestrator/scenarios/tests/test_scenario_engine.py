@@ -38,6 +38,22 @@ def test_scenario_manifest_records_completed_and_failed_steps(tmp_path: Path):
     assert [step["status"] for step in manifest["steps"]] == ["completed", "completed"]
     assert [fact["fact_type"] for fact in manifest["facts"]] == ["file_observed"]
 
+    analysis_dir = tmp_path / "analysis"
+    analysis_dir.mkdir()
+    (analysis_dir / "bodyfile").write_text("0|/toy|0|0|0|0|0|0|0|0|0\n", encoding="utf-8")
+    status_path = analysis_dir / "raw_extraction_status.json"
+    status_path.write_text("{}", encoding="utf-8")
+    ctx.record_raw_analysis_outputs(
+        analysis_dir,
+        status={"tsk": {"status": "completed", "row_count": 1}},
+        status_path=status_path,
+    )
+    manifest = json.loads(ctx.manifest_path.read_text(encoding="utf-8"))
+    raw_analysis = manifest["outputs"]["raw_analysis"]
+    assert raw_analysis["files"]["tsk_bodyfile"] == str(analysis_dir / "bodyfile")
+    assert raw_analysis["status"]["tsk"]["status"] == "completed"
+    assert raw_analysis["status_manifest"] == str(status_path)
+
     failing = tmp_path / "failing.yml"
     failing.write_text(
         "\n".join(

@@ -160,9 +160,10 @@ The following are no longer normative requirements for the thesis:
 - automatic reconstruction as a current deliverable;
 - ruleset hashes as an experimental result.
 
-During migration, source code and generated artifacts may still contain these
-terms. Treat them as legacy automatic-pipeline residue. Do not extend them, do
-not add tests for them, and do not use them to define current thesis claims.
+Historical documentation and generated artifacts may still contain these terms.
+Treat them as legacy automatic-pipeline residue. Do not reintroduce them into
+runtime source, do not add tests for them, and do not use them to define
+current thesis claims.
 
 Ruleset hashes are not a result. Tool versions, command lines, source revisions,
 raw evidence hashes, and profile definitions are provenance.
@@ -184,17 +185,17 @@ raw evidence hashes, and profile definitions are provenance.
 ## 10. Migration guardrails
 
 This repository is between architectures. Documentation now describes the
-target manual-investigation method; removal of the old automatic pipeline is a
-subsequent implementation stage.
+target manual-investigation method, and current runtime source no longer
+contains the old automatic detector/matcher pipeline.
 
-Until removal is complete:
+During the remaining cleanup:
 
-- do not modify Python, YAML scenarios, tests, or dependencies merely to make
-  legacy automatic evaluation fit the new methodology;
+- do not modify Python, YAML scenarios, tests, or dependencies to revive legacy
+  automatic evaluation;
 - do not present legacy detector or matcher output as a current thesis result;
 - do not add new detector rules, matcher aliases, evaluation schemas, or metric
   fields;
 - keep VM power-state and acquisition-safety contracts unchanged;
 - keep changes small and tests minimal;
-- prefer deletion of legacy automatic-evaluation code over extension when the
-  next stage asks for implementation cleanup.
+- prefer deletion of remaining historical residue over extension when a later
+  cleanup task explicitly reopens it.

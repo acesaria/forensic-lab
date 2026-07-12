@@ -1,2 +1,0 @@
-{"data_type":"fs:stat","timestamp":1781085600,"filename":"/tmp/payload.sh","parser":"filestat","timestamp_desc":"Content Modification Time","message":"/tmp/payload.sh Type: file"}
-{"data_type":"syslog:line","timestamp":1781085700,"display_name":"SYSLOG:/var/log/auth.log","parser":"syslog","message":"sudo sh -c echo /tmp/payload.so > /etc/ld.so.preload"}

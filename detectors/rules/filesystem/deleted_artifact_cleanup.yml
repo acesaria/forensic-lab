@@ -1,8 +1,0 @@
-id: flab.filesystem.deleted_artifact_cleanup
-name: Deleted artifact after suspicious userland activity
-description: Flags deleted-file candidates as possible partial cleanup residue.
-source_types: [disk, timeline]
-artifact_classes: [deleted_file_candidate]
-attck: [T1070.004]
-parameters:
-  deleted_required: true

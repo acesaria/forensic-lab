@@ -35,17 +35,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-from detectors.baseline import apply_baseline_filter
-from detectors.engine import run_detectors_file, write_detection_claims
-from matcher.engine import render_console_summary, run_matcher_files
-from orchestrator.adapters import (
-    case_window_from_command_log,
-    filter_findings_to_window,
-    write_tool_findings,
-)
-from orchestrator.adapters.plaso import adapt_plaso_events
-from orchestrator.adapters.sleuthkit import adapt_bodyfile
-from orchestrator.adapters.volatility3 import adapt_plugin_rows
 from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
     MEMORY_DUMP_FILENAME,
@@ -57,14 +46,6 @@ from orchestrator.core.config import (
     load_profile,
 )
 from orchestrator.core import console
-from orchestrator.core.baseline_cache import (
-    BaselineCacheEntry,
-    baseline_identity,
-    cache_dir_for_identity,
-    expected_manifest,
-    load_compatible_cache,
-    write_cache_manifest,
-)
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
@@ -186,9 +167,8 @@ class ForensicOrchestrator:
         Reverts to baseline, runs the scenario's steps inside the guest over SSH
         (writing manifest.json and command_log.jsonl into dumps/), then --
         unless acquire is False -- acquires RAM+disk and writes raw forensic
-        exports under analysis/. Legacy automatic evaluation remains best
-        effort while the migration is in progress. The VM ends OFF when acquire
-        is True, ON otherwise.
+        exports under analysis/. The VM ends OFF when acquire is True, ON
+        otherwise.
 
         Declarative scenarios always run their full step list; the scenario.yml
         owns its own step sequence.
@@ -206,19 +186,6 @@ class ForensicOrchestrator:
 
         ctx = None
         guest: dict[str, Any] | None = None
-        baseline_cache: BaselineCacheEntry | None = None
-        if acquire:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                guest = self._guest_facts(ssh)
-            baseline_cache, baseline_acquired = self._ensure_clean_baseline_cache(
-                distro_id,
-                vm_name,
-                guest=guest,
-            )
-            if baseline_acquired:
-                vm_name = self._reset_lab(distro_id)
-                with self.vm_manager.open_ssh(vm_name) as ssh:
-                    guest = self._guest_facts(ssh)
 
         try:
             with self.vm_manager.open_ssh(vm_name) as ssh:
@@ -250,12 +217,12 @@ class ForensicOrchestrator:
         manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
         if ctx is not None:
             ctx.record_acquisition_outputs(manifest_path)
-        self._evaluate_declarative_run(
+        self._extract_raw_outputs(
             run_id,
             distro_id,
             manifest_path,
-            baseline_cache=baseline_cache,
             ctx=ctx,
+            kernel_release=(guest or {}).get("kernel"),
         )
         return manifest_path
 
@@ -296,185 +263,41 @@ class ForensicOrchestrator:
         except Exception:
             return {}
 
-    def _baseline_context(
-        self,
-        distro_id: str,
-        cache: BaselineCacheEntry | None = None,
-    ) -> dict[str, Any]:
-        vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
-        identity = baseline_identity(
-            distro_id,
-            vm_prefix=LAB_VM_PREFIX,
-            snapshot=BASELINE_SNAPSHOT,
-        )
-        if cache is not None:
-            return {
-                "identity": cache.identity,
-                "vm_name": vm_name,
-                "snapshot": BASELINE_SNAPSHOT,
-                "clean_tool_findings": str(cache.tool_findings_path),
-                "manifest": str(cache.manifest_path),
-                "status": "cache_reused" if cache.reused else "cache_created",
-                "warnings": list(cache.manifest.get("warnings") or []),
-            }
-        return {
-            "identity": identity,
-            "vm_name": vm_name,
-            "snapshot": BASELINE_SNAPSHOT,
-            "clean_tool_findings": None,
-            "status": "snapshot_reverted_before_run",
-        }
-
-    def _guest_kernel(self, run_id: str) -> str | None:
-        manifest_path = self.dumper.run_dir(run_id) / "manifest.json"
-        if not manifest_path.is_file():
-            return None
-        try:
-            return json.loads(manifest_path.read_text(encoding="utf-8")).get("guest", {}).get("kernel")
-        except Exception:
-            return None
-
-    def _evaluate_declarative_run(
+    def _extract_raw_outputs(
         self,
         run_id: str,
         distro_id: str,
         manifest_path: str,
         *,
-        baseline_cache: BaselineCacheEntry | None = None,
         ctx=None,
+        kernel_release: str | None = None,
     ) -> None:
-        """
-        Raw extraction, followed by legacy detect -> match -> metrics only when
-        migration-era expectations are present. Best-effort: the acquisition is
-        already on disk, so failures are logged and swallowed.
-        """
-        run_dir = self.dumper.run_dir(run_id)
+        """Produce raw TSK, Plaso, and Volatility exports after acquisition."""
         analysis_dir = self._paths.run_analysis_dir(run_id)
         analysis_dir.mkdir(parents=True, exist_ok=True)
 
         console.step_header("raw extraction")
-        try:
-            findings = self._collect_tool_findings(
-                run_id, distro_id, manifest_path, analysis_dir
+        status = self._produce_raw_outputs(
+            run_id,
+            distro_id,
+            manifest_path,
+            analysis_dir,
+            kernel_release=kernel_release,
+        )
+        status_path = analysis_dir / "raw_extraction_status.json"
+        status_path.write_text(
+            json.dumps(status, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        if ctx is not None:
+            ctx.record_raw_analysis_outputs(
+                analysis_dir,
+                status=status,
+                status_path=status_path,
             )
-            tf_path = write_tool_findings(analysis_dir / "tool_findings.jsonl", findings)
-            if ctx is not None:
-                ctx.record_raw_analysis_outputs(analysis_dir)
-        except Exception as exc:
-            console.warn(f"raw extraction failed (acquisition is intact): {exc}")
-            console.section_end()
-            return
-
-        expectations_path = run_dir / "artifact_expectations.jsonl"
-        if not expectations_path.is_file():
-            console.warn("no artifact_expectations.jsonl; skipping legacy canonical evaluation")
-            console.section_end()
-            return
-
-        try:
-            # Detectors consume the baseline-filtered stream; the matcher keeps
-            # the unfiltered one so observed/funnel semantics (§10.7) hold.
-            detect_path, baseline_filter = tf_path, None
-            if baseline_cache is not None:
-                detect_path, baseline_filter = apply_baseline_filter(
-                    findings,
-                    baseline_cache.tool_findings_path,
-                    analysis_dir,
-                    identity=baseline_cache.identity,
-                )
-            claims = run_detectors_file(detect_path)
-            dc_path = write_detection_claims(
-                analysis_dir / "detection_claims.jsonl", claims
-            )
-            result = run_matcher_files(
-                expectations_path=expectations_path,
-                tool_findings_path=tf_path,
-                detection_claims_path=dc_path,
-                execution_truth_path=run_dir / "execution_truth.jsonl",
-                out_dir=analysis_dir,
-                baseline_filter=baseline_filter,
-            )
-        except Exception as exc:
-            console.warn(f"canonical evaluation failed (acquisition is intact): {exc}")
-            console.section_end()
-            return
-
-        console.ok(f"canonical metrics written: {analysis_dir / 'metrics.json'}")
-        for line in render_console_summary(result["metrics"]):
-            console.info(line)
         console.section_end()
 
-    def _ensure_clean_baseline_cache(
-        self,
-        distro_id: str,
-        vm_name: str,
-        *,
-        guest: dict[str, Any] | None,
-    ) -> tuple[BaselineCacheEntry | None, bool]:
-        profile = load_profile(self.repo_root, distro_id)
-        identity = baseline_identity(
-            distro_id,
-            vm_prefix=LAB_VM_PREFIX,
-            snapshot=BASELINE_SNAPSHOT,
-        )
-        expected = expected_manifest(
-            distro_id=distro_id,
-            vm_name=vm_name,
-            snapshot=BASELINE_SNAPSHOT,
-            identity=identity,
-            profile=profile,
-            guest=guest,
-            tool_versions=self._pipeline_versions(),
-            volatility=self._volatility_context(
-                distro_id,
-                (guest or {}).get("kernel"),
-            ),
-        )
-        cached = load_compatible_cache(self._paths, expected)
-        if cached is not None:
-            console.info(f"clean baseline cache reused: {cached.tool_findings_path}")
-            return cached, False
-
-        console.step("building clean baseline tool_findings cache...")
-        cache_dir = cache_dir_for_identity(self._paths, identity)
-        baseline_run_id = _make_run_id(distro_id, "clean_baseline")
-        try:
-            manifest_path = self._run_acquisition(
-                vm_name,
-                baseline_run_id,
-                "clean_baseline",
-            )
-            analysis_dir = cache_dir / "analysis"
-            analysis_dir.mkdir(parents=True, exist_ok=True)
-            findings = self._collect_tool_findings(
-                baseline_run_id,
-                distro_id,
-                manifest_path,
-                analysis_dir,
-                kernel_release=(guest or {}).get("kernel"),
-                scope_to_case_window=False,
-            )
-            tf_path = write_tool_findings(cache_dir / "tool_findings.jsonl", findings)
-            entry = write_cache_manifest(
-                self._paths,
-                expected,
-                tool_findings_path=tf_path,
-                acquisition_manifest_path=Path(manifest_path),
-            )
-        except Exception as exc:
-            console.warn(f"clean baseline cache unavailable: {exc}")
-            return None, True
-
-        if entry is None:
-            console.warn(
-                "clean baseline cache unavailable: extracted baseline has no "
-                "disk findings"
-            )
-            return None, True
-        console.ok(f"clean baseline cache written: {entry.tool_findings_path}")
-        return entry, True
-
-    def _collect_tool_findings(
+    def _produce_raw_outputs(
         self,
         run_id: str,
         distro_id: str,
@@ -482,94 +305,98 @@ class ForensicOrchestrator:
         analysis_dir: Path,
         *,
         kernel_release: str | None = None,
-        scope_to_case_window: bool = True,
-    ) -> list:
-        """Extract raw forensic outputs and adapt them to canonical ToolFinding
-        records. Each channel is best-effort; a degraded tool contributes no
-        findings rather than sinking the others."""
+    ) -> dict[str, Any]:
+        """Run each raw extractor best-effort and return manifest-ready status."""
         manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         memory_path = Path(manifest["memory_image"]["path"])
         disk_path = Path(manifest["disk_image"]["path"])
         versions = self._pipeline_versions()
-        kernel_release = (
-            kernel_release if kernel_release is not None else self._guest_kernel(run_id)
-        )
-        window = self._case_window_from_command_log(run_id) if scope_to_case_window else None
-        findings: list = []
+        status: dict[str, Any] = {}
 
         try:
+            vol_errors: dict[str, str] = {}
             vol_rows = extract_plugins(
-                self._vol_runner, memory_path, distro_id, kernel_release=kernel_release
+                self._vol_runner,
+                memory_path,
+                distro_id,
+                kernel_release=kernel_release,
+                errors=vol_errors,
             )
-            (analysis_dir / "vol3.json").write_text(
+            vol_path = analysis_dir / "vol3.json"
+            vol_path.write_text(
                 json.dumps(vol_rows, indent=2, default=str), encoding="utf-8"
             )
-            findings.extend(
-                adapt_plugin_rows(
-                    vol_rows,
-                    run_id=run_id,
-                    tool_version=str(versions.get("volatility3", "unknown")),
+            plugin_counts = {
+                plugin: len(rows) for plugin, rows in sorted(vol_rows.items())
+            }
+            state = "completed"
+            if vol_errors:
+                state = "failed" if len(vol_errors) == len(vol_rows) else "degraded"
+                console.warn(
+                    "vol3 extraction degraded: "
+                    + "; ".join(f"{name}: {err}" for name, err in vol_errors.items())
                 )
-            )
+            else:
+                console.ok(f"vol3 output written: {vol_path}")
+            status["volatility"] = {
+                "status": state,
+                "path": str(vol_path),
+                "tool": "volatility3",
+                "configured_version": versions.get("volatility3"),
+                "plugin_rows": plugin_counts,
+            }
+            if vol_errors:
+                status["volatility"]["errors"] = vol_errors
         except Exception as exc:
             console.warn(f"vol3 extraction degraded: {exc}")
+            status["volatility"] = _failed_status(
+                "volatility3",
+                versions.get("volatility3"),
+                exc,
+            )
 
-        # Disk and timeline findings are scoped to the run's case window so the
-        # GT-blind detectors see only artifacts touched during the scenario, not
-        # the entire baseline image. Memory is point-in-time and kept as-is.
-        disk_timeline: list = []
         try:
             tsk = extract_bodyfile(self._sleuth_runner, disk_path)
             bodyfile = tsk.get("bodyfile") or ""
-            (analysis_dir / "bodyfile").write_text(bodyfile + "\n", encoding="utf-8")
-            disk_timeline.extend(
-                adapt_bodyfile(
-                    bodyfile.splitlines(),
-                    run_id=run_id,
-                    tool_version=str(versions.get("sleuthkit", "unknown")),
-                )
-            )
+            bodyfile_path = analysis_dir / "bodyfile"
+            bodyfile_path.write_text(bodyfile + "\n", encoding="utf-8")
+            console.ok(f"tsk bodyfile written: {bodyfile_path}")
+            status["tsk"] = {
+                "status": "completed",
+                "path": str(bodyfile_path),
+                "tool": "sleuthkit",
+                "configured_version": versions.get("sleuthkit"),
+                "row_count": len(bodyfile.splitlines()),
+            }
         except Exception as exc:
             console.warn(f"tsk extraction degraded: {exc}")
+            status["tsk"] = _failed_status(
+                "sleuthkit",
+                versions.get("sleuthkit"),
+                exc,
+            )
 
         try:
             events = self._build_timeline(disk_path, analysis_dir)
-            disk_timeline.extend(
-                adapt_plaso_events(
-                    events,
-                    run_id=run_id,
-                    tool_version=str(versions.get("plaso", "unknown")),
-                )
-            )
+            status["plaso"] = {
+                "status": "completed",
+                "storage_path": str(analysis_dir / "timeline.plaso"),
+                "path": str(analysis_dir / "timeline.jsonl"),
+                "tool": "plaso",
+                "configured_version": versions.get("plaso"),
+                "event_count": len(events),
+            }
         except Exception as exc:
             console.warn(f"plaso timeline degraded: {exc}")
-
-        if window is not None:
-            before = len(disk_timeline)
-            disk_timeline = filter_findings_to_window(disk_timeline, window[0], window[1])
-            console.info(
-                f"case-window scoping: kept {len(disk_timeline)}/{before} "
-                "disk+timeline findings"
+            status["plaso"] = _failed_status(
+                "plaso",
+                versions.get("plaso"),
+                exc,
             )
-        findings.extend(disk_timeline)
-        return findings
 
-    def _case_window_from_command_log(
-        self, run_id: str, margin_s: float = 600.0
-    ) -> tuple[str, str] | None:
-        log_path = self.dumper.run_dir(run_id) / "command_log.jsonl"
-        return case_window_from_command_log(log_path, margin_s)
-
-    def _volatility_context(
-        self, distro_id: str | None, kernel_release: str | None = None
-    ) -> dict[str, Any]:
-        if not distro_id:
-            return {"symbols": None, "profile": None}
-        try:
-            isf = self._vol_runner.resolve_isf(distro_id, kernel_release)
-        except Exception:
-            return {"symbols": None, "profile": None}
-        return {"symbols": str(isf), "profile": isf.name}
+        status["run_id"] = run_id
+        status["manifest"] = str(manifest_path)
+        return status
 
     def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> list[dict]:
         """
@@ -737,6 +564,19 @@ class ForensicOrchestrator:
 # --- module helpers ------------------------------------------------------
 
 
+def _failed_status(
+    tool: str,
+    configured_version: Any,
+    exc: Exception,
+) -> dict[str, Any]:
+    return {
+        "status": "failed",
+        "tool": tool,
+        "configured_version": configured_version,
+        "error": str(exc),
+    }
+
+
 def _isf_filename(distro_id: str, kernel_release: str) -> str:
     family = distro_id.split("-", 1)[0]
     safe_kernel = kernel_release.replace("/", "_")
@@ -745,7 +585,7 @@ def _isf_filename(distro_id: str, kernel_release: str) -> str:
 
 def _make_run_id(distro_id: str, scenario_id: str) -> str:
     """
-    Build the canonical per-run identifier:
+    Build the stable per-run identifier:
         "{distro_id}_{scenario_id}_{YYYYMMDD-HHMMSS}"
     Used as the experiment directory name under experiments_dir; its dumps/
     and analysis/ subtrees stay in lockstep for a given run.

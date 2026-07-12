@@ -1,8 +1,0 @@
-id: flab.memory.process_socket_correlation
-name: Memory process and socket correlation
-description: Correlates a process with an active remote network connection (peer address and port) sharing the same PID; unix, netlink and listening sockets are ignored.
-source_types: [memory]
-artifact_classes: [process, socket]
-attck: [T1059.004, T1071]
-parameters:
-  require_pid: true

@@ -24,26 +24,22 @@ surfaces; it does not replace `PROJECT_CONTEXT.md`, `AGENTS.md`, or
 
 ## Migration State
 
-Documentation now reflects the target architecture. Source still contains the
-old automatic pipeline, preserved for deliberate removal in later commits and
-for comparison with the immutable tag `automatic-reconstruction-v3-final`.
+Documentation now reflects the target architecture. Current runtime source no
+longer contains the old automatic detector/matcher pipeline; it is preserved
+for comparison by the immutable tag `automatic-reconstruction-v3-final`.
 
-Do not extend legacy automatic-evaluation areas while the repository is in this
-state.
+Do not reintroduce legacy automatic-evaluation areas while the repository is in
+this state.
 
 ## Top-Level Layout
 
 | Path | Purpose | Status | Touch now? |
 |---|---|---|---|
-| `cli.py` | Command entry point for VM-backed runs and migration-era legacy commands. | mixed | Touch only for named migration tasks. |
+| `cli.py` | Command entry point for setup, VM lifecycle, verification, scenario execution, acquisition, and raw extraction. | active | Touch only for named migration tasks. |
 | `infra/` | libvirt/QEMU, Ansible, distro profiles, image helpers. | active | Ignore unless VM lifecycle/profile work is explicitly in scope. |
-| `orchestrator/core/` | Lifecycle, VM state, run paths, config, baseline cache. | active/mixed | Preserve acquisition and provenance contracts. |
+| `orchestrator/core/` | Lifecycle, VM state, run paths, config. | active | Preserve acquisition and provenance contracts. |
 | `orchestrator/scenarios/` | Declarative scenario engine. | active | Keep scenarios deterministic and bounded. |
 | `orchestrator/forensics/` | Acquisition and raw TSK/Plaso/Volatility tool runners. | active | Current extraction surface. |
-| `orchestrator/adapters/` | Legacy normalization layer. | legacy | Do not extend; deletion/quarantine candidate. |
-| `orchestrator/canonical/` | Legacy canonical record models and JSONL I/O. | legacy | Do not extend; deletion/quarantine candidate. |
-| `detectors/` | Legacy automatic rules and claim generation. | legacy | Do not extend; deletion/quarantine candidate. |
-| `matcher/` | Legacy automatic matching, metrics, and report rendering. | legacy | Do not extend; deletion/quarantine candidate. |
 | `scenarios/` | Declarative scenario definitions and optional ART calibration subset. | active/support | Do not edit scenario YAML in documentation work. |
 | `docs/` | Orientation, methodology, audits, and historical notes. | docs | Keep current docs aligned with the manual methodology. |
 | `shared/` | Generated experiments, baseline caches, ISF files, local artifacts. | generated/cache | Do not edit as source. |
@@ -58,7 +54,7 @@ state.
 | Step | Responsibility | Key files/modules |
 |---|---|---|
 | Scenario registry | Selects registered declarative scenarios. | `scenarios.yaml`, `cli.py` |
-| Scenario execution | Runs `scenario.yml`, writes command log, execution truth, expectations where still emitted, and reference context. | `orchestrator/scenarios/engine.py`, `loader.py`, `run_context.py`, `scenarios/scenarios/userland_father_ldpreload/scenario.yml`, `steps.py` |
+| Scenario execution | Runs `scenario.yml`, writes command log and minimal run manifest. | `orchestrator/scenarios/engine.py`, `loader.py`, `run_context.py`, `scenarios/scenarios/userland_father_ldpreload/scenario.yml`, `steps.py` |
 | Acquisition | Preserves VM power-state contract: memory while VM is ON, disk after VM shutdown. | `orchestrator/core/orchestrator.py`, `orchestrator/forensics/dumper.py`, `orchestrator/core/vm_manager.py` |
 | Raw extraction | Runs Sleuth Kit, Volatility3, and Plaso over acquired evidence. | `orchestrator/forensics/extract.py`, `sleuth_runner.py`, `vol_runner.py`, `plaso_runner.py` |
 | Provenance | Keeps manifests, command logs, hashes, tool commands, and failures. | `orchestrator/core/`, run output directories |
@@ -72,8 +68,8 @@ The old flow was:
 `extraction/adapters -> normalized records -> detector claims -> canonical matching -> metrics/report`
 
 That flow is no longer the current thesis methodology. It is preserved by
-`automatic-reconstruction-v3-final` and remains in this checkout only as
-migration residue until a later cleanup removes or fences it.
+`automatic-reconstruction-v3-final` and may still appear in historical docs or
+old generated artifacts, not as current runtime source.
 
 ## Notes For Future Agents
 
@@ -84,4 +80,4 @@ migration residue until a later cleanup removes or fences it.
 - Treat `shared/baselines/*` and `shared/experiments/*` as generated artifacts;
   they may be evidence for a named run, not project instructions.
 - Treat Sigma/YARA and detector-rule docs as historical unless a task explicitly
-  reopens legacy pipeline removal.
+  reopens that archival material.

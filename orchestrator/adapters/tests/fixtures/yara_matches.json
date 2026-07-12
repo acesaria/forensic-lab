@@ -1,3 +1,0 @@
-[
-  {"path": "/tmp/payload.so", "rule": "Suspicious_Linux_SO", "namespace": "linux", "tags": ["elf"], "meta": {"author": "fixture"}}
-]

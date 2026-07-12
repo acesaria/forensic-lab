@@ -30,7 +30,7 @@ AUDIT, or prompt files as current instructions.
 | `docs/test_reliability_audit.md` | current/legacy-aware | Test-suite trust map and warning that tests do not prove forensic correctness or manual-investigation quality. |
 | `docs/stale_docs_audit.md` | current | This classification file. |
 | `scenarios/scenarios/userland_father_ldpreload/README.md` | current | Father scenario scope and safety limits. |
-| `detectors/rules/README.md` | legacy/current warning | Legacy detector rule-pack format retained only until pipeline removal/quarantine. |
+| `detectors/rules/README.md` | removed | Legacy detector rule-pack format removed with the automatic pipeline. |
 
 ## Archived Historical Planning Files
 
@@ -54,14 +54,10 @@ of the active instruction surface.
 
 ## Remaining Docs Hazards
 
-- Legacy automatic-evaluation source remains under `orchestrator/adapters/`,
-  `orchestrator/canonical/`, `detectors/`, and `matcher/`. It is a migration
-  target, not current methodology.
-- `orchestrator/forensics/pipeline.yaml` still names planned Sigma/YARA paths
-  and retired `orchestrator/evaluation` config paths. Treat this as historical
-  or migration residue until a task verifies current wiring.
-- `requirements.txt` still has comments tied to the retired evaluation stack.
-  Dependency cleanup is out of scope for this documentation pass.
+- Legacy automatic-evaluation source under `orchestrator/adapters/`,
+  `orchestrator/canonical/`, `detectors/`, and `matcher/` has been removed.
+- `orchestrator/forensics/pipeline.yaml` now tracks raw extraction tool
+  versions, not detector rulesets or matching config.
 - `orchestrator/forensics/yara_runner.py` still has comments about
   evaluation-era YARA emission and `scenario_01`. Do not infer current thesis
   behavior from those comments.
@@ -75,7 +71,7 @@ Use the active source-of-truth hierarchy above for future prompts. Historical
 docs may be cited for rationale only after checking current source and the
 latest explicit run artifacts.
 
-For the next implementation step, prioritize legacy automatic-pipeline
-removal/quarantine. Do not reopen VM orchestration, acquisition, scenario
+For later cleanup, prioritize remaining historical terminology over new
+detector/matcher work. Do not reopen VM orchestration, acquisition, scenario
 payload changes, tests, dependencies, or major tool integrations unless the task
 explicitly asks.

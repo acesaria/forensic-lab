@@ -3,7 +3,6 @@ description: Innocuous demo scenario that creates and verifies one text file.
 attck: []
 parameters:
   toy_name: toy.txt
-expected_observables_file: expected_observables.yml
 steps:
   - id: create_toy_file
     type: shell
