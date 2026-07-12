@@ -1,9 +1,9 @@
 # userland_father_ldpreload
 
-`userland_father_ldpreload` is the canonical Father-inspired LD_PRELOAD
-scenario for the thesis pipeline. It uses the real Father source in a
-controlled VM/lab context, builds a run-local shared object, and exercises a
-small set of safe behaviors relevant to dynamic-linker hijacking.
+`userland_father_ldpreload` is the Father-inspired LD_PRELOAD scenario for the
+manual investigation thesis path. It uses the real Father source in a controlled
+VM/lab context, builds a run-local shared object, and exercises a small set of
+safe behaviors relevant to dynamic-linker hijacking.
 
 This is a post-mortem DFIR scenario. It is not a live EDR/SIEM use case, a
 wild-malware deployment, or an attempt to execute every Father capability.
@@ -31,19 +31,21 @@ Out of scope:
 
 ## Forensic Intent
 
-The scenario generates evidence that can be reconstructed after acquisition:
+The scenario generates evidence that can be manually investigated after
+acquisition:
 
 - disk/filesystem artifacts;
 - memory process, mapping, and socket artifacts;
 - timeline artifacts;
-- baseline comparison artifacts.
+- profile comparison artifacts.
 
 The teaching goal is to keep the case understandable: real Father source,
 bounded execution, explicit safety limits, and enough artifacts for the
-post-mortem pipeline to evaluate reconstruction quality.
+post-mortem workflow to correlate filesystem, timeline, and memory evidence.
 
-Ground truth and expected artifacts are written for the GT-aware matching and
-metrics layers. Detectors and YAML rules must remain GT-blind.
+Ground truth and expected artifacts may still be written by migration-era code,
+but they are not current scoring requirements. Current thesis analysis uses raw
+TSK, Plaso, and Volatility exports plus manual investigation notes.
 
 ## Implementation Shape
 
@@ -51,11 +53,11 @@ The scenario extracts the pinned Father archive into the run workspace, edits
 only that temporary copy's `src/config.h`, runs `make father`, and copies the
 built `rk.so` to the scenario's lab install path.
 
-The canonical run writes a scenario-local preload artifact and activates the
-library with an explicit `LD_PRELOAD` environment for one bounded Python
-listener. The accept-hook client connects only to `127.0.0.1` from the configured
-source port, sends the configured password, and keeps the socket-backed
-shell/session open for `process_duration_seconds`.
+The run writes a scenario-local preload artifact and activates the library with
+an explicit `LD_PRELOAD` environment for one bounded Python listener. The
+accept-hook client connects only to `127.0.0.1` from the configured source port,
+sends the configured password, and keeps the socket-backed shell/session open
+for `process_duration_seconds`.
 
 The manifest defines seven steps:
 
@@ -101,9 +103,8 @@ A scenario run writes:
 - `command_log.jsonl`
 
 Full VM-backed runs then acquire RAM and disk while the listener and bounded
-shell/session are still alive, extract post-mortem tool output, normalize
-`ToolFinding` records, emit GT-blind candidate `DetectionClaim` records, match
-against expected artifacts, and compute metrics/report outputs.
+shell/session are still alive and extract raw TSK, Plaso, and Volatility output
+for manual filesystem, timeline, and memory investigation.
 
 Cleanup/evasion and deterministic randomization of paths, ports, prefixes, and
 related values are future variants, not the default scenario.

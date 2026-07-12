@@ -1,31 +1,45 @@
 # forensic-lab
 
-forensic-lab is a defensive Linux post-mortem forensic reconstruction and
-evaluation framework for controlled VM scenarios. It runs a scenario in an
-isolated lab VM, acquires disk and RAM evidence, extracts disk/RAM/timeline
-findings, and evaluates what can be reconstructed against artifact
-expectations written during scenario execution.
+forensic-lab is a defensive Linux post-mortem forensic investigation lab for
+controlled VM scenarios. It executes a scenario in an isolated lab VM, acquires
+disk and memory evidence, produces raw TSK/Plaso/Volatility exports, and
+supports manual correlation across filesystem, timeline, and memory evidence.
 
 This is thesis research tooling, not a production SIEM, EDR, malware sandbox,
-or live incident-response platform.
+automatic detector, automatic reconstruction system, or live incident-response
+platform.
 
-## Pipeline
+## Migration State
 
-The thesis pipeline is intentionally layered:
+The project has pivoted from automatic detection/evaluation to reproducible
+manual multi-source investigation. Documentation now reflects the target
+architecture. Some legacy automatic detector, canonical matching, and metrics
+code remains in the repository until later cleanup commits.
+
+Previous automatic reconstruction work is preserved by the immutable tag
+`automatic-reconstruction-v3-final`.
+
+## Target Workflow
+
+The thesis workflow is intentionally layered:
 
 1. provision a clean VM from a pinned distro image;
 2. snapshot the pristine baseline;
 3. run a controlled scenario from `scenarios.yaml`;
-4. write execution truth and artifact expectations;
+4. write a minimal run manifest and append-only command log;
 5. acquire memory while the VM is ON;
 6. acquire disk while the VM is OFF;
-7. extract disk, RAM, and timeline evidence;
-8. normalize tool output into `ToolFinding` records;
-9. emit GT-blind candidate `DetectionClaim` records;
-10. match candidates against expectations and compute metrics/report outputs.
+7. hash acquired evidence and retain provenance;
+8. extract raw filesystem evidence with TSK;
+9. extract raw timeline evidence with Plaso;
+10. extract raw memory evidence with Volatility;
+11. manually investigate and correlate the raw evidence;
+12. compare vanilla and hardened profiles;
+13. report findings, negative findings, tool failures, and limitations.
 
-Headline results are based on matched reconstruction, not raw findings and not
-the full candidate stream.
+Automatic acquisition and raw extraction remain in scope. Investigation remains
+manual. Precision, recall, canonical matching, ruleset hashes, and automatic
+reconstruction scores are not current thesis outputs.
 
 ## Repository Layout
 
@@ -36,20 +50,22 @@ forensic-lab/
 ├── scenarios/
 │   ├── scenarios/                 # declarative scenario.yml trees
 │   └── art/                       # optional ART calibration inputs
+├── infra/                         # libvirt/QEMU, Ansible, distro profiles
 ├── orchestrator/
-│   ├── core/                      # lifecycle, VM state, paths, baseline cache
+│   ├── core/                      # lifecycle, VM state, paths, provenance
 │   ├── scenarios/                 # declarative scenario engine
-│   ├── forensics/                 # acquisition and tool runners
-│   ├── adapters/                  # tool output -> ToolFinding
-│   └── canonical/                 # canonical record models and JSONL I/O
-├── detectors/                     # GT-blind rules -> DetectionClaim
-├── matcher/                       # GT-aware matching, metrics, report
-├── docs/                          # methodology and schema notes
+│   ├── forensics/                 # acquisition and raw tool runners
+│   ├── adapters/                  # legacy normalization layer
+│   └── canonical/                 # legacy canonical record models
+├── detectors/                     # legacy automatic rule layer
+├── matcher/                       # legacy automatic matching/metrics layer
+├── docs/                          # methodology and orientation
 ├── shared/                        # generated experiment outputs
 └── vendor/                        # vendored third-party rule/test data
 ```
 
-Generated outputs under `shared/` are disposable artifacts, not source.
+Generated outputs under `shared/` are disposable artifacts or evidence for a
+named run, not source.
 
 ## Typical Workflow
 
@@ -60,7 +76,7 @@ python cli.py init
 # Prepare a distro: download image, create VM, build ISF, take baseline snapshot
 python cli.py setup --distro ubuntu-22.04
 
-# Run the registered thesis scenario, then acquire and evaluate evidence
+# Run the registered thesis scenario, then acquire and extract evidence
 python cli.py run --distro ubuntu-22.04 --scenario userland_father_ldpreload
 
 # Local scenario-engine validation without VM acquisition
@@ -72,22 +88,25 @@ python cli.py run-scenario \
 python cli.py destroy --distro ubuntu-22.04
 ```
 
+During migration, full runs may still emit legacy normalized, detector, matcher,
+or metric artifacts. Current thesis use is the scenario log, run manifest,
+acquired evidence, raw TSK/Plaso/Volatility exports, hashes, tool failures, and
+manual investigation notes.
+
 Scenario keys come from `scenarios.yaml`. The current registered thesis
 scenario key remains `userland_father_ldpreload`.
 
-## Evidence Layers
+## Evidence Contract
 
-- `ToolFinding`: broad normalized output from forensic tools. Raw evidence,
-  never a final result.
-- `DetectionClaim`: GT-blind candidate/supporting evidence emitted by rules.
-  Not a verdict.
-- Per-expectation outcomes (`outcomes.jsonl`): GT-aware match of candidate
-  evidence against expected artifacts (identified / supported / missed).
-- `metrics.json` and `report.md`: schema-v3 reconstruction metrics and reporting.
-
-Detectors, adapters, and YAML rules must not read ground truth, expectations,
-target paths, hashes, step names, or seeds. Ground truth belongs in matching,
-metrics, reports, and explicit scenario/execution-truth generation.
+- Minimal run manifest and append-only command log are required.
+- Memory acquisition requires the lab VM to be running.
+- Disk acquisition requires the lab VM to be powered off.
+- Disk and memory images retain hashes and provenance.
+- Raw TSK, Plaso, and Volatility exports are preserved as raw evidence.
+- Tool failures and negative findings are recorded explicitly.
+- Raw evidence is immutable; reruns create separate derived artifacts.
+- Filesystem, timeline, and memory source families stay distinguishable during
+  manual correlation.
 
 ## VM Contract
 
@@ -98,9 +117,21 @@ The lab uses two VM roles:
 | `lab` | `forensics-isolated` | Runs controlled scenarios | Persistent, snapshots |
 | `build-isf` | `default` | Builds Volatility3 ISF symbols | Ephemeral |
 
-Memory acquisition requires the lab VM to be running. Disk acquisition requires
-the lab VM to be powered off. Power transitions stay in the orchestrator, not in
-tool wrappers.
+Power transitions stay in the orchestrator, not in tool wrappers.
+
+## Profiles
+
+- Ubuntu 22.04 is the deep-analysis platform.
+- Ubuntu 24.04 and Fedora receive targeted replication.
+- Vanilla means distro defaults.
+- Hardened means one fixed documented native-control bundle.
+- Ubuntu hardening uses AppArmor.
+- Fedora hardening uses SELinux.
+- `hardened+telemetry` adds `auditd` and is used only for the Father cleanup
+  comparison.
+
+If a hardened profile blocks a scenario, the run is recorded as prevented.
+Remaining evidence and denial traces are still acquired and analysed.
 
 ## Configuration
 
@@ -115,7 +146,9 @@ source .venv/bin/activate
 ```
 
 Host prerequisites include KVM/QEMU with libvirt, `cloud-localds`,
-`ewfacquire`, and an SSH key for the lab VM.
+`ewfacquire`, and an SSH key for the lab VM. Passwordless sudo inside the lab is
+a controlled laboratory precondition for deploying scenario steps that require
+root; it is not an emulation of initial compromise.
 
 ## Optional ART Calibration
 
@@ -123,6 +156,6 @@ Atomic Red Team data is kept as an optional calibration input, not as the core
 scenario model. The locked calibration subset lives under `scenarios/art/`, and
 the vendored technique YAMLs live under `vendor/atomic-red-team/atomics/`.
 
-The thesis scenarios are controlled by this framework and produce the canonical
-execution truth, artifact expectations, normalized findings, candidate evidence,
-matches, metrics, and score reports.
+The thesis scenarios are controlled by this framework and produce reproducible
+execution records, acquired evidence, raw forensic exports, and material for
+manual investigation.

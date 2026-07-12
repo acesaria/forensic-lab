@@ -1,12 +1,17 @@
 # Detection Rule Provenance and Evidence-Strength Audit
 
-> Historical/partially stale: verify against TODO.md, METHODOLOGY.md,
-> docs/repo_map.md, and latest metrics before using.
+> Historical/partially stale: automatic-reconstruction-era rule audit. Verify
+> against TODO.md, METHODOLOGY.md, docs/repo_map.md, and current raw run
+> artifacts before using.
 
 Date: 2026-06-27
 Scope: GT-blind detector rules under `detectors/rules/**` and their semantics in
 `detectors/engine.py`. This is a review document. No rule behavior is changed
 here.
+
+Current status: detector rules are legacy automatic-evaluation residue during
+the manual-investigation migration. This audit is retained for historical
+rationale only and is not current thesis methodology.
 
 Reference inputs: `detectors/rules/README.md`, `detectors/engine.py`,
 `docs/metrics_methodology.md`, `docs/canonical_pipeline_review.md`,

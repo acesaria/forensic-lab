@@ -1,13 +1,15 @@
 # Father LD_PRELOAD Walkthrough
 
-> Historical/partially stale: verify against TODO.md, METHODOLOGY.md,
-> docs/repo_map.md, and latest metrics before using.
+> Historical/partially stale: automatic-reconstruction-era walkthrough. Verify
+> against TODO.md, METHODOLOGY.md, docs/repo_map.md, and current raw run
+> artifacts before using.
 
-Status: this is a historical walkthrough for a cached run. The current
+Status: this is a historical walkthrough for a cached automatic-reconstruction
+run. The current
 `userland_father_ldpreload` scenario uses the real Father source, a
 scenario-local LD_PRELOAD activation artifact, and a bounded localhost-only
 accept-hook shell/session. Treat the examples below as cached-output context,
-not the current scenario declaration.
+not the current scenario declaration or current methodology.
 
 This walkthrough uses the cached Father run:
 

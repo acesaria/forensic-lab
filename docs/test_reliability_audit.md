@@ -1,8 +1,9 @@
 # Test Reliability Audit
 
-Status: hygiene-pass test orientation for Father/Scenario-F metrics cleanup.
-Passing tests are useful guardrails, but they are not proof of forensic
-correctness or thesis validity.
+Status: legacy-aware test orientation during the manual-investigation pivot.
+Passing tests are useful guardrails for code that remains active, but they are
+not proof of forensic correctness, manual investigation quality, or thesis
+validity.
 
 ## Latest Pytest Results
 
@@ -17,7 +18,7 @@ virtualenv:
 The post-cleanup verification used `PYTHONDONTWRITEBYTECODE=1` to avoid
 recreating repo-local `__pycache__` directories during the hygiene pass.
 
-## Meaningful Behavior Guards
+## Legacy Behavior Guards
 
 - `detectors/tests/test_rule_leakage.py` checks detector rules for scenario
   instance-literal leakage.
@@ -61,15 +62,17 @@ recreating repo-local `__pycache__` directories during the hygiene pass.
 - Real memory acquisition and disk acquisition.
 - Real Plaso/log2timeline/psort behavior on current images.
 - Real Volatility3 plugin drift across kernels and versions.
-- Full Father no-cleanup live-run metric reproducibility.
-- Cleanup-variant behavior and expected artifacts.
+- Manual investigation note quality and reproducibility.
+- Full Father no-cleanup live-run acquisition/extraction reproducibility.
+- Cleanup-variant behavior and remaining evidence.
 - A second full-depth scenario.
-- Exact report schema and thesis-facing wording beyond targeted matcher checks.
-- Whether planned Sigma/YARA paths are actually wired into the canonical
-  detector pipeline.
+- Vanilla vs hardened profile comparison.
+- Tool-failure and negative-finding reporting.
 
 ## Interpretation Rule
 
-Use the tests as regression tripwires for source-shape and methodology
-invariants. Do not treat a green suite as evidence that the forensic metrics are
-correct, that a live acquisition will work, or that a thesis claim is valid.
+Use the tests as regression tripwires for source shape and remaining active
+invariants. During migration, many tests still exercise legacy automatic
+detector/matcher behavior. Do not treat a green suite as evidence that live
+acquisition will work, that manual investigation is complete, or that a thesis
+claim is valid.

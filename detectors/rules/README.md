@@ -1,10 +1,15 @@
-# Detector Rule Packs
+# Legacy Detector Rule Packs
 
-These rules are GT-blind. They run only over canonical `ToolFinding` records and
-do not receive scenario ground truth, target paths, hashes, step names, or
-expected observables.
+Status: legacy automatic-evaluation surface retained during migration. These
+rules are not part of the current manual-investigation thesis method and should
+not be extended. They remain only until the old automatic pipeline is removed or
+quarantined in a later cleanup.
 
-Each rule is Sigma-lite YAML:
+Historically, these rules were GT-blind. They ran only over canonical
+`ToolFinding` records and did not receive scenario ground truth, target paths,
+hashes, step names, or expected observables.
+
+Historical rule format:
 
 - `id`: stable rule identifier;
 - `name`: human-readable rule name;
@@ -14,5 +19,6 @@ Each rule is Sigma-lite YAML:
 - `attck`: ATT&CK tags attached to resulting `DetectionClaim` rows;
 - `parameters`: rule-specific, non-scenario target predicates.
 
-The engine in `detectors/engine.py` loads these YAML files and emits
-`detection_claims.jsonl`.
+The legacy engine in `detectors/engine.py` loads these YAML files and emits
+`detection_claims.jsonl`. Current thesis work should use raw TSK, Plaso, and
+Volatility exports plus manual investigation notes instead.
