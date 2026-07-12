@@ -31,25 +31,40 @@ def extract_plugins(
     plugins: tuple[str, ...] = DEFAULT_PLUGINS,
     kernel_release: str | None = None,
     errors: dict[str, str] | None = None,
+    invocations: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     out: dict[str, list[dict[str, Any]]] = {}
     for plugin in plugins:
+        invocation: dict[str, Any] = {"plugin": plugin}
+        if invocations is not None:
+            invocations[plugin] = invocation
         try:
             out[plugin] = vol.run_plugin(
-                memory_path, distro_id, plugin, kernel_release=kernel_release
+                memory_path,
+                distro_id,
+                plugin,
+                kernel_release=kernel_release,
+                invocation=invocation,
             )
         except RuntimeError as exc:
             # A plugin missing for this kernel build is not fatal; the run keeps
             # the raw output from whichever plugins did succeed.
             if errors is not None:
                 errors[plugin] = str(exc)
+            invocation.update({"status": "failed", "error": str(exc)})
             out[plugin] = []
     return out
 
 
-def extract_bodyfile(sleuth: SleuthKitRunner, disk_path: Path) -> dict[str, Any]:
-    offset = sleuth.partition_offset(disk_path)
+def extract_bodyfile(
+    sleuth: SleuthKitRunner,
+    disk_path: Path,
+    invocations: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    offset = sleuth.partition_offset(disk_path, invocations=invocations)
     # fls -m emits bodyfile rows for every name, allocated or not, mounting the
     # listing at "/" so paths read absolute.
-    lines = sleuth.fls(disk_path, offset, flags="-r -m /")
+    lines = sleuth.fls(
+        disk_path, offset, flags="-r -m /", invocations=invocations
+    )
     return {"bodyfile": "\n".join(lines)}

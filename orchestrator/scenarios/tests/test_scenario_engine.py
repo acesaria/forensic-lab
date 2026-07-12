@@ -1,11 +1,13 @@
 import json
 from pathlib import Path
+import subprocess
 
 import pytest
 
 from orchestrator.scenarios import run_scenario
 from orchestrator.scenarios.engine import ScenarioStepError
 from orchestrator.scenarios.executors import SSHClientExecutor
+from orchestrator.forensics.dumper import Dumper
 
 
 def test_scenario_manifest_records_completed_and_failed_steps(tmp_path: Path):
@@ -89,6 +91,47 @@ def test_scenario_manifest_records_completed_and_failed_steps(tmp_path: Path):
     assert "broken stderr" in failed_manifest["steps"][0]["stderr_excerpt"]
     assert failed_log[0]["exit_code"] == 7
     assert "broken stderr" in failed_log[0]["stderr_excerpt"]
+
+
+def test_ewfverify_failure_is_preserved_and_fails_acquisition_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    first_segment = tmp_path / "evidence.E01"
+
+    def fake_run(command, **_kwargs):
+        if command == ["ewfverify", "-V"]:
+            return subprocess.CompletedProcess(command, 0, "ewfverify 20140813\n", "")
+        return subprocess.CompletedProcess(
+            command, 3, "verification stdout\n", "verification stderr\n"
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    segments = [
+        {"path": str(first_segment), "size_bytes": 4, "sha256": "a" * 64},
+        {
+            "path": str(tmp_path / "evidence.E02"),
+            "size_bytes": 3,
+            "sha256": "b" * 64,
+        },
+    ]
+
+    with pytest.raises(RuntimeError, match="ewfverify failed"):
+        Dumper._run_ewfverify(
+            object.__new__(Dumper),
+            first_segment,
+            str(tmp_path / "evidence"),
+            segment_metadata=segments,
+        )
+
+    status = json.loads(
+        (tmp_path / "ewfverify_status.json").read_text(encoding="utf-8")
+    )
+    assert status["status"] == "failed"
+    assert status["acquisition_status"] == "failed"
+    assert status["exit_status"] == 3
+    assert status["stdout"] == "verification stdout\n"
+    assert status["stderr"] == "verification stderr\n"
+    assert status["segments"] == segments
 
 
 def test_ssh_client_executor_adapts_existing_ssh_client_api():

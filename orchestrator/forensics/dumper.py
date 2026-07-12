@@ -4,7 +4,7 @@ orchestrator/forensics/dumper.py
 RAM and disk acquisition pipeline. Pure I/O -- no VM lifecycle management.
 
 Caller contract (enforced by orchestrator._run_acquisition):
-  - acquire_memory: domain must be ON (virsh dump --live)
+  - acquire_memory: domain must be ON (virsh dump --memory-only)
   - acquire_disk:   host-side acquisition of the qcow2; the orchestrator shuts
                     the VM down first so the image is read with no QEMU lock held.
 The dumper itself does no VM state transitions.
@@ -55,9 +55,16 @@ class ImageMetadata:
     size_bytes: int | None
     timestamp: float
     segments: list[str] | None = None
+    segment_metadata: list[dict[str, object]] | None = None
     acquisition_seconds: float | None = None
     virtual_size_bytes: int | None = None
     ewf_size_bytes: int | None = None
+    tool_version: str | None = None
+    command: list[str] | None = None
+    stdout: str | None = None
+    stderr: str | None = None
+    commands: list[dict[str, object]] | None = None
+    verification: dict[str, object] | None = None
 
 
 @dataclass
@@ -104,13 +111,27 @@ class Dumper:
 
         started = time.time()
         console.step(f"acquiring memory from '{domain}'...")
+        command = ["virsh", "dump", domain, str(dest), "--memory-only"]
         result = subprocess.run(
-            ["virsh", "dump", domain, str(dest), "--memory-only"],
+            command,
             check=False,
             capture_output=True,
             text=True,
         )
+        tool_version = self._tool_version(["virsh", "--version"])
+        status_path = dest.parent / "virsh_dump_status.json"
+        record = self._command_result(
+            command, result, tool_version=tool_version
+        )
+        record.update(
+            {
+                "status_path": str(status_path),
+                "output_path": str(dest),
+                "acquisition_status": record["status"],
+            }
+        )
         if result.returncode != 0:
+            self._write_status(status_path, record)
             raise RuntimeError(
                 f"virsh dump failed (rc={result.returncode})\n"
                 f"{result.stdout or ''}\n{result.stderr or ''}"
@@ -119,24 +140,48 @@ class Dumper:
             _log.debug("%s", result.stdout or "")
 
         if not dest.exists() or dest.stat().st_size == 0:
+            record.update(
+                {
+                    "status": "failed",
+                    "acquisition_status": "failed",
+                    "error": "output file not created or empty",
+                }
+            )
+            self._write_status(status_path, record)
             raise RuntimeError("Memory dump failed: output file not created or empty")
 
         elapsed = time.time() - started
         size_bytes = dest.stat().st_size
+        sha256 = self._sha256(dest)
+        completed_at = time.time()
+        record.update(
+            {
+                "sha256": sha256,
+                "size_bytes": size_bytes,
+                "timestamp": completed_at,
+                "acquisition_seconds": elapsed,
+            }
+        )
         subprocess.run(
             ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
             check=True,
         )
+        self._write_status(status_path, record)
         console.ok(
             f"memory dump done ({elapsed:.1f}s): {dest}, {_format_bytes(size_bytes)}"
         )
         return ImageMetadata(
             path=str(dest),
-            tool="virsh dump --memory-only --live",
-            sha256=self._sha256(dest),
+            tool="virsh dump --memory-only",
+            sha256=sha256,
             size_bytes=size_bytes,
-            timestamp=time.time(),
+            timestamp=completed_at,
             acquisition_seconds=elapsed,
+            tool_version=tool_version,
+            command=command,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            commands=[record],
         )
 
     # --- disk (VM must be OFF) -------------------------------------------
@@ -159,10 +204,18 @@ class Dumper:
         virtual_size = self._qemu_virtual_size(source_image_path)
         console.step(f"acquiring disk from '{Path(source_image_path).stem}'...")
         try:
-            self._convert_to_raw(source_image_path, raw_path)
+            qemu_result = self._convert_to_raw(
+                source_image_path,
+                raw_path,
+                status_path=dest.parent / "qemu_img_status.json",
+            )
             return self._wrap_raw_to_ewf(
                 raw_path, ewf_prefix, started, virtual_size,
-                tool="qemu-img convert -O raw && ewfacquire -u -c empty-block",
+                tool=(
+                    "qemu-img convert -O raw; ewfacquire -u -c empty-block; "
+                    "ewfverify"
+                ),
+                prior_commands=[qemu_result],
             )
         finally:
             # _run_ewfacquire unlinks raw_path itself, but a failure inside
@@ -177,28 +230,45 @@ class Dumper:
         started: float,
         virtual_size: int | None,
         tool: str,
+        prior_commands: list[dict[str, object]] | None = None,
     ) -> ImageMetadata:
         # Wrap the staged raw image to EWF, validate + chown the segments, and
         # build the manifest metadata.
-        self._run_ewfacquire(raw_path, ewf_prefix)
+        ewfacquire_result = self._run_ewfacquire(raw_path, ewf_prefix)
         ewf_segments = sorted(glob.glob(f"{ewf_prefix}.E??"))
         self._validate_ewf_segments(ewf_segments, ewf_prefix)
         self._chown_segments(ewf_segments)
+        segment_metadata = [
+            {
+                "path": str(Path(segment)),
+                "size_bytes": Path(segment).stat().st_size,
+                "sha256": self._sha256(Path(segment)),
+            }
+            for segment in ewf_segments
+        ]
+        verification = self._run_ewfverify(
+            Path(ewf_segments[0]),
+            ewf_prefix,
+            segment_metadata=segment_metadata,
+        )
 
         elapsed = time.time() - started
-        ewf_total_size = sum(Path(s).stat().st_size for s in ewf_segments)
+        ewf_total_size = sum(int(segment["size_bytes"]) for segment in segment_metadata)
         self._log_disk_result(elapsed, ewf_segments, virtual_size, ewf_total_size)
 
         return ImageMetadata(
             path=str(Path(ewf_segments[0])),
-            segments=[str(Path(s)) for s in ewf_segments],
+            segments=[str(Path(segment)) for segment in ewf_segments],
+            segment_metadata=segment_metadata,
             tool=tool,
-            sha256=self._sha256(Path(ewf_segments[0])),
-            size_bytes=Path(ewf_segments[0]).stat().st_size,
+            sha256=str(segment_metadata[0]["sha256"]),
+            size_bytes=int(segment_metadata[0]["size_bytes"]),
             timestamp=time.time(),
             acquisition_seconds=elapsed,
             virtual_size_bytes=virtual_size,
             ewf_size_bytes=ewf_total_size,
+            commands=[*(prior_commands or []), ewfacquire_result, verification],
+            verification=verification,
         )
 
     # --- manifest --------------------------------------------------------
@@ -232,25 +302,38 @@ class Dumper:
         if raw_path.exists():
             raw_path.unlink()
 
-    def _convert_to_raw(self, disk_source: Path, raw_path: Path) -> None:
+    def _convert_to_raw(
+        self,
+        disk_source: Path,
+        raw_path: Path,
+        *,
+        status_path: Path,
+    ) -> dict[str, object]:
         # raw_path lives on tmpfs (see _RAW_STAGING_DIR) so this conversion
         # doesn't burn a second pass of physical disk I/O. For sparse qcow2
         # the actual bytes written are much smaller than the virtual size.
         _log.debug("converting to raw: %s -> %s", disk_source, raw_path)
-        try:
-            subprocess.run(
-                ["qemu-img", "convert", "-O", "raw", str(disk_source), str(raw_path)],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-        except subprocess.CalledProcessError as exc:
+        command = [
+            "qemu-img", "convert", "-O", "raw", str(disk_source), str(raw_path)
+        ]
+        result = subprocess.run(command, check=False, capture_output=True, text=True)
+        record = self._command_result(
+            command,
+            result,
+            tool_version=self._tool_version(["qemu-img", "--version"]),
+        )
+        record["status_path"] = str(status_path)
+        self._write_status(status_path, record)
+        if result.returncode != 0:
             raise RuntimeError(
                 f"qemu-img convert failed for '{disk_source}'.\n"
-                f"{(exc.stderr or '').strip()}"
-            ) from exc
+                f"{(result.stderr or '').strip()}"
+            )
+        return record
 
-    def _run_ewfacquire(self, raw_path: Path, ewf_prefix: str) -> None:
+    def _run_ewfacquire(
+        self, raw_path: Path, ewf_prefix: str
+    ) -> dict[str, object]:
         """
         Wrap raw image into EWF format. Deletes raw_path when done (or on failure).
         ewf_prefix is the output path without extension; ewfacquire appends .E01, .E02, ...
@@ -258,22 +341,31 @@ class Dumper:
         threads = str(os.cpu_count() or 4)
         _log.debug("running ewfacquire: %s -> %s.E??", raw_path, ewf_prefix)
         try:
+            command = [
+                "ewfacquire",
+                "-u",
+                "-c",
+                "empty-block",
+                "-j",
+                threads,
+                "-t",
+                ewf_prefix,
+                str(raw_path),
+            ]
             result = subprocess.run(
-                [
-                    "ewfacquire",
-                    "-u",
-                    "-c",
-                    "empty-block",
-                    "-j",
-                    threads,
-                    "-t",
-                    ewf_prefix,
-                    str(raw_path),
-                ],
+                command,
                 check=False,
                 capture_output=True,
                 text=True,
             )
+            record = self._command_result(
+                command,
+                result,
+                tool_version=self._tool_version(["ewfacquire", "-V"]),
+            )
+            status_path = Path(ewf_prefix).parent / "ewfacquire_status.json"
+            record["status_path"] = str(status_path)
+            self._write_status(status_path, record)
             if result.returncode != 0:
                 raise RuntimeError(
                     f"ewfacquire failed (rc={result.returncode})\n"
@@ -282,10 +374,53 @@ class Dumper:
                 )
             if _log.isEnabledFor(logging.DEBUG):
                 _log.debug("%s", result.stdout or "")
+            return record
         finally:
             # always remove the intermediate raw file regardless of success/failure
             if raw_path.exists():
                 raw_path.unlink()
+
+    def _run_ewfverify(
+        self,
+        first_segment: Path,
+        ewf_prefix: str,
+        *,
+        segment_metadata: list[dict[str, object]] | None = None,
+    ) -> dict[str, object]:
+        command = ["ewfverify", str(first_segment)]
+        status_path = Path(ewf_prefix).parent / "ewfverify_status.json"
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            record = self._command_result(
+                command,
+                result,
+                tool_version=self._tool_version(["ewfverify", "-V"]),
+            )
+        except OSError as exc:
+            record = {
+                "command": command,
+                "status": "failed",
+                "exit_status": None,
+                "stdout": "",
+                "stderr": str(exc),
+                "tool_version": None,
+            }
+        record["status_path"] = str(status_path)
+        record["acquisition_status"] = record["status"]
+        if segment_metadata is not None:
+            record["segments"] = segment_metadata
+        self._write_status(status_path, record)
+        if record["status"] != "completed":
+            raise RuntimeError(
+                f"ewfverify failed (rc={record['exit_status']}); "
+                f"details preserved in {status_path}"
+            )
+        return record
 
     def _validate_ewf_segments(self, segments: list[str], ewf_prefix: str) -> None:
         if not segments:
@@ -328,6 +463,46 @@ class Dumper:
             for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
                 h.update(chunk)
         return h.hexdigest()
+
+    @staticmethod
+    def _command_result(
+        command: list[str],
+        result: subprocess.CompletedProcess[str],
+        *,
+        tool_version: str | None = None,
+    ) -> dict[str, object]:
+        return {
+            "command": command,
+            "status": "completed" if result.returncode == 0 else "failed",
+            "exit_status": result.returncode,
+            "stdout": result.stdout or "",
+            "stderr": result.stderr or "",
+            "tool_version": tool_version,
+        }
+
+    @staticmethod
+    def _tool_version(command: list[str]) -> str | None:
+        try:
+            result = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        output = (result.stdout + result.stderr).strip()
+        return output.splitlines()[0] if output else None
+
+    @staticmethod
+    def _write_status(path: Path, record: dict[str, object]) -> None:
+        path.write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _qemu_virtual_size(disk_source: Path) -> int | None:

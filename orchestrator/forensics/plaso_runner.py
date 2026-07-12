@@ -99,16 +99,24 @@ def run_log2timeline(
         if staged_log.exists():
             shutil.move(str(staged_log), log_path)
         if result.returncode != 0:
-            raise RuntimeError(
+            error = RuntimeError(
                 f"log2timeline failed for {disk_path.name} "
                 f"(see {log_path}):\n"
                 f"{result.stderr.strip() or '(no output)'}"
             )
+            error.invocations = {
+                "log2timeline": _invocation_result(
+                    cmd, result, log_path=str(log_path)
+                )
+            }
+            raise error
     finally:
         shutil.rmtree(log_stage, ignore_errors=True)
 
     return {
         "command": cmd,
+        "status": "completed",
+        "exit_status": result.returncode,
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -131,13 +139,21 @@ def run_psort(
     _log.debug("psort: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        raise RuntimeError(
+        error = RuntimeError(
             f"psort failed for {storage_path.name}:\n"
             f"{result.stderr.strip() or '(no output)'}"
         )
+        error.invocations = {
+            "psort": _invocation_result(
+                cmd, result, output_path=str(output_path)
+            )
+        }
+        raise error
 
     return {
         "command": cmd,
+        "status": "completed",
+        "exit_status": result.returncode,
         "returncode": result.returncode,
         "stdout": result.stdout,
         "stderr": result.stderr,
@@ -168,7 +184,7 @@ def run_timeline(
     disk_path: Path,
     storage_path: Path,
     output_path: Path,
-    parsers: str = "bash,syslog,linux_os_log",
+    parsers: str = "text/bash_history, text/syslog, text/syslog_traditional, systemd_journal, filestat",
     log2timeline_bin: str = "log2timeline",
     psort_bin: str = "psort",
     file_filter: Path | None = None,
@@ -180,14 +196,44 @@ def run_timeline(
         log2timeline_bin=log2timeline_bin,
         file_filter=file_filter,
     )
-    psort_result = run_psort(
-        storage_path=storage_path,
-        output_path=output_path,
-        psort_bin=psort_bin,
-    )
-    events = read_timeline(output_path)
+    try:
+        psort_result = run_psort(
+            storage_path=storage_path,
+            output_path=output_path,
+            psort_bin=psort_bin,
+        )
+    except RuntimeError as exc:
+        exc.invocations = {
+            "log2timeline": log2timeline_result,
+            **getattr(exc, "invocations", {}),
+        }
+        raise
+    try:
+        events = read_timeline(output_path)
+    except RuntimeError as exc:
+        exc.invocations = {
+            "log2timeline": log2timeline_result,
+            "psort": psort_result,
+        }
+        raise
     return {
         "log2timeline": log2timeline_result,
         "psort": psort_result,
         "events": events,
+    }
+
+
+def _invocation_result(
+    command: list[str],
+    result: subprocess.CompletedProcess[str],
+    **paths: str,
+) -> dict:
+    return {
+        "command": command,
+        "status": "completed" if result.returncode == 0 else "failed",
+        "exit_status": result.returncode,
+        "returncode": result.returncode,
+        "stdout": result.stdout or "",
+        "stderr": result.stderr or "",
+        **paths,
     }

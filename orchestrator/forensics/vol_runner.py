@@ -35,6 +35,7 @@ def _run_vol_command(
     isf_path: Path,
     plugin: str,
     extra_args: list[str] | None = None,
+    invocation: dict | None = None,
 ) -> list[dict]:
     # Module-level so ProcessPoolExecutor can pickle it. Centralises JSON
     # normalization so run_plugin and run_plugins agree on row shape.
@@ -49,13 +50,34 @@ def _run_vol_command(
         plugin,
         *(extra_args or []),
     ]
+    if invocation is not None:
+        invocation.update({"command": cmd, "status": "running"})
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        if invocation is not None:
+            invocation.update(
+                {
+                    "status": "failed",
+                    "exit_status": None,
+                    "stdout": "",
+                    "stderr": str(exc),
+                }
+            )
         raise RuntimeError(
             "vol3: binary not found. Install volatility3 and ensure it is on PATH."
+        ) from exc
+    if invocation is not None:
+        invocation.update(
+            {
+                "exit_status": result.returncode,
+                "stderr": result.stderr or "",
+            }
         )
     if result.returncode != 0:
+        if invocation is not None:
+            invocation["status"] = "failed"
+            invocation["stdout"] = result.stdout or ""
         raise RuntimeError(
             f"vol3 '{plugin}' failed (rc={result.returncode}):\n"
             f"{result.stderr.strip() or '(no output)'}"
@@ -63,6 +85,9 @@ def _run_vol_command(
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
+        if invocation is not None:
+            invocation["status"] = "failed"
+            invocation["stdout"] = result.stdout or ""
         raise RuntimeError(f"vol3 '{plugin}' output is not valid JSON: {exc}") from exc
 
     if isinstance(data, dict) and isinstance(data.get("rows"), list):
@@ -70,8 +95,22 @@ def _run_vol_command(
     elif isinstance(data, list):
         raw_rows = data
     else:
-        raw_rows = []
-    return [row for row in raw_rows if isinstance(row, dict)]
+        if invocation is not None:
+            invocation["status"] = "failed"
+            invocation["stdout"] = result.stdout or ""
+        raise RuntimeError(
+            f"vol3 '{plugin}' JSON has an unsupported top-level structure"
+        )
+    rows = [row for row in raw_rows if isinstance(row, dict)]
+    if invocation is not None:
+        invocation.update(
+            {
+                "status": "completed",
+                "result": "zero_results" if not rows else "results",
+                "row_count": len(rows),
+            }
+        )
+    return rows
 
 
 def first_present(row: dict, *keys: str) -> object | None:
@@ -126,6 +165,7 @@ class VolatilityRunner:
         plugin: str,
         extra_args: list[str] | None = None,
         kernel_release: str | None = None,
+        invocation: dict | None = None,
     ) -> list[dict]:
         isf_path = self.resolve_isf(distro_id, kernel_release)
         return _run_vol_command(
@@ -134,6 +174,7 @@ class VolatilityRunner:
             isf_path,
             plugin,
             extra_args,
+            invocation,
         )
 
     def run_plugins(

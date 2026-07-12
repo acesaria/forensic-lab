@@ -72,7 +72,11 @@ class SleuthKitRunner:
             )
         console.ok(f"disk probe passed: filesystem readable ({disk_path.name})")
 
-    def partition_extent(self, disk_path: Path) -> tuple[int, int]:
+    def partition_extent(
+        self,
+        disk_path: Path,
+        invocations: list[dict] | None = None,
+    ) -> tuple[int, int]:
         # (start_sector, length_sectors) of the first Linux (ext2/3/4) filesystem,
         # located by walking the mmls partition table in order and probing each
         # slot with fsstat. Sectors are 512 bytes. Thesis simplification
@@ -83,6 +87,7 @@ class SleuthKitRunner:
         # like ext4magic that cannot read a whole-disk or EWF image.
         cmd = [self._mmls_bin, *_image_type_flag(disk_path), str(disk_path)]
         result = subprocess.run(cmd, capture_output=True, text=True)
+        _record_invocation(invocations, cmd, result, preserve_stdout=True)
         if result.returncode != 0:
             raise RuntimeError(
                 f"mmls failed for {disk_path.name}:\n"
@@ -103,26 +108,39 @@ class SleuthKitRunner:
             except (ValueError, IndexError):
                 continue
             offset = start * 512
-            if self._verify_partition(disk_path, offset):  # fsstat says ext?
+            if self._verify_partition(
+                disk_path, offset, invocations=invocations
+            ):  # fsstat says ext?
                 return start, length
 
         raise RuntimeError(
             f"no ext2/3/4 partition found in mmls output for {disk_path.name}"
         )
 
-    def partition_offset(self, disk_path: Path) -> int:
+    def partition_offset(
+        self,
+        disk_path: Path,
+        invocations: list[dict] | None = None,
+    ) -> int:
         # Byte offset of the first ext partition. Thin wrapper over
         # partition_extent so the start-only callers (tsk extractor, tsk_recover)
         # stay unchanged.
-        start, _ = self.partition_extent(disk_path)
+        start, _ = self.partition_extent(disk_path, invocations=invocations)
         return start * 512
 
-    def fls(self, disk_path: Path, offset: int, flags: str = "-r -l") -> list[str]:
+    def fls(
+        self,
+        disk_path: Path,
+        offset: int,
+        flags: str = "-r -l",
+        invocations: list[dict] | None = None,
+    ) -> list[str]:
         # fls expects -o in sectors, while callers carry offsets in bytes.
         offset_sectors = offset // 512
         cmd = [self._fls_bin, *flags.split(), "-o", str(offset_sectors), str(disk_path)]
         _log.debug("fls: %s", " ".join(cmd))
         result = subprocess.run(cmd, capture_output=True, text=True)
+        _record_invocation(invocations, cmd, result, preserve_stdout=False)
         if result.returncode != 0:
             raise RuntimeError(
                 f"fls failed for {disk_path.name}:\n"
@@ -154,7 +172,12 @@ class SleuthKitRunner:
             )
         return result.stdout
 
-    def _verify_partition(self, disk_path: Path, offset_bytes: int) -> bool:
+    def _verify_partition(
+        self,
+        disk_path: Path,
+        offset_bytes: int,
+        invocations: list[dict] | None = None,
+    ) -> bool:
         # fsstat confirms the selected offset is actually an ext filesystem before
         # we commit to it. Avoids silently running fls against a swap or EFI partition.
         offset_sectors = offset_bytes // 512
@@ -165,9 +188,30 @@ class SleuthKitRunner:
             str(disk_path),
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        _record_invocation(invocations, cmd, result, preserve_stdout=True)
         if result.returncode != 0:
             return False
         return "File System Type: Ext" in result.stdout
+
+
+def _record_invocation(
+    invocations: list[dict] | None,
+    command: list[str],
+    result: subprocess.CompletedProcess[str],
+    *,
+    preserve_stdout: bool,
+) -> None:
+    if invocations is None:
+        return
+    record = {
+        "command": command,
+        "status": "completed" if result.returncode == 0 else "failed",
+        "exit_status": result.returncode,
+        "stderr": result.stderr or "",
+    }
+    if preserve_stdout or result.returncode != 0:
+        record["stdout"] = result.stdout or ""
+    invocations.append(record)
 
 
 def _image_type_flag(disk_path: Path) -> list[str]:

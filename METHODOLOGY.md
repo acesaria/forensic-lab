@@ -98,6 +98,19 @@ Every thesis run must retain:
 - analyst notes that cite raw evidence locations rather than undocumented
   conclusions.
 
+Memory provenance includes the full-image SHA-256, byte size, acquisition
+timestamp and duration, exact `virsh dump --memory-only` command, and reported
+virsh version. Disk provenance includes the path, byte size, and SHA-256 of
+every EWF segment. `ewfverify` runs against the completed segment set; its
+command, output, exit status, and pass/fail state are retained, and a failed
+verification fails acquisition.
+
+Raw extraction retains separate TSK, Plaso, and Volatility outputs plus an
+adjacent status record containing their versions, invocations, exit status,
+output paths and hashes. A successful invocation with zero rows or events is
+recorded as `zero_results`; it is not interchangeable with a failed tool or
+plugin.
+
 Raw evidence is immutable. If a tool is rerun, the new output is a separate
 derived artifact with its own provenance; the acquired disk and memory evidence
 are not modified.

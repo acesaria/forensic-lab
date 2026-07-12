@@ -31,8 +31,10 @@ run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=Fal
 
 from datetime import datetime
 import functools
+import hashlib
 import json
 from pathlib import Path
+import subprocess
 from typing import Any
 
 from orchestrator.core.config import (
@@ -53,10 +55,7 @@ from orchestrator.forensics import Dumper
 from orchestrator.forensics import SleuthKitRunner, VolatilityRunner
 from orchestrator.forensics.plaso_runner import (
     default_linux_filter,
-    read_timeline,
-    run_log2timeline,
-    run_psort,
-    verify_plaso_inputs,
+    run_timeline,
 )
 from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
 from orchestrator.forensics.pipeline_config import load_pipeline_config
@@ -313,14 +312,16 @@ class ForensicOrchestrator:
         versions = self._pipeline_versions()
         status: dict[str, Any] = {}
 
+        vol_errors: dict[str, str] = {}
+        vol_invocations: dict[str, dict[str, Any]] = {}
         try:
-            vol_errors: dict[str, str] = {}
             vol_rows = extract_plugins(
                 self._vol_runner,
                 memory_path,
                 distro_id,
                 kernel_release=kernel_release,
                 errors=vol_errors,
+                invocations=vol_invocations,
             )
             vol_path = analysis_dir / "vol3.json"
             vol_path.write_text(
@@ -329,21 +330,35 @@ class ForensicOrchestrator:
             plugin_counts = {
                 plugin: len(rows) for plugin, rows in sorted(vol_rows.items())
             }
+            for invocation in vol_invocations.values():
+                invocation["output_path"] = str(vol_path)
             state = "completed"
             if vol_errors:
                 state = "failed" if len(vol_errors) == len(vol_rows) else "degraded"
+                result_state = (
+                    "partial_results"
+                    if any(plugin_counts.values())
+                    else "no_successful_results"
+                )
                 console.warn(
                     "vol3 extraction degraded: "
                     + "; ".join(f"{name}: {err}" for name, err in vol_errors.items())
                 )
             else:
+                result_state = (
+                    "results" if any(plugin_counts.values()) else "zero_results"
+                )
                 console.ok(f"vol3 output written: {vol_path}")
             status["volatility"] = {
                 "status": state,
                 "path": str(vol_path),
                 "tool": "volatility3",
                 "configured_version": versions.get("volatility3"),
+                "reported_version": _reported_version(["vol3", "--help"]),
                 "plugin_rows": plugin_counts,
+                "result": result_state,
+                "invocations": vol_invocations,
+                "output": _output_metadata(vol_path),
             }
             if vol_errors:
                 status["volatility"]["errors"] = vol_errors
@@ -353,20 +368,36 @@ class ForensicOrchestrator:
                 "volatility3",
                 versions.get("volatility3"),
                 exc,
+                paths={"path": str(analysis_dir / "vol3.json")},
+                invocations=vol_invocations,
             )
 
+        tsk_invocations: list[dict[str, Any]] = []
         try:
-            tsk = extract_bodyfile(self._sleuth_runner, disk_path)
+            tsk = extract_bodyfile(
+                self._sleuth_runner,
+                disk_path,
+                invocations=tsk_invocations,
+            )
             bodyfile = tsk.get("bodyfile") or ""
             bodyfile_path = analysis_dir / "bodyfile"
-            bodyfile_path.write_text(bodyfile + "\n", encoding="utf-8")
+            bodyfile_path.write_text(
+                bodyfile + ("\n" if bodyfile else ""), encoding="utf-8"
+            )
+            for invocation in tsk_invocations:
+                if Path(invocation["command"][0]).name == "fls":
+                    invocation["stdout_path"] = str(bodyfile_path)
             console.ok(f"tsk bodyfile written: {bodyfile_path}")
             status["tsk"] = {
                 "status": "completed",
                 "path": str(bodyfile_path),
                 "tool": "sleuthkit",
                 "configured_version": versions.get("sleuthkit"),
+                "reported_version": _reported_version(["fls", "-V"]),
                 "row_count": len(bodyfile.splitlines()),
+                "result": "zero_results" if not bodyfile else "results",
+                "invocations": tsk_invocations,
+                "output": _output_metadata(bodyfile_path),
             }
         except Exception as exc:
             console.warn(f"tsk extraction degraded: {exc}")
@@ -374,17 +405,34 @@ class ForensicOrchestrator:
                 "sleuthkit",
                 versions.get("sleuthkit"),
                 exc,
+                paths={"path": str(analysis_dir / "bodyfile")},
+                invocations=tsk_invocations,
             )
 
         try:
-            events = self._build_timeline(disk_path, analysis_dir)
+            timeline = self._build_timeline(disk_path, analysis_dir)
+            events = timeline["events"]
+            storage_path = analysis_dir / "timeline.plaso"
+            timeline_path = analysis_dir / "timeline.jsonl"
             status["plaso"] = {
                 "status": "completed",
-                "storage_path": str(analysis_dir / "timeline.plaso"),
-                "path": str(analysis_dir / "timeline.jsonl"),
+                "storage_path": str(storage_path),
+                "path": str(timeline_path),
                 "tool": "plaso",
                 "configured_version": versions.get("plaso"),
+                "reported_version": _reported_version(
+                    ["log2timeline", "--version"]
+                ),
                 "event_count": len(events),
+                "result": "zero_results" if not events else "results",
+                "invocations": {
+                    "log2timeline": timeline["log2timeline"],
+                    "psort": timeline["psort"],
+                },
+                "outputs": {
+                    "storage": _output_metadata(storage_path),
+                    "timeline": _output_metadata(timeline_path),
+                },
             }
         except Exception as exc:
             console.warn(f"plaso timeline degraded: {exc}")
@@ -392,31 +440,37 @@ class ForensicOrchestrator:
                 "plaso",
                 versions.get("plaso"),
                 exc,
+                paths={
+                    "storage_path": str(analysis_dir / "timeline.plaso"),
+                    "path": str(analysis_dir / "timeline.jsonl"),
+                },
+                invocations=getattr(exc, "invocations", None),
             )
 
         status["run_id"] = run_id
         status["manifest"] = str(manifest_path)
         return status
 
-    def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> list[dict]:
+    def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> dict:
         """
         Run the Plaso pipeline over the acquired disk and return the events.
         Mirrors _verify_plaso but keeps timeline.plaso/timeline.jsonl in the
-        caller's analysis dir (run analysis or baseline cache analysis).
+        caller's analysis dir and returns invocation provenance with the events.
         """
 
         storage_path = analysis_dir / "timeline.plaso"
         timeline_path = analysis_dir / "timeline.jsonl"
 
         file_filter = default_linux_filter()
-        verify_plaso_inputs(file_filter=file_filter)
-        run_log2timeline(
-            disk_path=disk_path, storage_path=storage_path, file_filter=file_filter
+        result = run_timeline(
+            disk_path=disk_path,
+            storage_path=storage_path,
+            output_path=timeline_path,
+            file_filter=file_filter,
         )
-        run_psort(storage_path=storage_path, output_path=timeline_path)
-        events = read_timeline(timeline_path)
+        events = result["events"]
         console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
-        return events
+        return result
 
     # --- teardown --------------------------------------------------------
 
@@ -568,12 +622,55 @@ def _failed_status(
     tool: str,
     configured_version: Any,
     exc: Exception,
+    *,
+    paths: dict[str, str] | None = None,
+    invocations: Any = None,
 ) -> dict[str, Any]:
-    return {
+    version_commands = {
+        "volatility3": ["vol3", "--help"],
+        "sleuthkit": ["fls", "-V"],
+        "plaso": ["log2timeline", "--version"],
+    }
+    status = {
         "status": "failed",
         "tool": tool,
         "configured_version": configured_version,
+        "reported_version": _reported_version(version_commands[tool]),
         "error": str(exc),
+    }
+    if paths:
+        status.update(paths)
+    if invocations:
+        status["invocations"] = invocations
+    return status
+
+
+def _reported_version(command: list[str]) -> str | None:
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    output = (result.stdout + result.stderr).strip()
+    return output.splitlines()[0] if output else None
+
+
+def _output_metadata(path: Path) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
+            digest.update(chunk)
+    return {
+        "path": str(path),
+        "size_bytes": path.stat().st_size,
+        "sha256": digest.hexdigest(),
     }
 
 
