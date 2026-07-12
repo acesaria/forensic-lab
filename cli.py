@@ -42,7 +42,10 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     # setup: prepare lab VM + build ISF + verify pipeline (idempotent)
     setup = sub.add_parser(
         "setup",
-        help="Create lab VM, provision baseline, build ISF, verify pipeline (idempotent)",
+        help=(
+            "Create lab VM, provision baseline, build ISF, and verify raw "
+            "extraction tools (idempotent)"
+        ),
     )
     setup.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
 
@@ -59,7 +62,7 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         "--scenario",
         required=True,
         choices=scenario_keys,
-        help="Attack scenario to run",
+        help="Controlled scenario key to run",
     )
     run.add_argument(
         "--acquire",
@@ -238,7 +241,7 @@ def main() -> None:
                 orchestrator.prepare_lab(distro_id)
                 console.section("volatility symbols")
                 orchestrator.build_isf(distro_id)
-                console.section("pipeline verification")
+                console.section("raw extraction verification")
                 orchestrator.verify_pipeline(distro_id)
                 console.ok(f"setup complete for '{distro_id}'")
 

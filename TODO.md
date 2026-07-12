@@ -3,9 +3,8 @@
 ## Status
 
 - This file is the active execution plan for the thesis migration phase.
-- The repository is in a temporary migration state: documentation now describes
-  the target manual multi-source investigation architecture, while the old
-  automatic detector/matcher pipeline remains in source for later removal.
+- The repository now carries the manual multi-source investigation architecture
+  in current source and documentation.
 - Historical plans are archived under
   `docs/archive/stale-planning-2026-07-08/`.
 - Do not use archived TODO/REFACTOR/AUDIT files as current instructions.
@@ -25,24 +24,16 @@ project instructions.
 
 ## Immediate Next Task
 
-Remove or quarantine the old automatic evaluation path after this documentation
-stage.
+Create the manual investigation report template for a named run.
 
-Keep the next implementation pass focused on deleting or clearly fencing legacy
-automatic reconstruction surfaces. Do not change scenario behavior, VM
-orchestration, evidence acquisition, raw extraction, distro profiles, tests, or
-dependencies unless the task explicitly asks.
+Keep the next implementation pass focused on analyst-written reporting over
+manifest, command log, hashes, raw TSK/Plaso/Volatility exports, tool failures,
+and negative findings. Do not change scenario behavior, VM orchestration,
+evidence acquisition, raw extraction, distro profiles, tests, or dependencies
+unless the task explicitly asks.
 
-Acceptance criteria:
-
-- Current docs no longer present detector claims, canonical matching, or
-  automatic metrics as thesis requirements.
-- Manual investigation artifacts are the documented output surface.
-- Legacy detector/matcher/canonical code is either removed or clearly fenced as
-  migration-only.
-- The immutable tag `automatic-reconstruction-v3-final` remains the reference
-  for previous automatic reconstruction work.
-- No new automatic scoring, rule profile, or ruleset-hash result is introduced.
+The immutable tag `automatic-reconstruction-v3-final` remains the reference for
+previous automatic reconstruction work.
 
 Guardrails:
 
@@ -57,12 +48,11 @@ Guardrails:
 
 ## Next Phases
 
-1. Legacy automatic pipeline removal/quarantine.
-2. Manual investigation report template for a named run.
-3. Ubuntu 22.04 deep-analysis Father no-cleanup and cleanup write-up.
-4. Father cleanup hardened+telemetry comparison with `auditd`.
-5. Targeted Ubuntu 24.04 and Fedora replication.
-6. Thesis figures, limitations tables, and writing freeze.
+1. Manual investigation report template for a named run.
+2. Ubuntu 22.04 deep-analysis Father no-cleanup and cleanup write-up.
+3. Father cleanup hardened+telemetry comparison with `auditd`.
+4. Targeted Ubuntu 24.04 and Fedora replication.
+5. Thesis figures, limitations tables, and writing freeze.
 
 ## Explicit Deferrals
 

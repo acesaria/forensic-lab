@@ -12,9 +12,9 @@ platform.
 ## Migration State
 
 The project has pivoted from automatic detection/evaluation to reproducible
-manual multi-source investigation. Documentation now reflects the target
-architecture. The old automatic detector, canonical matching, and metrics
-source pipeline has been removed from current runtime code.
+manual multi-source investigation. The old automatic detector, canonical
+matching, and metrics source pipeline has been removed from current runtime
+code and supporting configuration.
 
 Previous automatic reconstruction work is preserved by the immutable tag
 `automatic-reconstruction-v3-final`.
@@ -48,16 +48,14 @@ forensic-lab/
 ├── cli.py                         # command entry point
 ├── scenarios.yaml                 # registered scenario keys
 ├── scenarios/
-│   ├── scenarios/                 # declarative scenario.yml trees
-│   └── art/                       # optional ART calibration inputs
+│   └── scenarios/                 # declarative scenario.yml trees
 ├── infra/                         # libvirt/QEMU, Ansible, distro profiles
 ├── orchestrator/
 │   ├── core/                      # lifecycle, VM state, paths, provenance
 │   ├── scenarios/                 # declarative scenario engine
 │   └── forensics/                 # acquisition and raw tool runners
 ├── docs/                          # methodology and orientation
-├── shared/                        # generated experiment outputs
-└── vendor/                        # vendored third-party rule/test data
+└── shared/                        # generated experiment outputs
 ```
 
 Generated outputs under `shared/` are disposable artifacts or evidence for a
@@ -87,8 +85,9 @@ python cli.py destroy --distro ubuntu-22.04
 Full runs now stop after scenario execution, acquisition, and raw
 TSK/Plaso/Volatility extraction. Current thesis use is the scenario log, run
 manifest, acquired evidence, raw exports, hashes, tool failures, and manual
-investigation notes. Legacy detector/matcher artifacts may still exist only in
-old generated run directories or in the `automatic-reconstruction-v3-final` tag.
+investigation notes. The historical automatic reconstruction implementation is
+kept in the immutable `automatic-reconstruction-v3-final` tag, not in the
+current source tree.
 
 Scenario keys come from `scenarios.yaml`. The current registered thesis
 scenario key remains `userland_father_ldpreload`.
@@ -146,12 +145,6 @@ Host prerequisites include KVM/QEMU with libvirt, `cloud-localds`,
 `ewfacquire`, and an SSH key for the lab VM. Passwordless sudo inside the lab is
 a controlled laboratory precondition for deploying scenario steps that require
 root; it is not an emulation of initial compromise.
-
-## Optional ART Calibration
-
-Atomic Red Team data is kept as an optional calibration input, not as the core
-scenario model. The locked calibration subset lives under `scenarios/art/`, and
-the vendored technique YAMLs live under `vendor/atomic-red-team/atomics/`.
 
 The thesis scenarios are controlled by this framework and produce reproducible
 execution records, acquired evidence, raw forensic exports, and material for

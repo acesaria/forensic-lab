@@ -1,8 +1,7 @@
 # orchestrator/forensics/timeutil.py
 #
-# Time normalization helpers. All pipeline timestamps are ISO-8601 UTC with
-# millisecond precision (see docs/TIME_NORMALIZATION.md). Detection and matching
-# work in epoch-seconds floats internally; the string form is the contract.
+# Time normalization helpers. Current raw-export timestamps are ISO-8601 UTC
+# with millisecond resolution; the string form is the contract.
 
 from __future__ import annotations
 
@@ -12,7 +11,7 @@ _ISO_MS = "%Y-%m-%dT%H:%M:%S.%fZ"
 
 
 def iso_utc_ms(dt: datetime) -> str:
-    """Format a datetime as ISO-8601 UTC with millisecond precision (Z suffix)."""
+    """Format a datetime as ISO-8601 UTC with millisecond resolution (Z suffix)."""
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
     dt = dt.astimezone(timezone.utc)

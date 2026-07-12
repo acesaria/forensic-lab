@@ -1,4 +1,0 @@
-# Table 1: per-run summary
-Scenario,Cleanup,Distro,Found/Tot,DR%,QoR,Order,Active tools
-scenario_01_ldpreload,No,ubuntu-22.04,9/9,100.0,High,OK,"sleuthkit, vol3, plaso"
-scenario_01_ldpreload,Yes,ubuntu-22.04,7/9,77.8,Low,n/a,"vol3, plaso, sleuth"

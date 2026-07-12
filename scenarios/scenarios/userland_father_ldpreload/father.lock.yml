@@ -15,7 +15,8 @@ source_integrity:
   repository_patches_father_source: false
   run_local_configuration_only: true
   note: >
-    The canonical scenario extracts the pristine archive into the run workspace,
+    The controlled scenario extracts the pristine archive into the run workspace,
     edits that temporary copy's src/config.h with scenario parameters, builds
-    Father there, and records the configuration/build actions in canonical logs
-    and ground truth. No Father C/header/build file is patched in the repository.
+    Father there, and records the configuration/build actions in the scenario
+    command log and manifest. No Father C/header/build file is patched in the
+    repository.

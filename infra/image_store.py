@@ -96,7 +96,7 @@ def _download_atomic(url: str, dest: Path, expected: str, algo: str) -> None:
     # Stream into a sibling .part file and only rename on verified checksum.
     # tempfile.mkstemp + os.replace is the stdlib atomic-write pattern and
     # survives SIGINT, network drops, and disk-full mid-write without ever
-    # leaving a half-written file at the canonical path.
+    # leaving a half-written file at the final path.
     fd, tmp_name = tempfile.mkstemp(
         prefix=f".{dest.name}.", suffix=".part", dir=dest.parent
     )

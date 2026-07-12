@@ -53,7 +53,6 @@ shared/experiments/*
 shared/baselines/
 
 *.bak
-shared/experiments/ubuntu-22.04_scenario_01_ldpreload_20260615-200322/dumps/ground_truth.json
 !scenarios/scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar
 
 # Local audit scaffolding (not part of the codebase)

@@ -1,9 +1,7 @@
 # Repository Map
 
-Status: orientation document for the manual-investigation migration. It
-describes the target thesis path and labels legacy automatic-evaluation
-surfaces; it does not replace `PROJECT_CONTEXT.md`, `AGENTS.md`, or
-`METHODOLOGY.md`.
+Status: orientation document for the current manual-investigation repository.
+It does not replace `PROJECT_CONTEXT.md`, `AGENTS.md`, or `METHODOLOGY.md`.
 
 ## Thesis Direction
 
@@ -24,12 +22,11 @@ surfaces; it does not replace `PROJECT_CONTEXT.md`, `AGENTS.md`, or
 
 ## Migration State
 
-Documentation now reflects the target architecture. Current runtime source no
-longer contains the old automatic detector/matcher pipeline; it is preserved
-for comparison by the immutable tag `automatic-reconstruction-v3-final`.
+Current runtime source contains the manual investigation path only. The old
+automatic detector/matcher pipeline is preserved for comparison by the
+immutable tag `automatic-reconstruction-v3-final`.
 
-Do not reintroduce legacy automatic-evaluation areas while the repository is in
-this state.
+Do not reintroduce legacy automatic-evaluation areas into current source.
 
 ## Top-Level Layout
 
@@ -40,10 +37,9 @@ this state.
 | `orchestrator/core/` | Lifecycle, VM state, run paths, config. | active | Preserve acquisition and provenance contracts. |
 | `orchestrator/scenarios/` | Declarative scenario engine. | active | Keep scenarios deterministic and bounded. |
 | `orchestrator/forensics/` | Acquisition and raw TSK/Plaso/Volatility tool runners. | active | Current extraction surface. |
-| `scenarios/` | Declarative scenario definitions and optional ART calibration subset. | active/support | Do not edit scenario YAML in documentation work. |
-| `docs/` | Orientation, methodology, audits, and historical notes. | docs | Keep current docs aligned with the manual methodology. |
-| `shared/` | Generated experiments, baseline caches, ISF files, local artifacts. | generated/cache | Do not edit as source. |
-| `vendor/` | Vendored third-party Sigma/YARA/ART data. | support/vendor | Do not touch during migration docs or cleanup. |
+| `scenarios/` | Declarative scenario definitions. | active/support | Do not edit scenario YAML in documentation work. |
+| `docs/` | Orientation, methodology, and historical notes. | docs | Keep current docs aligned with the manual methodology. |
+| `shared/` | Generated experiments, ISF files, and local artifacts. | generated/cache | Do not edit as source. |
 | `.claude/`, `.github/` | Agent and assistant instruction surfaces. | support/docs | Keep lightweight; local settings may be stale. |
 | `.venv/`, `.pytest_cache/`, `.vscode/` | Local environment/cache/editor state. | local/cache | Ignore or clean only when explicitly allowed. |
 
@@ -67,9 +63,9 @@ The old flow was:
 
 `extraction/adapters -> normalized records -> detector claims -> canonical matching -> metrics/report`
 
-That flow is no longer the current thesis methodology. It is preserved by
-`automatic-reconstruction-v3-final` and may still appear in historical docs or
-old generated artifacts, not as current runtime source.
+That flow is no longer the current thesis methodology. It is preserved by the
+immutable `automatic-reconstruction-v3-final` tag and may appear in archived
+planning notes only, not as current runtime source.
 
 ## Notes For Future Agents
 
@@ -79,5 +75,3 @@ old generated artifacts, not as current runtime source.
   prompt files without checking current source.
 - Treat `shared/baselines/*` and `shared/experiments/*` as generated artifacts;
   they may be evidence for a named run, not project instructions.
-- Treat Sigma/YARA and detector-rule docs as historical unless a task explicitly
-  reopens that archival material.
