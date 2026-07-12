@@ -101,8 +101,6 @@ postconditions:
   - prefix-matching file remains disk-visible for post-mortem reconstruction
   - cleanup/evasion is a future variant only
 
-expected_observables_file: expected_observables.yml
-
 prerequisites:
   father_build:
     tools:

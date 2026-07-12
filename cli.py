@@ -21,9 +21,9 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forensic-lab",
         description=(
-            "Linux post-mortem forensic reconstruction lab. Primary thesis path: "
-            "declarative Father_LDPRELOAD -> canonical tool findings -> "
-            "DetectionClaim candidate evidence -> GT-aware matching/metrics."
+            "Linux post-mortem forensic lab. Primary thesis path: "
+            "declarative scenario execution -> run manifest/command log -> "
+            "acquisition -> raw forensic exports -> manual investigation."
         ),
     )
     parser.add_argument(
@@ -85,10 +85,7 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
 
     run_scenario = sub.add_parser(
         "run-scenario",
-        help=(
-            "Run a declarative scenario.yml and write canonical execution truth "
-            "and artifact expectations"
-        ),
+        help="Run a declarative scenario.yml and write a manifest plus command log",
     )
     run_scenario.add_argument("scenario_yml")
     run_scenario.add_argument("--out-dir", default=None)
@@ -233,10 +230,8 @@ def _cmd_run_scenario(args: argparse.Namespace) -> int:
         repo_root=Path(__file__).resolve().parent,
     )
     print(f"scenario run written: {ctx.out_dir}")
-    print("  command_log.jsonl")
-    print("  execution_truth.jsonl")
-    print("  artifact_expectations.jsonl")
-    print("  reference_context.json")
+    print(f"  manifest: {ctx.manifest_path}")
+    print(f"  command_log: {ctx.command_log_path}")
     return 0
 
 

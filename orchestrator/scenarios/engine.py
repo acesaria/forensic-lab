@@ -14,7 +14,16 @@ from orchestrator.scenarios.run_context import RunContext
 
 
 class ScenarioStepError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        metadata: dict[str, Any] | None = None,
+        prevented: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.metadata = metadata or {}
+        self.prevented = prevented
 
 
 def run_scenario(
@@ -24,6 +33,8 @@ def run_scenario(
     run_id: str | None = None,
     executor: ScenarioExecutor | None = None,
     repo_root: str | Path | None = None,
+    distro: str | None = None,
+    profile: str | None = None,
     internet_on: Callable[[], None] | None = None,
     internet_off: Callable[[], None] | None = None,
 ) -> RunContext:
@@ -37,16 +48,23 @@ def run_scenario(
         executor=executor or LocalExecutor(),
         parameters=plan.parameters,
         prerequisites=plan.prerequisites,
+        scenario_variant=plan.variant,
+        distro=distro,
+        profile=profile,
+        required_privilege=plan.required_privilege,
         repo_root=repo_root,
         internet_on=internet_on,
         internet_off=internet_off,
     )
     hooks = _load_hooks(plan)
-    ctx.write_reference_context()
-    for row in plan.expected_observables:
-        ctx.record_artifact(str(row.get("step_id") or "scenario"), row)
-    for step in plan.steps:
-        _run_step(ctx, plan, hooks, step)
+    try:
+        for step in plan.steps:
+            _run_step(ctx, plan, hooks, step)
+    except ScenarioStepError as exc:
+        ctx.finalize("prevented" if exc.prevented else "failed", error=str(exc))
+        raise
+    if ctx.final_status == "running":
+        ctx.finalize("completed")
     return ctx
 
 
@@ -61,9 +79,10 @@ def _run_step(
         raise ScenarioStepError("scenario step is missing id")
     step_type = str(step.get("type") or "shell")
     started = ctx.now()
+    metadata: dict[str, Any] = {}
     try:
         if step_type == "shell":
-            _step_shell(ctx, step)
+            metadata = _step_shell(ctx, step)
         elif step_type == "upload":
             _step_upload(ctx, plan, step)
         elif step_type == "python":
@@ -71,44 +90,75 @@ def _run_step(
         elif step_type == "sleep":
             time.sleep(float(step.get("seconds", 1)))
         elif step_type == "record":
-            pass
+            _step_record(ctx, step)
         else:
             raise ScenarioStepError(f"{step_id}: unsupported step type {step_type!r}")
-        _record_step_truth(ctx, step_id, step)
-        _record_step_artifacts(ctx, step_id, step)
+        ended = ctx.now()
+        ctx.record_step_status(
+            step_id=step_id,
+            step_type=step_type,
+            status="completed",
+            started_at=started,
+            ended_at=ended,
+            metadata=metadata,
+        )
         ctx.log_step(
             {
                 "step_id": step_id,
                 "type": step_type,
                 "status": "success",
                 "started_at": started,
-                "ended_at": ctx.now(),
+                "ended_at": ended,
+                **metadata,
             }
         )
     except Exception as exc:
+        ended = ctx.now()
+        exc_metadata = getattr(exc, "metadata", {})
+        status = "prevented" if getattr(exc, "prevented", False) else "failed"
+        ctx.record_step_status(
+            step_id=step_id,
+            step_type=step_type,
+            status=status,
+            started_at=started,
+            ended_at=ended,
+            error=str(exc),
+            metadata=exc_metadata,
+        )
         ctx.log_step(
             {
                 "step_id": step_id,
                 "type": step_type,
                 "status": "failure",
                 "started_at": started,
-                "ended_at": ctx.now(),
+                "ended_at": ended,
                 "error": str(exc),
+                **exc_metadata,
             }
         )
         if not step.get("continue_on_error", False):
+            if isinstance(exc, ScenarioStepError):
+                raise
             raise ScenarioStepError(f"{step_id} failed: {exc}") from exc
 
 
-def _step_shell(ctx: RunContext, step: dict[str, Any]) -> None:
+def _step_shell(ctx: RunContext, step: dict[str, Any]) -> dict[str, Any]:
     command = ctx.render(step.get("command") or "")
     if not command:
         raise ScenarioStepError("shell step missing command")
     result = ctx.executor.run(command, timeout=int(step.get("timeout", 120)))
+    metadata = {
+        "command": command,
+        "exit_code": result.exit_code,
+        "stdout_excerpt": _excerpt(result.stdout),
+        "stderr_excerpt": _excerpt(result.stderr),
+    }
     if result.exit_code != 0:
         raise ScenarioStepError(
-            f"command exited {result.exit_code}: {(result.stderr or result.stdout).strip()}"
+            f"command exited {result.exit_code}: {(result.stderr or result.stdout).strip()}",
+            metadata=metadata,
         )
+    return metadata
 
 
 def _step_upload(ctx: RunContext, plan: ScenarioPlan, step: dict[str, Any]) -> None:
@@ -136,20 +186,16 @@ def _step_python(
     func(ctx, step)
 
 
-def _record_step_truth(ctx: RunContext, step_id: str, step: dict[str, Any]) -> None:
-    truth = step.get("truth")
-    if not truth:
-        return
-    rows = truth if isinstance(truth, list) else [truth]
+def _step_record(ctx: RunContext, step: dict[str, Any]) -> None:
+    facts = step.get("facts") or []
+    rows = facts if isinstance(facts, list) else [facts]
     for row in rows:
-        ctx.record_truth(step_id, row)
+        ctx.record_fact(str(step.get("id") or "scenario"), row)
 
 
-def _record_step_artifacts(ctx: RunContext, step_id: str, step: dict[str, Any]) -> None:
-    artifacts = step.get("artifact_expectations") or []
-    rows = artifacts if isinstance(artifacts, list) else [artifacts]
-    for row in rows:
-        ctx.record_artifact(step_id, row)
+def _excerpt(text: str, limit: int = 1200) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _load_hooks(plan: ScenarioPlan) -> dict[str, Callable[[RunContext, dict[str, Any]], Any]]:

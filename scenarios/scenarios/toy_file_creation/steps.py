@@ -6,7 +6,7 @@ def verify_toy_file(ctx, step):
     path = Path(ctx.work_dir) / toy_name
     if not path.is_file():
         raise RuntimeError(f"toy file not found: {path}")
-    ctx.record_truth(
+    ctx.record_fact(
         str(step.get("id", "verify_toy_file")),
         {
             "event_type": "file_observed",

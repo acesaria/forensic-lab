@@ -1,4 +1,4 @@
-"""Load scenario.yml plus optional expected_observables.yml."""
+"""Load declarative scenario.yml files."""
 
 from __future__ import annotations
 
@@ -15,10 +15,11 @@ class ScenarioPlan:
     path: Path
     steps: list[dict[str, Any]]
     description: str = ""
+    variant: str | None = None
+    required_privilege: str = "scenario-defined"
     parameters: dict[str, Any] = field(default_factory=dict)
     prerequisites: dict[str, Any] = field(default_factory=dict)
     attck: list[str] = field(default_factory=list)
-    expected_observables: list[dict[str, Any]] = field(default_factory=list)
     hooks_path: Path | None = None
 
     @property
@@ -40,13 +41,6 @@ def load_scenario_plan(path: str | Path) -> ScenarioPlan:
     if not isinstance(steps, list):
         raise ValueError(f"{p}: steps must be a list")
 
-    expected = list(data.get("expected_observables") or [])
-    expected_file = data.get("expected_observables_file", "expected_observables.yml")
-    expected_path = p.parent / expected_file
-    if expected_path.is_file():
-        expected_data = yaml.safe_load(expected_path.read_text(encoding="utf-8")) or {}
-        expected.extend(expected_data.get("artifact_expectations") or expected_data.get("expected_observables") or [])
-
     hooks = data.get("hooks", "steps.py")
     hooks_path = p.parent / hooks if hooks else None
     if hooks_path is not None and not hooks_path.is_file():
@@ -56,11 +50,12 @@ def load_scenario_plan(path: str | Path) -> ScenarioPlan:
         scenario_id=str(scenario_id),
         path=p,
         description=str(data.get("description") or ""),
+        variant=str(data.get("variant")) if data.get("variant") is not None else None,
+        required_privilege=str(data.get("required_privilege") or "scenario-defined"),
         parameters=_load_parameters(data),
         prerequisites=dict(data.get("prerequisites") or {}),
         attck=[str(x) for x in data.get("attck") or []],
         steps=steps,
-        expected_observables=expected,
         hooks_path=hooks_path,
     )
 

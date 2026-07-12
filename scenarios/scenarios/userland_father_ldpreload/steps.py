@@ -28,7 +28,7 @@ def prepare_father_source(ctx, step):
     _put(ctx, step, FATHER_LOCK, lock_path)
     _put(ctx, step, ACCEPT_LISTENER, listener_path)
 
-    ctx.record_truth(
+    ctx.record_fact(
         _step_id(step),
         {
             "event_type": "father_source_referenced",
@@ -100,7 +100,7 @@ def configure_father(ctx, step):
     result = _run_checked(ctx, step, measurement_cmd, actor="lab", record_type="measurement")
     hashes = _parse_sha256_lines(result.stdout)
 
-    ctx.record_truth(
+    ctx.record_fact(
         _step_id(step),
         {
             "event_type": "father_run_copy_configured",
@@ -149,7 +149,7 @@ def build_father_rootkit(ctx, step):
     hashes = _parse_sha256_lines(result.stdout)
     size, owner, group, mode = _split_stat(_last_stat_line(result.stdout))
 
-    ctx.record_truth(
+    ctx.record_fact(
         _step_id(step),
         {
             "event_type": "father_rootkit_built",
@@ -192,7 +192,7 @@ def install_preload_rootkit(ctx, step):
     result = _run_checked(ctx, step, measurement_cmd, actor="lab", record_type="measurement")
     content_sha = result.stdout.split()[0] if result.stdout.split() else ""
 
-    ctx.record_truth(
+    ctx.record_fact(
         _step_id(step),
         {
             "event_type": "father_preload_installed",
@@ -332,7 +332,7 @@ s.close()
     summary = _read_remote(ctx, step, summary_path)
     session_log = _read_remote(ctx, step, session_log_path)
 
-    ctx.record_truth(
+    ctx.record_fact(
         _step_id(step),
         {
             "event_type": "father_accept_hook_exercised",
@@ -375,7 +375,7 @@ s.close()
             },
         },
     )
-    ctx.record_truth(
+    ctx.record_fact(
         "accept_hook_shell_session",
         {
             "event_type": "father_accept_hook_shell_session_observed",
@@ -407,7 +407,7 @@ s.close()
         record_type="measurement",
     )
     observed = bool(maps.stdout.strip())
-    ctx.record_truth(
+    ctx.record_fact(
         "library_observed_in_process",
         {
             "event_type": "father_library_observed_in_process",
@@ -455,7 +455,7 @@ def observe_file_hiding_effect(ctx, step):
     hidden = _read_remote(ctx, step, hidden_listing)
     hide_observed = hidden_name in visible.splitlines() and hidden_name not in hidden.splitlines()
 
-    ctx.record_truth(
+    ctx.record_fact(
         _step_id(step),
         {
             "event_type": "father_file_hiding_observed",
@@ -522,7 +522,7 @@ def record_postconditions(ctx, step):
     _run_checked(ctx, step, measurement_cmd, actor="lab", record_type="measurement")
     result = _read_remote(ctx, step, postconditions)
 
-    ctx.record_truth(
+    ctx.record_fact(
         _step_id(step),
         {
             "event_type": "postconditions_recorded",

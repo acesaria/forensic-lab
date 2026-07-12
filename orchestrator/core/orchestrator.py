@@ -171,7 +171,7 @@ class ForensicOrchestrator:
     def lab_exists(self, distro_id: str) -> bool:
         return self.vm_manager.vm_exists(f"{LAB_VM_PREFIX}-{distro_id}")
 
-    # --- declarative (canonical) experiment loop -------------------------
+    # --- declarative experiment loop -------------------------------------
 
     def run_declarative_experiment(
         self,
@@ -181,14 +181,14 @@ class ForensicOrchestrator:
         acquire: bool = True,
     ) -> str | None:
         """
-        VM-backed run of a declarative scenario.yml through the canonical engine.
+        VM-backed run of a declarative scenario.yml.
 
         Reverts to baseline, runs the scenario's steps inside the guest over SSH
-        (writing execution_truth/artifact_expectations/reference_context/
-        command_log into dumps/), then -- unless acquire is False -- acquires
-        RAM+disk and runs the GT-blind detect -> GT-aware match -> metrics
-        pipeline (tool_findings -> detection_claims -> matches/metrics/report
-        under analysis/). The VM ends OFF when acquire is True, ON otherwise.
+        (writing manifest.json and command_log.jsonl into dumps/), then --
+        unless acquire is False -- acquires RAM+disk and writes raw forensic
+        exports under analysis/. Legacy automatic evaluation remains best
+        effort while the migration is in progress. The VM ends OFF when acquire
+        is True, ON otherwise.
 
         Declarative scenarios always run their full step list; the scenario.yml
         owns its own step sequence.
@@ -228,27 +228,20 @@ class ForensicOrchestrator:
                     out_dir=run_dir,
                     run_id=run_id,
                     repo_root=self.repo_root,
+                    distro=distro_id,
                     internet_on=functools.partial(self.vm_manager.internet_on, vm_name),
                     internet_off=functools.partial(self.vm_manager.internet_off, vm_name),
                 )
                 if guest is None:
                     guest = self._guest_facts(ssh)
+                ctx.update_environment(
+                    guest=guest,
+                    distro=distro_id,
+                    execution_user=(guest or {}).get("user"),
+                )
         finally:
             self.vm_manager.internet_off(vm_name, quiet=True)
             console.section_end()
-
-        # The engine wrote a null-filled reference_context before the steps ran;
-        # rewrite it now that the guest facts are known.
-        ref_ctx = dict(
-            guest=guest,
-            baseline=self._baseline_context(distro_id, baseline_cache),
-            tool_versions=self._pipeline_versions(),
-            volatility=self._volatility_context(
-                distro_id, (guest or {}).get("kernel")
-            ),
-        )
-        if ctx is not None:
-            ctx.write_reference_context(**ref_ctx)
 
         if not acquire:
             console.ok(f"declarative run complete (no acquisition): {run_dir}")
@@ -256,14 +249,13 @@ class ForensicOrchestrator:
 
         manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
         if ctx is not None:
-            ctx.write_reference_context(
-                acquisition=self._acquisition_context(manifest_path), **ref_ctx
-            )
+            ctx.record_acquisition_outputs(manifest_path)
         self._evaluate_declarative_run(
             run_id,
             distro_id,
             manifest_path,
             baseline_cache=baseline_cache,
+            ctx=ctx,
         )
         return manifest_path
 
@@ -334,30 +326,13 @@ class ForensicOrchestrator:
         }
 
     def _guest_kernel(self, run_id: str) -> str | None:
-        ref = self.dumper.run_dir(run_id) / "reference_context.json"
-        if not ref.is_file():
+        manifest_path = self.dumper.run_dir(run_id) / "manifest.json"
+        if not manifest_path.is_file():
             return None
         try:
-            return json.loads(ref.read_text(encoding="utf-8")).get("guest", {}).get("kernel")
+            return json.loads(manifest_path.read_text(encoding="utf-8")).get("guest", {}).get("kernel")
         except Exception:
             return None
-
-    @staticmethod
-    def _acquisition_context(manifest_path: str | Path) -> dict[str, Any]:
-        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-
-        def image(obj: Any) -> dict[str, Any] | None:
-            if not isinstance(obj, dict):
-                return None
-            return {k: obj.get(k) for k in ("path", "tool", "sha256", "size_bytes")}
-
-        return {
-            "method": manifest.get("disk_acquisition_mode"),
-            "disk_preparation": manifest.get("disk_preparation"),
-            "created_at": manifest.get("created_at"),
-            "memory_image": image(manifest.get("memory_image")),
-            "disk_image": image(manifest.get("disk_image")),
-        }
 
     def _evaluate_declarative_run(
         self,
@@ -366,27 +341,37 @@ class ForensicOrchestrator:
         manifest_path: str,
         *,
         baseline_cache: BaselineCacheEntry | None = None,
+        ctx=None,
     ) -> None:
         """
-        Canonical detect -> match -> metrics over the acquired images. Best-effort:
-        the acquisition is already on disk, so a failure here is logged and
-        swallowed. Writes tool_findings.jsonl, detection_claims.jsonl,
-        outcomes.jsonl, metrics.json and report.md under analysis/.
+        Raw extraction, followed by legacy detect -> match -> metrics only when
+        migration-era expectations are present. Best-effort: the acquisition is
+        already on disk, so failures are logged and swallowed.
         """
         run_dir = self.dumper.run_dir(run_id)
         analysis_dir = self._paths.run_analysis_dir(run_id)
         analysis_dir.mkdir(parents=True, exist_ok=True)
-        expectations_path = run_dir / "artifact_expectations.jsonl"
-        if not expectations_path.is_file():
-            console.warn("no artifact_expectations.jsonl; skipping canonical evaluation")
-            return
 
-        console.step_header("detect -> match -> metrics")
+        console.step_header("raw extraction")
         try:
             findings = self._collect_tool_findings(
                 run_id, distro_id, manifest_path, analysis_dir
             )
             tf_path = write_tool_findings(analysis_dir / "tool_findings.jsonl", findings)
+            if ctx is not None:
+                ctx.record_raw_analysis_outputs(analysis_dir)
+        except Exception as exc:
+            console.warn(f"raw extraction failed (acquisition is intact): {exc}")
+            console.section_end()
+            return
+
+        expectations_path = run_dir / "artifact_expectations.jsonl"
+        if not expectations_path.is_file():
+            console.warn("no artifact_expectations.jsonl; skipping legacy canonical evaluation")
+            console.section_end()
+            return
+
+        try:
             # Detectors consume the baseline-filtered stream; the matcher keeps
             # the unfiltered one so observed/funnel semantics (§10.7) hold.
             detect_path, baseline_filter = tf_path, None

@@ -2,19 +2,13 @@
 
 from __future__ import annotations
 
+import getpass
 import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from orchestrator.canonical import (
-    ArtifactExpectation,
-    EvidenceSource,
-    GroundTruthEvent,
-    append_jsonl,
-    write_jsonl,
-)
 from orchestrator.scenarios.executors import ScenarioExecutor
 
 
@@ -28,6 +22,10 @@ class RunContext:
         executor: ScenarioExecutor,
         parameters: dict[str, Any] | None = None,
         prerequisites: dict[str, Any] | None = None,
+        scenario_variant: str | None = None,
+        distro: str | None = None,
+        profile: str | None = None,
+        required_privilege: str | None = None,
         repo_root: str | Path | None = None,
         internet_on: Callable[[], None] | None = None,
         internet_off: Callable[[], None] | None = None,
@@ -39,16 +37,31 @@ class RunContext:
         self.executor = executor
         self.parameters = parameters or {}
         self.prerequisites = prerequisites or {}
+        self.scenario_variant = scenario_variant
+        self.distro = distro
+        self.profile = profile
+        self.required_privilege = required_privilege or "scenario-defined"
         self.repo_root = Path(repo_root) if repo_root is not None else None
         self.internet_on = internet_on
         self.internet_off = internet_off
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
+        self.manifest_path = self.out_dir / "manifest.json"
         self.command_log_path = self.out_dir / "command_log.jsonl"
-        self.execution_truth_path = self.out_dir / "execution_truth.jsonl"
-        self.artifact_expectations_path = self.out_dir / "artifact_expectations.jsonl"
-        self.reference_context_path = self.out_dir / "reference_context.json"
-        self._artifact_counter = 0
+        self.started_at = self.now()
+        self.ended_at: str | None = None
+        self.final_status = "running"
+        self.execution_user = getpass.getuser()
+        self.guest: dict[str, Any] = {}
+        self.steps: list[dict[str, Any]] = []
+        self.facts: list[dict[str, Any]] = []
+        self.outputs: dict[str, Any] = {
+            "command_log": str(self.command_log_path),
+            "acquisition": {},
+            "raw_analysis": {},
+        }
+        self._acquisition_manifest: dict[str, Any] = {}
+        self._write_manifest()
 
     def now(self) -> str:
         return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
@@ -74,104 +87,163 @@ class RunContext:
         with self.command_log_path.open("a", encoding="utf-8") as fh:
             fh.write(json.dumps(row, sort_keys=True) + "\n")
 
-    def record_truth(self, step_id: str, data: dict[str, Any]) -> GroundTruthEvent:
+    def record_fact(self, step_id: str, data: dict[str, Any]) -> dict[str, Any]:
         rendered = self.render(data)
-        record = GroundTruthEvent(
-            run_id=self.run_id,
-            scenario_id=self.scenario_id,
-            step_id=step_id,
-            event_type=rendered["event_type"],
-            object_type=rendered["object_type"],
-            object_identity=str(rendered["object_identity"]),
-            action=rendered["action"],
-            actor=rendered.get("actor", "attacker"),
-            time=rendered.get("time") or self.now(),
-            evidence_basis=[EvidenceSource(x) for x in rendered.get("evidence_basis", ["unknown"])],
-            attck=[str(x) for x in rendered.get("attck", [])],
-            details=dict(rendered.get("details") or {}),
-        )
-        append_jsonl(self.execution_truth_path, record)
-        return record
+        fact = {
+            "step_id": str(step_id),
+            "time": rendered.get("time") or self.now(),
+            "fact_type": str(rendered.get("fact_type") or rendered.get("event_type") or "fact"),
+        }
+        for key in ("actor", "action"):
+            if rendered.get(key) is not None:
+                fact[key] = rendered[key]
+        if rendered.get("object_type") or rendered.get("object_identity"):
+            fact["subject"] = {
+                "type": rendered.get("object_type"),
+                "identity": str(rendered.get("object_identity")),
+            }
+        if rendered.get("evidence_basis"):
+            fact["evidence_basis"] = [str(item) for item in rendered.get("evidence_basis") or []]
+        if rendered.get("attck"):
+            fact["attck"] = [str(item) for item in rendered.get("attck") or []]
+        if rendered.get("details"):
+            fact["details"] = dict(rendered.get("details") or {})
+        self.facts.append(fact)
+        self._write_manifest()
+        return fact
 
-    def record_artifact(self, step_id: str, data: dict[str, Any]) -> ArtifactExpectation:
-        record = self._artifact_record(step_id, data)
-        append_jsonl(self.artifact_expectations_path, record)
-        return record
-
-    def write_artifact_expectations(self, rows: list[dict[str, Any]]) -> None:
-        records = [
-            self._artifact_record(str(row.get("step_id") or "scenario"), row)
-            for row in rows
-        ]
-        write_jsonl(self.artifact_expectations_path, records)
-
-    def _artifact_record(self, step_id: str, data: dict[str, Any]) -> ArtifactExpectation:
-        self._artifact_counter += 1
-        rendered = self.render(data)
-        return ArtifactExpectation(
-            ae_id=rendered.get("ae_id") or f"{step_id}:AE{self._artifact_counter}",
-            scenario_id=self.scenario_id,
-            step_id=rendered.get("step_id") or step_id,
-            artifact_class=rendered["artifact_class"],
-            source_eligibility=[
-                EvidenceSource(x) for x in rendered.get("source_eligibility", ["unknown"])
-            ],
-            instance_constraints=dict(rendered.get("instance_constraints") or {}),
-            # Fail safe (METHODOLOGY 10.2): only an authored literal true scores.
-            required_for_scoring=rendered.get("required_for_scoring") is True,
-            attck=[str(x) for x in rendered.get("attck", [])],
-            notes=str(rendered.get("notes") or ""),
-        )
-
-    def write_reference_context(
+    def record_step_status(
         self,
         *,
-        acquisition_method: str = "none",
-        guest: dict[str, Any] | None = None,
-        acquisition: dict[str, Any] | None = None,
-        baseline: dict[str, Any] | None = None,
-        tool_versions: dict[str, Any] | None = None,
-        volatility: dict[str, Any] | None = None,
+        step_id: str,
+        step_type: str,
+        status: str,
+        started_at: str,
+        ended_at: str,
+        error: str | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
-        guest_block = {
-            "distro": None,
-            "kernel": None,
-            "timezone": "UTC",
-            "hostname": None,
-            "user": None,
+        row = {
+            "step_id": step_id,
+            "type": step_type,
+            "status": status,
+            "started_at": started_at,
+            "ended_at": ended_at,
         }
-        guest_block.update(guest or {})
-        acquisition_block = {
-            "method": acquisition_method,
-            "disk_preparation": None,
-            "created_at": None,
-            "memory_image": None,
-            "disk_image": None,
+        if error:
+            row["error"] = error
+        for key, value in (metadata or {}).items():
+            if value is not None:
+                row[key] = value
+        self.steps.append(row)
+        self._write_manifest()
+
+    def finalize(self, status: str, *, error: str | None = None) -> None:
+        self.final_status = status
+        self.ended_at = self.now()
+        if error:
+            self.outputs["error"] = error
+        self._write_manifest()
+
+    def mark_prevented(self, reason: str, *, step_id: str | None = None) -> None:
+        self.final_status = "prevented"
+        self.record_fact(
+            step_id or "scenario",
+            {
+                "fact_type": "scenario_prevented",
+                "action": "prevent",
+                "actor": "platform",
+                "details": {"reason": reason},
+            },
+        )
+
+    def update_environment(
+        self,
+        *,
+        guest: dict[str, Any] | None = None,
+        distro: str | None = None,
+        profile: str | None = None,
+        execution_user: str | None = None,
+    ) -> None:
+        if guest:
+            self.guest.update(guest)
+        if distro is not None:
+            self.distro = distro
+        if profile is not None:
+            self.profile = profile
+        if execution_user:
+            self.execution_user = execution_user
+        self._write_manifest()
+
+    def record_acquisition_outputs(self, acquisition_manifest_path: str | Path) -> None:
+        path = Path(acquisition_manifest_path)
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        self._acquisition_manifest = manifest
+        self.outputs["acquisition"] = {
+            "manifest": str(path),
+            "memory_image": _image_path(manifest.get("memory_image")),
+            "disk_image": _image_path(manifest.get("disk_image")),
         }
-        acquisition_block.update(acquisition or {})
-        baseline_block = {
-            "identity": None,
-            "vm_name": None,
-            "snapshot": None,
-            "clean_tool_findings": None,
-            "status": "not_recorded",
+        self._write_manifest()
+
+    def record_raw_analysis_outputs(self, analysis_dir: str | Path) -> None:
+        analysis = Path(analysis_dir)
+        outputs = {
+            "volatility_json": analysis / "vol3.json",
+            "tsk_bodyfile": analysis / "bodyfile",
+            "plaso_storage": analysis / "timeline.plaso",
+            "plaso_jsonl": analysis / "timeline.jsonl",
         }
-        baseline_block.update(baseline or {})
+        self.outputs["raw_analysis"] = {
+            name: str(path) for name, path in outputs.items() if path.exists()
+        }
+        self._write_manifest()
+
+    def _write_manifest(self) -> None:
         data = {
-            "schema": "forensic-lab.reference_context.v1",
+            "schema": "forensic-lab.run_manifest",
+            "version": 1,
             "run_id": self.run_id,
-            "scenario_id": self.scenario_id,
-            "guest": guest_block,
-            "acquisition": acquisition_block,
-            "baseline": baseline_block,
-            "tool_versions": tool_versions or {},
-            "volatility": volatility or {"symbols": None, "profile": None},
-            "git_commit": _git_commit(self.repo_root),
+            "scenario": {
+                "id": self.scenario_id,
+                "variant": self.scenario_variant,
+            },
+            "platform": {
+                "distro": self.distro,
+                "profile": self.profile,
+            },
+            "repository": {
+                "commit": _git_commit(self.repo_root),
+            },
+            "timestamps": {
+                "started_at": self.started_at,
+                "ended_at": self.ended_at,
+            },
+            "execution": {
+                "user": self.execution_user,
+                "required_privilege": self.required_privilege,
+            },
+            "parameters": self._important_parameters(),
+            "steps": self.steps,
+            "facts": self.facts,
+            "status": self.final_status,
+            "outputs": self.outputs,
         }
-        self.reference_context_path.write_text(
+        if self.guest:
+            data["guest"] = self.guest
+        if self._acquisition_manifest:
+            data.update(_acquisition_compat_fields(self._acquisition_manifest))
+        self.manifest_path.write_text(
             json.dumps(data, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+
+    def _important_parameters(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in sorted(self.parameters.items())
+            if isinstance(value, (str, int, float, bool)) or value is None
+        }
 
 
 class _SafeFormat(dict):
@@ -193,3 +265,22 @@ def _git_commit(repo_root: Path | None) -> str | None:
     except (OSError, subprocess.SubprocessError):
         return None
     return res.stdout.strip() if res.returncode == 0 else None
+
+
+def _image_path(obj: Any) -> str | None:
+    if not isinstance(obj, dict):
+        return None
+    value = obj.get("path")
+    return str(value) if value else None
+
+
+def _acquisition_compat_fields(manifest: dict[str, Any]) -> dict[str, Any]:
+    fields = {
+        "created_at": manifest.get("created_at"),
+        "disk_acquisition_mode": manifest.get("disk_acquisition_mode"),
+        "disk_preparation": manifest.get("disk_preparation"),
+    }
+    for key in ("memory_image", "disk_image"):
+        if isinstance(manifest.get(key), dict):
+            fields[key] = manifest[key]
+    return {key: value for key, value in fields.items() if value is not None}
