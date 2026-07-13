@@ -50,10 +50,10 @@ Do not reintroduce legacy automatic-evaluation areas into current source.
 | Step | Responsibility | Key files/modules |
 |---|---|---|
 | Scenario registry | Selects registered declarative scenarios. | `scenarios.yaml`, `cli.py` |
-| Scenario execution | Runs `scenario.yml`, writes command log and minimal run manifest. | `orchestrator/scenarios/engine.py`, `loader.py`, `run_context.py`, `scenarios/scenarios/userland_father_ldpreload/scenario.yml`, `steps.py` |
-| Acquisition | Preserves VM power-state contract: memory while VM is ON, disk after VM shutdown. | `orchestrator/core/orchestrator.py`, `orchestrator/forensics/dumper.py`, `orchestrator/core/vm_manager.py` |
+| Scenario execution | Runs `scenario.yml`, writes the run-root command log and minimal manifest index. | `orchestrator/scenarios/engine.py`, `loader.py`, `run_context.py`, `scenarios/scenarios/userland_father_ldpreload/scenario.yml`, `steps.py` |
+| Acquisition | Preserves VM power-state contract and writes `dumps/acquisition.json`: memory while VM is ON, disk after VM shutdown. | `orchestrator/core/orchestrator.py`, `orchestrator/forensics/dumper.py`, `orchestrator/core/vm_manager.py` |
 | Raw extraction | Runs Sleuth Kit, Volatility3, and Plaso over acquired evidence. | `orchestrator/forensics/extract.py`, `sleuth_runner.py`, `vol_runner.py`, `plaso_runner.py` |
-| Provenance | Keeps manifests, command logs, hashes, tool commands, and failures. | `orchestrator/core/`, run output directories |
+| Provenance | Keeps a minimal root index plus separate acquisition and raw-extraction status records. | `orchestrator/core/`, run output directories |
 | Manual investigation | Analyst-authored correlation across raw filesystem, timeline, and memory outputs. | thesis notes/reports, raw exports under named runs |
 | Profile comparison | Compares vanilla, hardened, and Father-only hardened+telemetry results without automatic scoring. | run artifacts and analyst notes |
 

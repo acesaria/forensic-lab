@@ -92,6 +92,20 @@ current source tree.
 Scenario keys come from `scenarios.yaml`. The current registered thesis
 scenario key remains `userland_father_ldpreload`.
 
+Each generated experiment uses this provenance layout:
+
+```text
+experiments/<run_id>/
+├── manifest.json
+├── command_log.jsonl
+├── dumps/acquisition.json
+└── analysis/raw_extraction_status.json
+```
+
+The root manifest is only an index. Acquisition hashes and commands remain in
+`acquisition.json`; raw-tool versions, invocations, output hashes, zero results,
+and failures remain in `raw_extraction_status.json`.
+
 ## Evidence Contract
 
 - Minimal run manifest and append-only command log are required.
@@ -133,6 +147,10 @@ Remaining evidence and denial traces are still acquired and analysed.
 
 Copy `config.yaml.example` to `config.yaml` and adjust paths for your machine.
 `config.yaml` is local and gitignored.
+
+The raw extraction binaries are also host-local settings: `vol_bin`,
+`mmls_bin`, `fls_bin`, `fsstat_bin`, `log2timeline_bin`, and `psort_bin`. Each
+accepts either a command on `PATH` or an absolute path.
 
 Python setup:
 

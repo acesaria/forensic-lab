@@ -52,8 +52,8 @@ interpretation remain manual. Automatic scoring is not a current deliverable.
 
 - Controlled scenario: scripted, deterministic lab compromise using a classic,
   documented Linux technique.
-- Run manifest: minimal run metadata needed to identify the scenario, platform,
-  profile, tools, evidence paths, and hashes.
+- Run manifest: minimal run-root index identifying the scenario, platform,
+  profile, timestamps, status, source revision, and provenance sidecars.
 - Command log: append-only record of scenario and orchestration commands.
 - Acquired evidence: immutable disk and memory images, with hashes and
   provenance.
@@ -86,6 +86,11 @@ ART/module execution path under `orchestrator/scenario_execution/`, the
 and the automatic finding-baseline cache have been removed.
 
 Generated outputs under shared/ are disposable artifacts, not source.
+
+Each experiment keeps `manifest.json` and `command_log.jsonl` at its run root,
+acquisition provenance in `dumps/acquisition.json`, and raw-tool provenance in
+`analysis/raw_extraction_status.json`. Detailed hashes, commands, versions, and
+failures live in the sidecars rather than being duplicated into the run manifest.
 
 ## Invariants
 

@@ -8,9 +8,11 @@ from orchestrator.scenarios import run_scenario
 from orchestrator.scenarios.engine import ScenarioStepError
 from orchestrator.scenarios.executors import SSHClientExecutor
 from orchestrator.forensics.dumper import Dumper
+from orchestrator.forensics.extract import extract_plugins
+from orchestrator.forensics.pipeline_config import reported_version
 
 
-def test_scenario_manifest_records_completed_and_failed_steps(tmp_path: Path):
+def test_scenario_manifest_is_minimal_and_command_log_keeps_step_results(tmp_path: Path):
     scenario = Path("scenarios/scenarios/toy_file_creation/scenario.yml")
 
     ctx = run_scenario(
@@ -34,27 +36,30 @@ def test_scenario_manifest_records_completed_and_failed_steps(tmp_path: Path):
     assert [row["status"] for row in command_rows] == ["success", "success"]
     assert (ctx.work_dir / "toy.txt").read_text(encoding="utf-8")
     assert manifest["schema"] == "forensic-lab.run_manifest"
+    assert manifest["version"] == 2
     assert manifest["run_id"] == "toy-run"
-    assert manifest["scenario"]["id"] == "toy_file_creation"
+    assert manifest["scenario_id"] == "toy_file_creation"
     assert manifest["status"] == "completed"
-    assert [step["status"] for step in manifest["steps"]] == ["completed", "completed"]
-    assert [fact["fact_type"] for fact in manifest["facts"]] == ["file_observed"]
+    assert manifest["platform"]["profile"] == "vanilla"
+    assert manifest["artifacts"] == {"command_log": "command_log.jsonl"}
+    assert not {"parameters", "steps", "facts", "outputs"} & manifest.keys()
 
     analysis_dir = tmp_path / "analysis"
     analysis_dir.mkdir()
-    (analysis_dir / "bodyfile").write_text("0|/toy|0|0|0|0|0|0|0|0|0\n", encoding="utf-8")
     status_path = analysis_dir / "raw_extraction_status.json"
     status_path.write_text("{}", encoding="utf-8")
-    ctx.record_raw_analysis_outputs(
-        analysis_dir,
-        status={"tsk": {"status": "completed", "row_count": 1}},
-        status_path=status_path,
-    )
+    dumps_dir = tmp_path / "dumps"
+    dumps_dir.mkdir()
+    acquisition_path = dumps_dir / "acquisition.json"
+    acquisition_path.write_text("{}", encoding="utf-8")
+    ctx.record_acquisition_output(acquisition_path)
+    ctx.record_raw_analysis_output(status_path)
     manifest = json.loads(ctx.manifest_path.read_text(encoding="utf-8"))
-    raw_analysis = manifest["outputs"]["raw_analysis"]
-    assert raw_analysis["files"]["tsk_bodyfile"] == str(analysis_dir / "bodyfile")
-    assert raw_analysis["status"]["tsk"]["status"] == "completed"
-    assert raw_analysis["status_manifest"] == str(status_path)
+    assert manifest["artifacts"] == {
+        "acquisition_manifest": "dumps/acquisition.json",
+        "command_log": "command_log.jsonl",
+        "raw_extraction_status": "analysis/raw_extraction_status.json",
+    }
 
     failing = tmp_path / "failing.yml"
     failing.write_text(
@@ -86,9 +91,7 @@ def test_scenario_manifest_records_completed_and_failed_steps(tmp_path: Path):
         for line in (failed_out / "command_log.jsonl").read_text(encoding="utf-8").splitlines()
     ]
     assert failed_manifest["status"] == "failed"
-    assert failed_manifest["steps"][0]["status"] == "failed"
-    assert failed_manifest["steps"][0]["exit_code"] == 7
-    assert "broken stderr" in failed_manifest["steps"][0]["stderr_excerpt"]
+    assert "steps" not in failed_manifest
     assert failed_log[0]["exit_code"] == 7
     assert "broken stderr" in failed_log[0]["stderr_excerpt"]
 
@@ -132,6 +135,88 @@ def test_ewfverify_failure_is_preserved_and_fails_acquisition_status(
     assert status["stdout"] == "verification stdout\n"
     assert status["stderr"] == "verification stderr\n"
     assert status["segments"] == segments
+
+
+def test_ewfverify_calculated_sha256_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    first_segment = tmp_path / "evidence.E01"
+    digest = "c" * 64
+
+    def fake_run(command, **_kwargs):
+        if command == ["ewfverify", "-V"]:
+            return subprocess.CompletedProcess(command, 0, "ewfverify 20240506\n", "")
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            f"SHA256 hash calculated over data:\t{digest}\n",
+            "",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    status = Dumper._run_ewfverify(
+        object.__new__(Dumper), first_segment, str(tmp_path / "evidence")
+    )
+
+    assert status["status"] == "completed"
+    assert status["calculated_sha256"] == digest
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+    )
+    with pytest.raises(RuntimeError, match="did not report a calculated SHA-256"):
+        Dumper._run_ewfverify(
+            object.__new__(Dumper), first_segment, str(tmp_path / "evidence")
+        )
+
+
+def test_volatility_failure_is_distinct_from_successful_zero_results():
+    class FakeVolatility:
+        def run_plugin(self, _memory, _distro, plugin, **kwargs):
+            invocation = kwargs["invocation"]
+            if plugin == "failed.plugin":
+                invocation.update({"status": "failed", "exit_status": 2})
+                raise RuntimeError("plugin failed")
+            invocation.update(
+                {
+                    "status": "completed",
+                    "exit_status": 0,
+                    "result": "zero_results",
+                    "row_count": 0,
+                }
+            )
+            return []
+
+    errors = {}
+    invocations = {}
+    rows = extract_plugins(
+        FakeVolatility(),
+        Path("memory.raw"),
+        "ubuntu-22.04",
+        plugins=("empty.plugin", "failed.plugin"),
+        errors=errors,
+        invocations=invocations,
+    )
+
+    assert rows == {"empty.plugin": [], "failed.plugin": None}
+    assert invocations["empty.plugin"]["row_count"] == 0
+    assert invocations["empty.plugin"]["error"] is None
+    assert invocations["failed.plugin"]["exit_status"] == 2
+    assert invocations["failed.plugin"]["error"] == "plugin failed"
+    assert errors == {"failed.plugin": "plugin failed"}
+
+
+def test_volatility_version_parser_accepts_no_plugin_output(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "orchestrator.forensics.pipeline_config.command_output",
+        lambda *_args, **_kwargs: "usage: vol.py [...]\nVolatility 3 Framework 2.28.0",
+    )
+
+    assert reported_version("volatility3", {"volatility3": "/opt/vol3"}) == "2.28.0"
 
 
 def test_ssh_client_executor_adapts_existing_ssh_client_api():

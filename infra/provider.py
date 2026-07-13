@@ -18,10 +18,9 @@ VM creation / destruction:
 
 VM lifecycle:
     vm_exists(vm_name) -> bool
-    is_running(vm_name) -> bool          <-- add this line
+    is_running(vm_name) -> bool
     start_vm(vm_name) -> None
     shutdown_vm(vm_name, timeout) -> None
-    restart_vm(vm_name) -> None
 
 Introspection:
     get_vm_ip(vm_name, timeout) -> str
@@ -327,14 +326,6 @@ class Provider:
             time.sleep(0.5)
         console.info(f"graceful shutdown timed out; forcing off '{vm_name}'")
         conn.lookupByName(vm_name).destroy()
-
-    def restart_vm(self, vm_name: str) -> None:
-        """Force-off then cold-start. Guards against already-shutoff state."""
-        conn = self._connect()
-        dom = conn.lookupByName(vm_name)
-        if dom.state()[0] == libvirt.VIR_DOMAIN_RUNNING:
-            dom.destroy()
-        dom.create()
 
     # --- VM destruction --------------------------------------------------
 

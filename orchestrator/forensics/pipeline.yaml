@@ -6,7 +6,7 @@
 versions:
   plaso: "20240826"          # log2timeline.py / psort.py
   volatility3: "2.7.0"
-  sleuthkit: "4.12.1"        # fls/icat/istat
+  sleuthkit: "4.12.1"        # mmls/fls/fsstat
 
 # Whether a version mismatch aborts (strict) or only warns. Strict is the
 # pre-registered default for paper runs.

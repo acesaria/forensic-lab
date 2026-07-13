@@ -32,8 +32,8 @@ def extract_plugins(
     kernel_release: str | None = None,
     errors: dict[str, str] | None = None,
     invocations: dict[str, dict[str, Any]] | None = None,
-) -> dict[str, list[dict[str, Any]]]:
-    out: dict[str, list[dict[str, Any]]] = {}
+) -> dict[str, list[dict[str, Any]] | None]:
+    out: dict[str, list[dict[str, Any]] | None] = {}
     for plugin in plugins:
         invocation: dict[str, Any] = {"plugin": plugin}
         if invocations is not None:
@@ -46,13 +46,15 @@ def extract_plugins(
                 kernel_release=kernel_release,
                 invocation=invocation,
             )
+            invocation.setdefault("error", None)
         except RuntimeError as exc:
             # A plugin missing for this kernel build is not fatal; the run keeps
             # the raw output from whichever plugins did succeed.
             if errors is not None:
                 errors[plugin] = str(exc)
+            invocation.setdefault("exit_status", None)
             invocation.update({"status": "failed", "error": str(exc)})
-            out[plugin] = []
+            out[plugin] = None
     return out
 
 

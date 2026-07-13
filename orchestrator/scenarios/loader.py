@@ -14,22 +14,13 @@ class ScenarioPlan:
     scenario_id: str
     path: Path
     steps: list[dict[str, Any]]
-    description: str = ""
-    variant: str | None = None
-    required_privilege: str = "scenario-defined"
     parameters: dict[str, Any] = field(default_factory=dict)
     prerequisites: dict[str, Any] = field(default_factory=dict)
-    attck: list[str] = field(default_factory=list)
     hooks_path: Path | None = None
 
     @property
     def root(self) -> Path:
         return self.path.parent
-
-    @property
-    def files_dir(self) -> Path:
-        return self.root / "files"
-
 
 def load_scenario_plan(path: str | Path) -> ScenarioPlan:
     p = Path(path)
@@ -49,12 +40,8 @@ def load_scenario_plan(path: str | Path) -> ScenarioPlan:
     return ScenarioPlan(
         scenario_id=str(scenario_id),
         path=p,
-        description=str(data.get("description") or ""),
-        variant=str(data.get("variant")) if data.get("variant") is not None else None,
-        required_privilege=str(data.get("required_privilege") or "scenario-defined"),
         parameters=_load_parameters(data),
         prerequisites=dict(data.get("prerequisites") or {}),
-        attck=[str(x) for x in data.get("attck") or []],
         steps=steps,
         hooks_path=hooks_path,
     )

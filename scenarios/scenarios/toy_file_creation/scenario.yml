@@ -1,6 +1,5 @@
 scenario_id: toy_file_creation
 description: Innocuous demo scenario that creates and verifies one text file.
-attck: []
 parameters:
   toy_name: toy.txt
 steps:

@@ -11,10 +11,10 @@ The dumper itself does no VM state transitions.
 """
 
 import glob
-import hashlib
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from dataclasses import asdict, dataclass
@@ -22,6 +22,7 @@ from pathlib import Path
 
 from orchestrator.core import console
 from orchestrator.core.paths import ProjectPaths
+from orchestrator.core.provenance import command_output, command_result, file_sha256
 
 # tmpfs staging area for the intermediate raw image produced by
 # qemu-img convert. RAM-backed on every distro the project targets.
@@ -57,8 +58,6 @@ class ImageMetadata:
     segments: list[str] | None = None
     segment_metadata: list[dict[str, object]] | None = None
     acquisition_seconds: float | None = None
-    virtual_size_bytes: int | None = None
-    ewf_size_bytes: int | None = None
     tool_version: str | None = None
     command: list[str] | None = None
     stdout: str | None = None
@@ -120,9 +119,7 @@ class Dumper:
         )
         tool_version = self._tool_version(["virsh", "--version"])
         status_path = dest.parent / "virsh_dump_status.json"
-        record = self._command_result(
-            command, result, tool_version=tool_version
-        )
+        record = command_result(command, result, tool_version=tool_version)
         record.update(
             {
                 "status_path": str(status_path),
@@ -150,9 +147,15 @@ class Dumper:
             self._write_status(status_path, record)
             raise RuntimeError("Memory dump failed: output file not created or empty")
 
+        # libvirt may create the dump as root even when virsh was invoked by
+        # the unprivileged lab user. Transfer it before hashing the evidence.
+        subprocess.run(
+            ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
+            check=True,
+        )
         elapsed = time.time() - started
         size_bytes = dest.stat().st_size
-        sha256 = self._sha256(dest)
+        sha256 = file_sha256(dest)
         completed_at = time.time()
         record.update(
             {
@@ -161,10 +164,6 @@ class Dumper:
                 "timestamp": completed_at,
                 "acquisition_seconds": elapsed,
             }
-        )
-        subprocess.run(
-            ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
-            check=True,
         )
         self._write_status(status_path, record)
         console.ok(
@@ -242,7 +241,7 @@ class Dumper:
             {
                 "path": str(Path(segment)),
                 "size_bytes": Path(segment).stat().st_size,
-                "sha256": self._sha256(Path(segment)),
+                "sha256": file_sha256(Path(segment)),
             }
             for segment in ewf_segments
         ]
@@ -261,12 +260,10 @@ class Dumper:
             segments=[str(Path(segment)) for segment in ewf_segments],
             segment_metadata=segment_metadata,
             tool=tool,
-            sha256=str(segment_metadata[0]["sha256"]),
-            size_bytes=int(segment_metadata[0]["size_bytes"]),
+            sha256=str(verification["calculated_sha256"]),
+            size_bytes=virtual_size,
             timestamp=time.time(),
             acquisition_seconds=elapsed,
-            virtual_size_bytes=virtual_size,
-            ewf_size_bytes=ewf_total_size,
             commands=[*(prior_commands or []), ewfacquire_result, verification],
             verification=verification,
         )
@@ -288,10 +285,10 @@ class Dumper:
             memory_image=memory_meta,
             disk_image=disk_meta,
         )
-        manifest_path = self.run_dir(run_id) / "manifest.json"
+        manifest_path = self.run_dir(run_id) / "acquisition.json"
         with open(manifest_path, "w") as f:
             json.dump(asdict(manifest), f, indent=2)
-        console.ok(f"manifest written: {manifest_path}")
+        console.ok(f"acquisition manifest written: {manifest_path}")
         return str(manifest_path)
 
     # --- private: disk acquisition steps ---------------------------------
@@ -317,7 +314,7 @@ class Dumper:
             "qemu-img", "convert", "-O", "raw", str(disk_source), str(raw_path)
         ]
         result = subprocess.run(command, check=False, capture_output=True, text=True)
-        record = self._command_result(
+        record = command_result(
             command,
             result,
             tool_version=self._tool_version(["qemu-img", "--version"]),
@@ -358,7 +355,7 @@ class Dumper:
                 capture_output=True,
                 text=True,
             )
-            record = self._command_result(
+            record = command_result(
                 command,
                 result,
                 tool_version=self._tool_version(["ewfacquire", "-V"]),
@@ -387,7 +384,7 @@ class Dumper:
         *,
         segment_metadata: list[dict[str, object]] | None = None,
     ) -> dict[str, object]:
-        command = ["ewfverify", str(first_segment)]
+        command = ["ewfverify", "-d", "sha256", str(first_segment)]
         status_path = Path(ewf_prefix).parent / "ewfverify_status.json"
         try:
             result = subprocess.run(
@@ -396,7 +393,7 @@ class Dumper:
                 capture_output=True,
                 text=True,
             )
-            record = self._command_result(
+            record = command_result(
                 command,
                 result,
                 tool_version=self._tool_version(["ewfverify", "-V"]),
@@ -414,12 +411,30 @@ class Dumper:
         record["acquisition_status"] = record["status"]
         if segment_metadata is not None:
             record["segments"] = segment_metadata
-        self._write_status(status_path, record)
         if record["status"] != "completed":
+            self._write_status(status_path, record)
             raise RuntimeError(
                 f"ewfverify failed (rc={record['exit_status']}); "
                 f"details preserved in {status_path}"
             )
+        calculated_sha256 = _parse_ewfverify_sha256(
+            f"{record.get('stdout', '')}\n{record.get('stderr', '')}"
+        )
+        if calculated_sha256 is None:
+            record.update(
+                {
+                    "status": "failed",
+                    "acquisition_status": "failed",
+                    "error": "ewfverify did not report a calculated SHA-256",
+                }
+            )
+            self._write_status(status_path, record)
+            raise RuntimeError(
+                f"ewfverify did not report a calculated SHA-256; "
+                f"details preserved in {status_path}"
+            )
+        record["calculated_sha256"] = calculated_sha256
+        self._write_status(status_path, record)
         return record
 
     def _validate_ewf_segments(self, segments: list[str], ewf_prefix: str) -> None:
@@ -457,44 +472,8 @@ class Dumper:
     # --- private: generic helpers ----------------------------------------
 
     @staticmethod
-    def _sha256(path: Path) -> str:
-        h = hashlib.sha256()
-        with open(path, "rb") as f:
-            for chunk in iter(lambda: f.read(4 * 1024 * 1024), b""):
-                h.update(chunk)
-        return h.hexdigest()
-
-    @staticmethod
-    def _command_result(
-        command: list[str],
-        result: subprocess.CompletedProcess[str],
-        *,
-        tool_version: str | None = None,
-    ) -> dict[str, object]:
-        return {
-            "command": command,
-            "status": "completed" if result.returncode == 0 else "failed",
-            "exit_status": result.returncode,
-            "stdout": result.stdout or "",
-            "stderr": result.stderr or "",
-            "tool_version": tool_version,
-        }
-
-    @staticmethod
     def _tool_version(command: list[str]) -> str | None:
-        try:
-            result = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-        except (OSError, subprocess.SubprocessError):
-            return None
-        if result.returncode != 0:
-            return None
-        output = (result.stdout + result.stderr).strip()
+        output = command_output(command)
         return output.splitlines()[0] if output else None
 
     @staticmethod
@@ -517,3 +496,12 @@ class Dumper:
         except Exception:
             console.warn(f"could not determine virtual disk size for {disk_source}")
             return None
+
+
+def _parse_ewfverify_sha256(output: str) -> str | None:
+    match = re.search(
+        r"^SHA256 hash calculated over data:\s*([0-9a-fA-F]{64})\s*$",
+        output,
+        flags=re.MULTILINE,
+    )
+    return match.group(1).lower() if match else None

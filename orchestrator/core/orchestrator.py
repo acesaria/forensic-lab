@@ -31,10 +31,8 @@ run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=Fal
 
 from datetime import datetime
 import functools
-import hashlib
 import json
 from pathlib import Path
-import subprocess
 from typing import Any
 
 from orchestrator.core.config import (
@@ -49,6 +47,7 @@ from orchestrator.core.config import (
 )
 from orchestrator.core import console
 from orchestrator.core.paths import ProjectPaths
+from orchestrator.core.provenance import file_sha256
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper
@@ -58,7 +57,7 @@ from orchestrator.forensics.plaso_runner import (
     run_timeline,
 )
 from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
-from orchestrator.forensics.pipeline_config import load_pipeline_config
+from orchestrator.forensics.pipeline_config import load_pipeline_config, reported_version
 from orchestrator.scenarios import run_scenario
 from orchestrator.scenarios.executors import SSHClientExecutor
 
@@ -72,6 +71,7 @@ class ForensicOrchestrator:
         sleuth_runner: SleuthKitRunner,
         paths: ProjectPaths,
         role_defaults: dict[str, Any],
+        raw_tools: dict[str, str],
     ) -> None:
         self.vm_manager = vm_manager
         self.dumper = dumper
@@ -79,6 +79,7 @@ class ForensicOrchestrator:
         self._sleuth_runner = sleuth_runner
         self._paths = paths
         self._role_defaults = role_defaults
+        self._raw_tools = raw_tools
 
     # Convenience accessor keeps the call sites readable.
     @property
@@ -164,7 +165,7 @@ class ForensicOrchestrator:
         VM-backed run of a declarative scenario.yml.
 
         Reverts to baseline, runs the scenario's steps inside the guest over SSH
-        (writing manifest.json and command_log.jsonl into dumps/), then --
+        (writing manifest.json and command_log.jsonl at the run root), then --
         unless acquire is False -- acquires RAM+disk and writes raw forensic
         exports under analysis/. The VM ends OFF when acquire is True, ON
         otherwise.
@@ -181,7 +182,7 @@ class ForensicOrchestrator:
         console.section(f"experiment: {scenario_id} on {distro_id}")
         vm_name = self._reset_lab(distro_id)
         run_id = _make_run_id(distro_id, scenario_id)
-        run_dir = self.dumper.run_dir(run_id)
+        run_root = self._paths.experiments_dir / run_id
 
         ctx = None
         guest: dict[str, Any] | None = None
@@ -191,10 +192,11 @@ class ForensicOrchestrator:
                 ctx = run_scenario(
                     scenario_yml,
                     executor=SSHClientExecutor(ssh),
-                    out_dir=run_dir,
+                    out_dir=run_root,
                     run_id=run_id,
                     repo_root=self.repo_root,
                     distro=distro_id,
+                    profile="vanilla",
                     internet_on=functools.partial(self.vm_manager.internet_on, vm_name),
                     internet_off=functools.partial(self.vm_manager.internet_off, vm_name),
                 )
@@ -203,19 +205,18 @@ class ForensicOrchestrator:
                 ctx.update_environment(
                     guest=guest,
                     distro=distro_id,
-                    execution_user=(guest or {}).get("user"),
                 )
         finally:
             self.vm_manager.internet_off(vm_name, quiet=True)
             console.section_end()
 
         if not acquire:
-            console.ok(f"declarative run complete (no acquisition): {run_dir}")
+            console.ok(f"declarative run complete (no acquisition): {run_root}")
             return None
 
         manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
         if ctx is not None:
-            ctx.record_acquisition_outputs(manifest_path)
+            ctx.record_acquisition_output(manifest_path)
         self._extract_raw_outputs(
             run_id,
             distro_id,
@@ -231,8 +232,6 @@ class ForensicOrchestrator:
             ". /etc/os-release 2>/dev/null; "
             'printf "distro=%s\\n" "${PRETTY_NAME:-unknown}"; '
             'printf "kernel=%s\\n" "$(uname -r)"; '
-            'printf "user=%s\\n" "$(whoami)"; '
-            'printf "hostname=%s\\n" "$(hostname)"; '
             'printf "timezone=%s\\n" '
             '"$(cat /etc/timezone 2>/dev/null || '
             'timedatectl show -p Timezone --value 2>/dev/null || echo UTC)"'
@@ -240,8 +239,6 @@ class ForensicOrchestrator:
         facts: dict[str, Any] = {
             "distro": None,
             "kernel": None,
-            "user": None,
-            "hostname": None,
             "timezone": "UTC",
         }
         try:
@@ -289,11 +286,7 @@ class ForensicOrchestrator:
             encoding="utf-8",
         )
         if ctx is not None:
-            ctx.record_raw_analysis_outputs(
-                analysis_dir,
-                status=status,
-                status_path=status_path,
-            )
+            ctx.record_raw_analysis_output(status_path)
         console.section_end()
 
     def _produce_raw_outputs(
@@ -328,7 +321,8 @@ class ForensicOrchestrator:
                 json.dumps(vol_rows, indent=2, default=str), encoding="utf-8"
             )
             plugin_counts = {
-                plugin: len(rows) for plugin, rows in sorted(vol_rows.items())
+                plugin: len(rows) if rows is not None else None
+                for plugin, rows in sorted(vol_rows.items())
             }
             for invocation in vol_invocations.values():
                 invocation["output_path"] = str(vol_path)
@@ -336,9 +330,9 @@ class ForensicOrchestrator:
             if vol_errors:
                 state = "failed" if len(vol_errors) == len(vol_rows) else "degraded"
                 result_state = (
-                    "partial_results"
-                    if any(plugin_counts.values())
-                    else "no_successful_results"
+                    "no_successful_results"
+                    if len(vol_errors) == len(vol_rows)
+                    else "partial_results"
                 )
                 console.warn(
                     "vol3 extraction degraded: "
@@ -354,7 +348,9 @@ class ForensicOrchestrator:
                 "path": str(vol_path),
                 "tool": "volatility3",
                 "configured_version": versions.get("volatility3"),
-                "reported_version": _reported_version(["vol3", "--help"]),
+                "reported_version": reported_version(
+                    "volatility3", self._raw_tools
+                ),
                 "plugin_rows": plugin_counts,
                 "result": result_state,
                 "invocations": vol_invocations,
@@ -367,6 +363,7 @@ class ForensicOrchestrator:
             status["volatility"] = _failed_status(
                 "volatility3",
                 versions.get("volatility3"),
+                reported_version("volatility3", self._raw_tools),
                 exc,
                 paths={"path": str(analysis_dir / "vol3.json")},
                 invocations=vol_invocations,
@@ -393,7 +390,7 @@ class ForensicOrchestrator:
                 "path": str(bodyfile_path),
                 "tool": "sleuthkit",
                 "configured_version": versions.get("sleuthkit"),
-                "reported_version": _reported_version(["fls", "-V"]),
+                "reported_version": reported_version("sleuthkit", self._raw_tools),
                 "row_count": len(bodyfile.splitlines()),
                 "result": "zero_results" if not bodyfile else "results",
                 "invocations": tsk_invocations,
@@ -404,6 +401,7 @@ class ForensicOrchestrator:
             status["tsk"] = _failed_status(
                 "sleuthkit",
                 versions.get("sleuthkit"),
+                reported_version("sleuthkit", self._raw_tools),
                 exc,
                 paths={"path": str(analysis_dir / "bodyfile")},
                 invocations=tsk_invocations,
@@ -420,9 +418,7 @@ class ForensicOrchestrator:
                 "path": str(timeline_path),
                 "tool": "plaso",
                 "configured_version": versions.get("plaso"),
-                "reported_version": _reported_version(
-                    ["log2timeline", "--version"]
-                ),
+                "reported_version": reported_version("plaso", self._raw_tools),
                 "event_count": len(events),
                 "result": "zero_results" if not events else "results",
                 "invocations": {
@@ -439,6 +435,7 @@ class ForensicOrchestrator:
             status["plaso"] = _failed_status(
                 "plaso",
                 versions.get("plaso"),
+                reported_version("plaso", self._raw_tools),
                 exc,
                 paths={
                     "storage_path": str(analysis_dir / "timeline.plaso"),
@@ -448,14 +445,14 @@ class ForensicOrchestrator:
             )
 
         status["run_id"] = run_id
-        status["manifest"] = str(manifest_path)
+        status["acquisition_manifest"] = str(manifest_path)
         return status
 
     def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> dict:
         """
         Run the Plaso pipeline over the acquired disk and return the events.
-        Mirrors _verify_plaso but keeps timeline.plaso/timeline.jsonl in the
-        caller's analysis dir and returns invocation provenance with the events.
+        Keep timeline.plaso/timeline.jsonl in the caller's analysis directory
+        and return invocation provenance with the events.
         """
 
         storage_path = analysis_dir / "timeline.plaso"
@@ -466,6 +463,8 @@ class ForensicOrchestrator:
             disk_path=disk_path,
             storage_path=storage_path,
             output_path=timeline_path,
+            log2timeline_bin=self._raw_tools["log2timeline"],
+            psort_bin=self._raw_tools["psort"],
             file_filter=file_filter,
         )
         events = result["events"]
@@ -621,21 +620,17 @@ class ForensicOrchestrator:
 def _failed_status(
     tool: str,
     configured_version: Any,
+    actual_version: str | None,
     exc: Exception,
     *,
     paths: dict[str, str] | None = None,
     invocations: Any = None,
 ) -> dict[str, Any]:
-    version_commands = {
-        "volatility3": ["vol3", "--help"],
-        "sleuthkit": ["fls", "-V"],
-        "plaso": ["log2timeline", "--version"],
-    }
     status = {
         "status": "failed",
         "tool": tool,
         "configured_version": configured_version,
-        "reported_version": _reported_version(version_commands[tool]),
+        "reported_version": actual_version,
         "error": str(exc),
     }
     if paths:
@@ -645,32 +640,11 @@ def _failed_status(
     return status
 
 
-def _reported_version(command: list[str]) -> str | None:
-    try:
-        result = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if result.returncode != 0:
-        return None
-    output = (result.stdout + result.stderr).strip()
-    return output.splitlines()[0] if output else None
-
-
 def _output_metadata(path: Path) -> dict[str, Any]:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(4 * 1024 * 1024), b""):
-            digest.update(chunk)
     return {
         "path": str(path),
         "size_bytes": path.stat().st_size,
-        "sha256": digest.hexdigest(),
+        "sha256": file_sha256(path),
     }
 
 

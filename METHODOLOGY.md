@@ -98,12 +98,18 @@ Every thesis run must retain:
 - analyst notes that cite raw evidence locations rather than undocumented
   conclusions.
 
+The run-root manifest is a small index. It points to the append-only command
+log, `dumps/acquisition.json`, and `analysis/raw_extraction_status.json`; it does
+not embed scenario parameters, step facts, expected observables, evidence
+hashes, or full tool records.
+
 Memory provenance includes the full-image SHA-256, byte size, acquisition
 timestamp and duration, exact `virsh dump --memory-only` command, and reported
-virsh version. Disk provenance includes the path, byte size, and SHA-256 of
-every EWF segment. `ewfverify` runs against the completed segment set; its
-command, output, exit status, and pass/fail state are retained, and a failed
-verification fails acquisition.
+virsh version. Disk provenance includes the logical media size and the SHA-256
+calculated by `ewfverify -d sha256`, plus the path, byte size, and SHA-256 of
+every EWF segment. The verification command, output, exit status, calculated
+digest, and pass/fail state are retained; failed verification or a missing
+calculated SHA-256 fails acquisition.
 
 Raw extraction retains separate TSK, Plaso, and Volatility outputs plus an
 adjacent status record containing their versions, invocations, exit status,

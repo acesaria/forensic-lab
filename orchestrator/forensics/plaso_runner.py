@@ -1,21 +1,17 @@
 # orchestrator/forensics/plaso_runner.py
 #
 # Thin wrapper around Plaso (log2timeline + psort).
-# No classes, no state -- just plain functions called by the evaluator.
-# Filtering and querying happen downstream; this module only produces and
-# loads the JSON-line timeline.
+# No classes, no state; this module only produces and loads the raw JSON-line
+# timeline used for manual investigation.
 #
-# TODO: extundelete is intentionally NOT implemented for scenario_01. It may
-# be added later only as an advanced deleted-file recovery demonstration,
-# particularly to show journal-aware recovery on ext4. Out of scope for the
-# generic Plaso pipeline.
-
 import json
 import logging
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+
+from orchestrator.core.provenance import command_result
 
 _log = logging.getLogger(__name__)
 
@@ -31,25 +27,8 @@ def resolve_binary(name_or_path: str) -> str:
 
 
 def default_linux_filter() -> Path:
-    # Stable default so callers (probe, evaluator) don't hardcode relative paths.
+    # Stable default so callers do not hardcode relative paths.
     return Path(__file__).resolve().parent / "filters" / "linux_common.yaml"
-
-
-def verify_plaso_inputs(
-    log2timeline_bin: str = "log2timeline",
-    psort_bin: str = "psort",
-    file_filter: Path | None = None,
-) -> None:
-    # Cheap pre-flight: catch missing binaries or a typo in a filter path
-    # BEFORE kicking off a multi-minute log2timeline run. Safe to call from
-    # setup/probe paths.
-    resolve_binary(log2timeline_bin)
-    resolve_binary(psort_bin)
-    if file_filter is not None and not file_filter.is_file():
-        raise FileNotFoundError(
-            f"Plaso file filter not found: {file_filter}. "
-            "Expected a YAML filter alongside the runner."
-        )
 
 
 def run_log2timeline(
@@ -105,7 +84,7 @@ def run_log2timeline(
                 f"{result.stderr.strip() or '(no output)'}"
             )
             error.invocations = {
-                "log2timeline": _invocation_result(
+                "log2timeline": command_result(
                     cmd, result, log_path=str(log_path)
                 )
             }
@@ -113,18 +92,14 @@ def run_log2timeline(
     finally:
         shutil.rmtree(log_stage, ignore_errors=True)
 
-    return {
-        "command": cmd,
-        "status": "completed",
-        "exit_status": result.returncode,
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "storage_path": str(storage_path),
-        "disk_path": str(disk_path),
-        "parsers": parsers,
-        "file_filter": str(file_filter) if file_filter is not None else None,
-    }
+    return command_result(
+        cmd,
+        result,
+        storage_path=str(storage_path),
+        disk_path=str(disk_path),
+        parsers=parsers,
+        file_filter=str(file_filter) if file_filter is not None else None,
+    )
 
 
 def run_psort(
@@ -144,23 +119,19 @@ def run_psort(
             f"{result.stderr.strip() or '(no output)'}"
         )
         error.invocations = {
-            "psort": _invocation_result(
+            "psort": command_result(
                 cmd, result, output_path=str(output_path)
             )
         }
         raise error
 
-    return {
-        "command": cmd,
-        "status": "completed",
-        "exit_status": result.returncode,
-        "returncode": result.returncode,
-        "stdout": result.stdout,
-        "stderr": result.stderr,
-        "storage_path": str(storage_path),
-        "output_path": str(output_path),
-        "format": "json_line",
-    }
+    return command_result(
+        cmd,
+        result,
+        storage_path=str(storage_path),
+        output_path=str(output_path),
+        format="json_line",
+    )
 
 
 def read_timeline(output_path: Path) -> list[dict]:
@@ -220,20 +191,4 @@ def run_timeline(
         "log2timeline": log2timeline_result,
         "psort": psort_result,
         "events": events,
-    }
-
-
-def _invocation_result(
-    command: list[str],
-    result: subprocess.CompletedProcess[str],
-    **paths: str,
-) -> dict:
-    return {
-        "command": command,
-        "status": "completed" if result.returncode == 0 else "failed",
-        "exit_status": result.returncode,
-        "returncode": result.returncode,
-        "stdout": result.stdout or "",
-        "stderr": result.stderr or "",
-        **paths,
     }

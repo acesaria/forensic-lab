@@ -11,6 +11,7 @@ from typing import Any, Callable
 from orchestrator.scenarios.executors import LocalExecutor, ScenarioExecutor
 from orchestrator.scenarios.loader import ScenarioPlan, load_scenario_plan
 from orchestrator.scenarios.run_context import RunContext
+from orchestrator.core.provenance import excerpt
 
 
 class ScenarioStepError(RuntimeError):
@@ -48,10 +49,8 @@ def run_scenario(
         executor=executor or LocalExecutor(),
         parameters=plan.parameters,
         prerequisites=plan.prerequisites,
-        scenario_variant=plan.variant,
         distro=distro,
-        profile=profile,
-        required_privilege=plan.required_privilege,
+        profile=profile or "vanilla",
         repo_root=repo_root,
         internet_on=internet_on,
         internet_off=internet_off,
@@ -61,7 +60,7 @@ def run_scenario(
         for step in plan.steps:
             _run_step(ctx, plan, hooks, step)
     except ScenarioStepError as exc:
-        ctx.finalize("prevented" if exc.prevented else "failed", error=str(exc))
+        ctx.finalize("prevented" if exc.prevented else "failed")
         raise
     if ctx.final_status == "running":
         ctx.finalize("completed")
@@ -89,19 +88,9 @@ def _run_step(
             _step_python(ctx, hooks, step)
         elif step_type == "sleep":
             time.sleep(float(step.get("seconds", 1)))
-        elif step_type == "record":
-            _step_record(ctx, step)
         else:
             raise ScenarioStepError(f"{step_id}: unsupported step type {step_type!r}")
         ended = ctx.now()
-        ctx.record_step_status(
-            step_id=step_id,
-            step_type=step_type,
-            status="completed",
-            started_at=started,
-            ended_at=ended,
-            metadata=metadata,
-        )
         ctx.log_step(
             {
                 "step_id": step_id,
@@ -116,15 +105,6 @@ def _run_step(
         ended = ctx.now()
         exc_metadata = getattr(exc, "metadata", {})
         status = "prevented" if getattr(exc, "prevented", False) else "failed"
-        ctx.record_step_status(
-            step_id=step_id,
-            step_type=step_type,
-            status=status,
-            started_at=started,
-            ended_at=ended,
-            error=str(exc),
-            metadata=exc_metadata,
-        )
         ctx.log_step(
             {
                 "step_id": step_id,
@@ -150,8 +130,8 @@ def _step_shell(ctx: RunContext, step: dict[str, Any]) -> dict[str, Any]:
     metadata = {
         "command": command,
         "exit_code": result.exit_code,
-        "stdout_excerpt": _excerpt(result.stdout),
-        "stderr_excerpt": _excerpt(result.stderr),
+        "stdout_excerpt": excerpt(result.stdout),
+        "stderr_excerpt": excerpt(result.stderr),
     }
     if result.exit_code != 0:
         raise ScenarioStepError(
@@ -184,18 +164,6 @@ def _step_python(
     if func is None:
         raise ScenarioStepError(f"python hook not found: {func_name}")
     func(ctx, step)
-
-
-def _step_record(ctx: RunContext, step: dict[str, Any]) -> None:
-    facts = step.get("facts") or []
-    rows = facts if isinstance(facts, list) else [facts]
-    for row in rows:
-        ctx.record_fact(str(step.get("id") or "scenario"), row)
-
-
-def _excerpt(text: str, limit: int = 1200) -> str:
-    text = (text or "").strip()
-    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def _load_hooks(plan: ScenarioPlan) -> dict[str, Callable[[RunContext, dict[str, Any]], Any]]:

@@ -8,9 +8,16 @@ host:
   isolated_network_name: forensics-isolated
   nat_network_name: default
   pool_name: forensic-lab-pool
-  pool_path: /var/lib/forensic-lab/disks
-  images_path: /var/lib/forensic-lab/images
+  # ProjectPaths derives disks/ and images/ beneath this host-local root.
+  state_dir: /var/lib/forensic-lab
   shared_dir: ./shared
+  # Raw extraction tools may be command names or absolute paths.
+  vol_bin: vol3
+  mmls_bin: mmls
+  fls_bin: fls
+  fsstat_bin: fsstat
+  log2timeline_bin: log2timeline
+  psort_bin: psort
 
 role_defaults:
   lab:

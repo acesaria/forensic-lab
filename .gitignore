@@ -46,7 +46,6 @@ manifest.json
 shared/isf/
 *.plaso
 forensics_report.json
-TODO.md
 
 
 shared/experiments/*

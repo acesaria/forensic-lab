@@ -9,19 +9,14 @@
 # e.g. shared/isf/ubuntu_5.15.0-91-generic.json
 #
 # Multi-distro usage: one shared instance, pass distro_id per call.
-#   vol = VolatilityRunner.from_config(host_cfg, isf_dir)
-#   vol.run_plugins(memory_path, "ubuntu-22.04", ["linux.pslist"])
 
 import json
-import logging
 import shutil
 import subprocess
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 from orchestrator.core import console
-
-_log = logging.getLogger(__name__)
+from orchestrator.core.provenance import command_result
 
 
 def _isf_name(family: str, kernel_release: str) -> str:
@@ -37,8 +32,7 @@ def _run_vol_command(
     extra_args: list[str] | None = None,
     invocation: dict | None = None,
 ) -> list[dict]:
-    # Module-level so ProcessPoolExecutor can pickle it. Centralises JSON
-    # normalization so run_plugin and run_plugins agree on row shape.
+    # Centralise Volatility JSON normalization and invocation provenance.
     cmd = [
         vol_bin,
         "-f",
@@ -68,12 +62,7 @@ def _run_vol_command(
             "vol3: binary not found. Install volatility3 and ensure it is on PATH."
         ) from exc
     if invocation is not None:
-        invocation.update(
-            {
-                "exit_status": result.returncode,
-                "stderr": result.stderr or "",
-            }
-        )
+        invocation.update(command_result(cmd, result, include_stdout=False))
     if result.returncode != 0:
         if invocation is not None:
             invocation["status"] = "failed"
@@ -115,7 +104,7 @@ def _run_vol_command(
 
 def first_present(row: dict, *keys: str) -> object | None:
     # Volatility field names drift between versions (PID vs Pid, etc.).
-    # Evaluator code can use this to stay tolerant without hard-coding one spelling.
+    # Probes use this to stay tolerant without hard-coding one spelling.
     for key in keys:
         value = row.get(key)
         if value not in (None, ""):
@@ -129,17 +118,10 @@ class VolatilityRunner:
         if not Path(resolved).is_file():
             raise FileNotFoundError(
                 f"Volatility binary not found: {vol_bin!r}. "
-                "Set vol_bin in config.yml or add vol3 to PATH."
+                "Set vol_bin in config.yaml or add vol3 to PATH."
             )
         self._vol_bin = resolved
         self._isf_dir = isf_dir
-
-    @classmethod
-    def from_config(cls, host_cfg: dict, isf_dir: Path) -> "VolatilityRunner":
-        return cls(
-            vol_bin=host_cfg.get("vol_bin", "vol3"),
-            isf_dir=isf_dir,
-        )
 
     def resolve_isf(self, distro_id: str, kernel_release: str | None = None) -> Path:
         family = distro_id.split("-", 1)[0]
@@ -176,50 +158,6 @@ class VolatilityRunner:
             extra_args,
             invocation,
         )
-
-    def run_plugins(
-        self,
-        memory_path: Path,
-        distro_id: str,
-        plugins: list[str] | dict[str, list[str]],
-        max_workers: int = 4,
-    ) -> dict[str, list[dict]]:
-        # Accept either a flat list (no extra args) or a mapping of
-        # plugin -> args. Normalize to a single dict shape internally.
-        if isinstance(plugins, dict):
-            plugin_args: dict[str, list[str]] = {p: list(a) for p, a in plugins.items()}
-        else:
-            plugin_args = {p: [] for p in plugins}
-
-        isf_path = self.resolve_isf(distro_id)
-        results: dict[str, list[dict]] = {}
-        failures: list[str] = []
-
-        with ProcessPoolExecutor(max_workers=max_workers) as pool:
-            futures = {
-                pool.submit(
-                    _run_vol_command,
-                    self._vol_bin,
-                    memory_path,
-                    isf_path,
-                    plugin,
-                    args,
-                ): plugin
-                for plugin, args in plugin_args.items()
-            }
-            for future in as_completed(futures):
-                plugin = futures[future]
-                try:
-                    rows = future.result()
-                    results[plugin] = rows
-                    _log.debug("vol3 %s: %d row(s)", plugin, len(rows))
-                except Exception as exc:
-                    failures.append(f"{plugin}: {exc}")
-                    console.warn(f"vol3 {plugin} failed: {exc}")
-
-        if failures:
-            raise RuntimeError("Volatility plugins failed:\n" + "\n".join(failures))
-        return results
 
     def probe(self, memory_path: Path, distro_id: str) -> None:
         isf_path = self.resolve_isf(distro_id)

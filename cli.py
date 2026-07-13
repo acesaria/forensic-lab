@@ -107,22 +107,25 @@ def _setup_logging(debug: bool) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def _check_prerequisites() -> None:
-    required = {
-        "virsh": "libvirt-clients",
-        "virt-install": "virtinst",
-        "qemu-img": "qemu-utils",
-        "cloud-localds": "cloud-image-utils",
-        "ansible-playbook": "ansible",
-        "ewfacquire": "libewf-dev",
-        "vol3": "volatility3 (install manually)",
-        "log2timeline": "plaso (pip install plaso)",
-        "psort": "plaso (pip install plaso)",
-    }
+def _check_prerequisites(raw_tools: dict[str, str]) -> None:
+    required = [
+        ("virsh", "virsh", "libvirt-clients"),
+        ("virt-install", "virt-install", "virtinst"),
+        ("qemu-img", "qemu-img", "qemu-utils"),
+        ("cloud-localds", "cloud-localds", "cloud-image-utils"),
+        ("ansible-playbook", "ansible-playbook", "ansible"),
+        ("ewfacquire", "ewfacquire", "libewf-dev"),
+        ("volatility3", raw_tools["volatility3"], "volatility3"),
+        ("mmls", raw_tools["mmls"], "sleuthkit"),
+        ("fls", raw_tools["fls"], "sleuthkit"),
+        ("fsstat", raw_tools["fsstat"], "sleuthkit"),
+        ("log2timeline", raw_tools["log2timeline"], "plaso"),
+        ("psort", raw_tools["psort"], "plaso"),
+    ]
     missing = [
-        f"  {cmd}  (apt: {pkg})"
-        for cmd, pkg in required.items()
-        if shutil.which(cmd) is None
+        f"  {name}: {command}  ({package})"
+        for name, command, package in required
+        if shutil.which(command) is None and not Path(command).is_file()
     ]
     if missing:
         raise RuntimeError("prereq: Missing required binaries:\n" + "\n".join(missing))
@@ -134,11 +137,15 @@ def _check_prerequisites() -> None:
 def _cmd_verify(args: argparse.Namespace) -> int:
     from orchestrator.forensics.pipeline_config import (
         load_pipeline_config,
+        raw_tool_paths,
         verify_versions,
     )
 
+    repo_root = Path(__file__).resolve().parent
+    config_path = repo_root / "config.yaml"
+    host_cfg = load_config(repo_root)["host"] if config_path.is_file() else {}
     cfg = load_pipeline_config()
-    problems = verify_versions(cfg)
+    problems = verify_versions(cfg, raw_tool_paths(host_cfg))
     if problems:
         print("version problems:")
         for p in problems:
@@ -183,10 +190,6 @@ def main() -> None:
     if args.command in _NO_LAB_HOST_HANDLERS:
         sys.exit(_NO_LAB_HOST_HANDLERS[args.command](args))
 
-    _check_prerequisites()
-    if args.debug:
-        console.info("debug mode on")
-
     # The 'setup' and 'run' paths need a valid distro profile; fail fast with a
     # config error before any VM work starts.
     if args.command in ("setup", "run"):
@@ -202,6 +205,13 @@ def main() -> None:
     # never raw host_cfg path entries.
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
+    from orchestrator.forensics.pipeline_config import raw_tool_paths
+
+    raw_tools = raw_tool_paths(host_cfg)
+    _check_prerequisites(raw_tools)
+    if args.debug:
+        console.info("debug mode on")
+
     paths = ProjectPaths.from_config(repo_root, host_cfg)
     role_defaults = cfg.get("role_defaults") or {}
 
@@ -215,8 +225,10 @@ def main() -> None:
     vm_manager = VMManager(provider=provider, paths=paths)
 
     dumper = Dumper(paths)
-    vol_runner = VolatilityRunner.from_config(host_cfg, paths.isf_dir)
-    sleuth_runner = SleuthKitRunner.from_config(host_cfg)
+    vol_runner = VolatilityRunner(raw_tools["volatility3"], paths.isf_dir)
+    sleuth_runner = SleuthKitRunner(
+        raw_tools["mmls"], raw_tools["fls"], raw_tools["fsstat"]
+    )
 
     distro_id: str = getattr(args, "distro", "ubuntu-22.04")
 
@@ -228,6 +240,7 @@ def main() -> None:
             sleuth_runner=sleuth_runner,
             paths=paths,
             role_defaults=role_defaults,
+            raw_tools=raw_tools,
         ) as orchestrator:
 
             if args.command == "init":
