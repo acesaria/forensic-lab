@@ -473,7 +473,7 @@ class Dumper:
 
     @staticmethod
     def _tool_version(command: list[str]) -> str | None:
-        output = command_output(command)
+        output = command_output(command, allow_nonzero=True)
         return output.splitlines()[0] if output else None
 
     @staticmethod
@@ -484,18 +484,52 @@ class Dumper:
         )
 
     @staticmethod
-    def _qemu_virtual_size(disk_source: Path) -> int | None:
+    def _qemu_virtual_size(disk_source: Path) -> int:
+        command = [
+            "qemu-img",
+            "info",
+            "--output",
+            "json",
+            disk_source.absolute(),
+        ]
         try:
             result = subprocess.run(
-                ["qemu-img", "info", "--output", "json", disk_source.absolute()],
+                command,
                 capture_output=True,
                 text=True,
-                check=True,
+                check=False,
             )
-            return json.loads(result.stdout).get("virtual-size")
-        except Exception:
-            console.warn(f"could not determine virtual disk size for {disk_source}")
-            return None
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(
+                f"qemu-img info failed for '{disk_source}': {exc}"
+            ) from exc
+        if result.returncode != 0:
+            diagnostic = (result.stderr or result.stdout or "(no output)").strip()
+            raise RuntimeError(
+                f"qemu-img info failed for '{disk_source}' "
+                f"(rc={result.returncode}):\n{diagnostic}"
+            )
+        try:
+            info = json.loads(result.stdout)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"qemu-img info returned invalid JSON for '{disk_source}':\n"
+                f"stdout:\n{result.stdout or ''}\n"
+                f"stderr:\n{result.stderr or ''}"
+            ) from exc
+        virtual_size = info.get("virtual-size")
+        if (
+            isinstance(virtual_size, bool)
+            or not isinstance(virtual_size, int)
+            or virtual_size <= 0
+        ):
+            raise RuntimeError(
+                f"qemu-img info did not report a positive integer virtual-size "
+                f"for '{disk_source}':\n"
+                f"stdout:\n{result.stdout or ''}\n"
+                f"stderr:\n{result.stderr or ''}"
+            )
+        return virtual_size
 
 
 def _parse_ewfverify_sha256(output: str) -> str | None:

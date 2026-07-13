@@ -7,9 +7,10 @@ import pytest
 from orchestrator.scenarios import run_scenario
 from orchestrator.scenarios.engine import ScenarioStepError
 from orchestrator.scenarios.executors import SSHClientExecutor
+from orchestrator.core.provenance import command_output
 from orchestrator.forensics.dumper import Dumper
 from orchestrator.forensics.extract import extract_plugins
-from orchestrator.forensics.pipeline_config import reported_version
+from orchestrator.forensics.pipeline_config import reported_version, verify_versions
 
 
 def test_scenario_manifest_is_minimal_and_command_log_keeps_step_results(tmp_path: Path):
@@ -170,6 +171,62 @@ def test_ewfverify_calculated_sha256_is_preserved(
         Dumper._run_ewfverify(
             object.__new__(Dumper), first_segment, str(tmp_path / "evidence")
         )
+
+
+def test_provenance_output_and_version_failures_remain_distinguishable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        "orchestrator.core.provenance.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["probe"], 2, "version stdout", "version stderr"
+        ),
+    )
+    assert command_output(["probe"], allow_nonzero=True) == (
+        "version stdout\nversion stderr"
+    )
+
+    executable = tmp_path / "vol3"
+    executable.write_text("#!/bin/sh\nexit 2\n", encoding="utf-8")
+    executable.chmod(0o755)
+    tools = {"volatility3": str(executable)}
+    monkeypatch.setattr(
+        "orchestrator.forensics.pipeline_config.command_output",
+        lambda *_args, **kwargs: (
+            "Volatility 3 Framework version: 2.28.0"
+            if kwargs.get("allow_nonzero")
+            else None
+        ),
+    )
+    assert reported_version("volatility3", tools) == "2.28.0"
+
+    monkeypatch.setattr(
+        "orchestrator.forensics.pipeline_config.command_output",
+        lambda *_args, **_kwargs: "unrecognized version banner",
+    )
+    assert verify_versions(
+        {"versions": {"volatility3": "2.28.0"}}, tools
+    ) == ["volatility3: version unavailable (need 2.28.0)"]
+    assert verify_versions(
+        {"versions": {"volatility3": "2.28.0"}},
+        {"volatility3": str(tmp_path / "missing-vol3")},
+    ) == ["volatility3: not installed (need 2.28.0)"]
+
+
+def test_qemu_virtual_size_requires_positive_integer(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        "orchestrator.forensics.dumper.subprocess.run",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["qemu-img"], 0, '{"format": "qcow2"}', "qemu diagnostic"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="positive integer virtual-size") as exc:
+        Dumper._qemu_virtual_size(Path("evidence.qcow2"))
+
+    assert "qemu diagnostic" in str(exc.value)
 
 
 def test_volatility_failure_is_distinct_from_successful_zero_results():

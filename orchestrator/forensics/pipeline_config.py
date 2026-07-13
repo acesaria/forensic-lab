@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 from pathlib import Path
@@ -48,14 +49,18 @@ def reported_version(tool: str, tools: dict[str, str]) -> str | None:
         output = command_output([tools[tool]], allow_nonzero=True)
         if output is None:
             return None
-        match = re.search(r"^Volatility 3 Framework\s+([^\s]+)\s*$", output, re.MULTILINE)
+        match = re.search(
+            r"\bVolatility\s+3(?:\s+Framework)?(?:\s+version)?\s*:?\s+([^\s]+)",
+            output,
+            re.IGNORECASE,
+        )
         return match.group(1) if match else None
 
     commands = {
         "plaso": [tools["log2timeline"], "--version"],
         "sleuthkit": [tools["fls"], "-V"],
     }
-    output = command_output(commands[tool])
+    output = command_output(commands[tool], allow_nonzero=True)
     return output.splitlines()[0] if output else None
 
 
@@ -70,9 +75,22 @@ def verify_versions(
     for tool, pin in pins.items():
         if tool not in {"plaso", "volatility3", "sleuthkit"}:
             continue
+        executable_key = {
+            "plaso": "log2timeline",
+            "volatility3": "volatility3",
+            "sleuthkit": "fls",
+        }[tool]
+        executable = tools[executable_key]
+        candidate = Path(executable).expanduser()
+        available = shutil.which(executable) is not None or (
+            candidate.is_file() and os.access(candidate, os.X_OK)
+        )
+        if not available:
+            problems.append(f"{tool}: not installed (need {pin})")
+            continue
         reported = reported_version(tool, tools)
         if reported is None:
-            problems.append(f"{tool}: not installed (need {pin})")
+            problems.append(f"{tool}: version unavailable (need {pin})")
         elif str(pin) not in reported:
             problems.append(f"{tool}: installed version does not match pin {pin}")
     return problems

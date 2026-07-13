@@ -53,7 +53,11 @@ def command_output(
         return None
     if result.returncode != 0 and not allow_nonzero:
         return None
-    output = (result.stdout + result.stderr).strip()
+    output = "\n".join(
+        stream.strip()
+        for stream in (result.stdout, result.stderr)
+        if stream and stream.strip()
+    )
     return output or None
 
 
