@@ -73,14 +73,12 @@ python cli.py setup --distro ubuntu-22.04
 # Run the registered thesis scenario, then acquire and extract evidence
 python cli.py run --distro ubuntu-22.04 --scenario userland_father_ldpreload
 
-# Local scenario-engine validation without VM acquisition
-python cli.py run-scenario \
-  scenarios/scenarios/userland_father_ldpreload/scenario.yml \
-  --out-dir /tmp/father_local --run-id father_local
-
 # Destroy a lab VM when finished with a distro
 python cli.py destroy --distro ubuntu-22.04
 ```
+
+The Father scenario is VM-only and refuses `run-scenario`, whose executor is
+local. Use the focused scenario tests for host-side syntax and plan validation.
 
 Full runs now stop after scenario execution, acquisition, and raw
 TSK/Plaso/Volatility extraction. Current thesis use is the scenario log, run
@@ -102,9 +100,10 @@ experiments/<run_id>/
 └── analysis/raw_extraction_status.json
 ```
 
-The root manifest is only an index. Acquisition hashes and commands remain in
-`acquisition.json`; raw-tool versions, invocations, output hashes, zero results,
-and failures remain in `raw_extraction_status.json`.
+The root manifest remains a small index. The Father calibration adds one concise
+operational `scenario_facts` block; acquisition hashes and commands remain in
+`acquisition.json`, while raw-tool versions, invocations, output hashes, zero
+results, and failures remain in `raw_extraction_status.json`.
 
 ## Evidence Contract
 

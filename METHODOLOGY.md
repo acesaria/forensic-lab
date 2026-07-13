@@ -100,8 +100,10 @@ Every thesis run must retain:
 
 The run-root manifest is a small index. It points to the append-only command
 log, `dumps/acquisition.json`, and `analysis/raw_extraction_status.json`; it does
-not embed scenario parameters, step facts, expected observables, evidence
-hashes, or full tool records.
+not embed scenario parameters, per-step records, expected observables, evidence
+hashes, or full tool records. The Father calibration includes one concise
+`scenario_facts` block for deployment, activation, PIDs, privilege, and
+execution validation.
 
 Memory provenance includes the full-image SHA-256, byte size, acquisition
 timestamp and duration, exact `virsh dump --memory-only` command, and reported

@@ -47,6 +47,7 @@ class RunContext:
         self.ended_at: str | None = None
         self.final_status = "running"
         self.guest: dict[str, Any] = {}
+        self.scenario_facts: dict[str, Any] = {}
         self.artifacts: dict[str, str] = {
             "command_log": self._relative_path(self.command_log_path),
         }
@@ -79,6 +80,10 @@ class RunContext:
     def finalize(self, status: str) -> None:
         self.final_status = status
         self.ended_at = self.now()
+        self._write_manifest()
+
+    def record_scenario_facts(self, facts: dict[str, Any]) -> None:
+        self.scenario_facts = self.render(facts)
         self._write_manifest()
 
     def update_environment(
@@ -131,6 +136,8 @@ class RunContext:
             "status": self.final_status,
             "artifacts": dict(sorted(self.artifacts.items())),
         }
+        if self.scenario_facts:
+            data["scenario_facts"] = self.scenario_facts
         self.manifest_path.write_text(
             json.dumps(data, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",

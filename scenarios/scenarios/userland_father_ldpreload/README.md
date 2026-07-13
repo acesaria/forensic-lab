@@ -1,114 +1,106 @@
 # userland_father_ldpreload
 
-`userland_father_ldpreload` is the Father-inspired LD_PRELOAD scenario for the
-manual investigation thesis path. It uses the real Father source in a controlled
-VM/lab context, builds a run-local shared object, and exercises a small set of
-safe behaviors relevant to dynamic-linker hijacking.
+`userland_father_ldpreload` is a simple calibration case for real system-wide
+LD_PRELOAD persistence. It builds the pinned Father source inside a disposable
+guest, installs the resulting shared object at
+`/usr/local/lib/forensic-lab/father/selinux.so.3`, and atomically activates it
+through `/etc/ld.so.preload`.
 
-This is a post-mortem DFIR scenario. It is not a live EDR/SIEM use case, a
-wild-malware deployment, or an attempt to execute every Father capability.
+The scenario is for isolated thesis VMs only. It refuses the local executor, so
+the Father archive, build, shared object, and activation helper are never run on
+the development host.
 
-## Scope
+## Prerequisites
 
-Selected behavior:
+- a disposable, isolated lab VM restored to its baseline snapshot;
+- VM-backed execution through `python cli.py run`;
+- working SSH access and non-interactive `sudo -n` to effective UID 0 in the guest;
+- guest `python3`, `gcc`, `make`, `libpam0g-dev`, `libgcrypt20-dev`, and
+  `libgcrypt20` (the orchestrator temporarily enables VM networking only if it
+  must install missing build prerequisites);
+- dynamically linked `/usr/bin/python3` and `/usr/bin/sleep` binaries.
 
-- build Father's real `rk.so` from the pinned source archive;
-- configure only the temporary run-local source copy;
-- load the installed library with explicit `LD_PRELOAD` for a bounded process;
-- exercise the accept-hook source-port path with the configured password and keep
-  a bounded localhost-only shell/session open for memory acquisition;
-- observe Father prefix-based file hiding as contextual behavior.
+## Operational effect
 
-Out of scope:
+The implementation reading order is deliberately short: `scenario.yml` defines
+the four actions and all guest paths, `steps.py` performs those actions over
+SSH, and `files/activate_system_preload.py` contains the privileged guest
+transaction. No other scenario module contains Father behavior.
 
-- local privilege escalation;
-- reverse shell, external network access, or privilege escalation;
-- malicious LKM, ptrace, CopyFail, GnuPG tampering, time bomb, or full APT
-  behavior;
-- system-wide LD_PRELOAD persistence;
-- destructive cleanup, log wiping, timestomping, broad anti-detection, or live
-  telemetry logic.
+The four scenario steps stage and configure the pinned Father archive, build
+its real `rk.so`, and install it at the documented root-owned guest path. Before
+changing `/etc/ld.so.preload`, the root activation helper starts one Python
+process with an explicit `LD_PRELOAD` value and requires the shared object to
+appear in that process's `/proc/self/maps`.
 
-## Forensic Intent
+The run-local Father configuration uses a non-matching preload-hiding token, so
+this calibration does not add hiding of `/etc/ld.so.preload`. It does not
+exercise Father's other hiding or shell capabilities.
 
-The scenario generates evidence that can be manually investigated after
-acquisition:
+After that preflight succeeds, the helper preserves the exact pre-existing
+`/etc/ld.so.preload` bytes under
+`/tmp/forensic-lab/father_ldpreload/recovery/`. If the file did not exist, it
+writes an explicit `ld.so.preload.was_absent` marker instead. The final preload
+content retains any existing entries, adds the Father path, and is installed
+with an atomic same-directory replacement.
 
-- disk/filesystem artifacts;
-- memory process, mapping, and socket artifacts;
-- timeline artifacts;
-- profile comparison artifacts.
+Activation starts three detached `/usr/bin/sleep` processes for 30 minutes.
+The step succeeds only if every process remains alive and maps the installed
+shared object. The run manifest records one concise `scenario_facts` block:
 
-The teaching goal is to keep the case understandable: real Father source,
-bounded execution, explicit safety limits, and enough artifacts for the
-post-mortem workflow to correlate filesystem, timeline, and memory evidence.
+- deployed files;
+- system-wide preload activation;
+- affected PIDs;
+- privilege used;
+- validation result.
 
-Ground truth and expected artifacts may still be written by migration-era code,
-but they are not current scoring requirements. Current thesis analysis uses raw
-TSK, Plaso, and Volatility exports plus manual investigation notes.
+These are execution-validation facts, not automatic detection results or a
+forensic conclusion. The append-only command log retains the build commands,
+source hash, privilege-bearing activation command, and validation output.
 
-## Implementation Shape
+## Acquisition moment
 
-The scenario extracts the pinned Father archive into the run workspace, edits
-only that temporary copy's `src/config.h`, runs `make father`, and copies the
-built `rk.so` to the scenario's lab install path.
-
-The run writes a scenario-local preload artifact and activates the library with
-an explicit `LD_PRELOAD` environment for one bounded Python listener. The
-accept-hook client connects only to `127.0.0.1` from the configured source port,
-sends the configured password, and keeps the socket-backed shell/session open
-for `process_duration_seconds`.
-
-The manifest defines seven steps:
-
-1. `prepare_father_source`
-2. `configure_father`
-3. `build_father_rootkit`
-4. `install_preload_rootkit`
-5. `trigger_accept_hook_capability`
-6. `observe_file_hiding_effect`
-7. `record_postconditions`
-
-## Running
-
-Local engine validation:
-
-```bash
-.venv/bin/python cli.py run-scenario \
-  scenarios/scenarios/userland_father_ldpreload/scenario.yml \
-  --out-dir /tmp/father_local --run-id father_local
-```
-
-VM-backed scenario execution without acquisition:
-
-```bash
-.venv/bin/python cli.py run --distro ubuntu-22.04 \
-  --scenario userland_father_ldpreload --no-acquire
-```
-
-Full thesis run:
+Use the normal full run:
 
 ```bash
 .venv/bin/python cli.py run --distro ubuntu-22.04 \
   --scenario userland_father_ldpreload
 ```
 
-## Outputs
+The orchestrator begins memory acquisition after all three mapped processes
+have passed validation and while the VM is still ON. It then powers the VM OFF
+for disk acquisition. `/etc/ld.so.preload`, the installed `.so`, and the
+recovery copy or absence marker are deliberately left present throughout this
+sequence.
 
-A scenario run writes:
+`--no-acquire` is only for controlled troubleshooting and leaves the activated
+guest running. Restore the VM snapshot immediately afterward.
 
-- `manifest.json`
-- `command_log.jsonl`
+## Failure-only recovery
 
-Full VM-backed runs then acquire RAM and disk while the listener and bounded
-shell/session are still alive and extract raw outputs for manual filesystem,
-timeline, and memory investigation:
+The privileged activation helper remains alive while it changes the preload
+configuration and validates the child processes. If the explicit preflight,
+atomic activation, process liveness check, or mapping check fails, that already
+running helper terminates any children, atomically restores the original
+`/etc/ld.so.preload` state (including original absence), and restores or removes
+the installed library. The failed validation and any recovery error remain
+explicit in the command log and failed manifest status.
 
-- `analysis/bodyfile`
-- `analysis/timeline.plaso`
-- `analysis/timeline.jsonl`
-- `analysis/vol3.json`
-- `analysis/raw_extraction_status.json`
+This rollback is only a failure path; there is no successful-run cleanup
+variant in this scenario. Snapshot restoration remains the primary cleanup and
+emergency-recovery mechanism.
 
-Cleanup/evasion and deterministic randomization of paths, ports, prefixes, and
-related values are future variants, not the default scenario.
+## Known safety constraints
+
+- System-wide preload affects every newly started dynamically linked guest
+  process, including administrative and shutdown commands.
+- Father retains its upstream hooks. The scenario configures the preload-hiding
+  token away from `/etc/ld.so.preload` and does not trigger its shell,
+  privilege-escalation, other file-hiding, network-hiding, or other
+  capabilities, but the loaded code is not a benign substitute.
+- Do not run `cli.py run-scenario` for this scenario: that command uses the
+  local executor and is intentionally rejected.
+- Do not reuse the guest for unrelated work after activation. Acquire the
+  evidence, then restore the baseline snapshot.
+- This calibration adds no evasion, cleanup, automatic detector, canonical
+  matching, expected-observable, or scoring behavior.

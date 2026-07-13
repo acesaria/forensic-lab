@@ -1,105 +1,74 @@
 scenario_id: userland_father_ldpreload
-name: Father LD_PRELOAD DFIR
-objective: Generate post-mortem evidence for controlled Father LD_PRELOAD activation and an accept-hook shell/session.
+name: Father system-wide LD_PRELOAD calibration
+objective: Generate a bounded calibration case using the pinned Father shared object and real /etc/ld.so.preload persistence.
 
 attck:
   - T1574.006
-  - T1014
-  - T1059.004
 
 safety:
-  - localhost-only accept-hook shell/session
-  - no reverse shell or external network
-  - no privilege escalation
-  - no system-wide LD_PRELOAD persistence
-  - no cleanup/evasion in the default scenario
+  - disposable isolated thesis VM only
+  - VM snapshot restoration is the primary cleanup mechanism
+  - VM-backed SSH execution is mandatory; local execution is refused
+  - no external network after build prerequisites
+  - no evasion or cleanup variant behavior
 
 paths:
   root: /tmp/forensic-lab/father_ldpreload
   source_dir: "{root}/source"
-  config_dir: "{root}/config"
-  lib_dir: "{root}/lib"
-  run_dir: "{root}/run"
-  observed_dir: "{root}/observed_files"
+  recovery_dir: "{root}/recovery"
+  upstream_archive_path: "{source_dir}/father-upstream-4eb2712.tar"
+  father_lock_path: "{source_dir}/father.lock.yml"
+  activation_helper_path: "{source_dir}/activate_system_preload.py"
+  father_source_tree: "{source_dir}/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"
+  father_config_path: "{father_source_tree}/src/config.h"
+  father_built_library_path: "{father_source_tree}/rk.so"
+  installed_library_path: /usr/local/lib/forensic-lab/father/selinux.so.3
+  preload_config_path: /etc/ld.so.preload
+  preload_backup_path: "{recovery_dir}/ld.so.preload.before"
+  preload_absent_marker_path: "{recovery_dir}/ld.so.preload.was_absent"
 
 variables:
-  archive_name: father-upstream-4eb2712.tar
-  lock_name: father.lock.yml
-  source_tree_name: Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332
-  listener_name: father_accept_listener.py
-  library_name: selinux.so.3
-  preload_artifact_name: ld.so.preload
-  prefix: lobster
-  env_var: lobster
-  password: lobster
-  gid: 1337
-  hidden_port_hex: D431
-  listen_host: 127.0.0.1
-  listen_port: 2222
-  source_port: 54321
-  process_duration_seconds: 600
+  preload_hide_token: father_calibration_nohide
+  process_duration_seconds: 1800
 
 capabilities:
-  ld_preload: true
-  accept_hook_shell: true
-  prefix_hiding_observation: true
+  system_wide_ld_preload: true
+  controlled_process_mapping: true
+  failure_only_recovery: true
   cleanup: false
 
 steps:
   - id: prepare_father_source
     type: python
     function: prepare_father_source
-    capability: provenance
-    intent: Copy the pinned Father archive, source lock, and scenario wrapper.
+    intent: Stage the pinned Father archive, lock, and activation helper inside the guest.
 
   - id: configure_father
     type: python
     function: configure_father
-    capability: configuration
-    intent: Extract Father into the run workspace and configure only that temporary copy.
+    intent: Configure only the extracted guest copy with the documented installation path.
 
   - id: build_father_rootkit
     type: python
     function: build_father_rootkit
-    capability: ld_preload
-    intent: Compile Father's real rk.so from the configured run-local source tree.
+    intent: Build the pinned Father rk.so inside the guest.
 
-  - id: install_preload_rootkit
+  - id: install_activate_and_validate
     type: python
-    function: install_preload_rootkit
-    capability: ld_preload
-    intent: Write the scenario-local preload artifact and record LD_PRELOAD activation.
-
-  - id: trigger_accept_hook_capability
-    type: python
-    function: trigger_accept_hook_capability
-    capability: accept_hook_shell
-    intent: Trigger a bounded localhost-only accept-hook shell/session.
-
-  - id: observe_file_hiding_effect
-    type: python
-    function: observe_file_hiding_effect
-    capability: prefix_hiding_observation
-    intent: Observe prefix-based hiding while preserving disk-visible evidence.
-
-  - id: record_postconditions
-    type: python
-    function: record_postconditions
-    capability: provenance
-    intent: Record hashes, PIDs, paths, observations, and summary state.
+    function: install_activate_and_validate
+    intent: Preflight the installed library, atomically activate /etc/ld.so.preload, and validate multiple mapped processes.
 
 evidence_sources:
   - disk/filesystem
   - memory
   - timeline
-  - baseline comparison
 
 postconditions:
-  - installed shared object and scenario-local preload artifact are present
-  - mapped shared object is expected in the hooked listener process
-  - accept-hook shell/session is bounded and localhost-only
-  - prefix-matching file remains disk-visible for post-mortem reconstruction
-  - cleanup/evasion is a future variant only
+  - /etc/ld.so.preload names the installed Father shared object
+  - the shared object and preload configuration remain present for acquisition
+  - three controlled dynamically linked processes remain alive with the shared object mapped
+  - the manifest contains only concise operational execution facts
+  - automatic detection and forensic conclusions remain out of scope
 
 prerequisites:
   father_build:
