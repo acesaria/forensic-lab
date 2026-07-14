@@ -1,4 +1,4 @@
 # Thesis scenario registry. Every entry is a declarative scenario
 # (scenario_yml); the scenario.yml owns its own step sequence.
 userland_father_ldpreload:
-  scenario_yml: scenarios/scenarios/userland_father_ldpreload/scenario.yml
+  scenario_yml: scenarios/userland_father_ldpreload/scenario.yml

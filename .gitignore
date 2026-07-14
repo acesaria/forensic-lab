@@ -52,7 +52,7 @@ shared/experiments/*
 shared/baselines/
 
 *.bak
-!scenarios/scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar
+!scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar
 
 # Local audit scaffolding (not part of the codebase)
 audit/
