@@ -47,6 +47,14 @@ PROJECT_CONTEXT.md first, then only the files the task needs.
   the task asks.
 - Never add tests to legacy code.
 
+## Python commands
+
+Always use the repository virtual environment for Python and pytest commands:
+
+`.venv/bin/python -m pytest`
+
+Do not try the system `python` or `python3` first.
+
 ## Git
 
 - Commit as the repository's configured identity. No AI attribution:
