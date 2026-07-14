@@ -17,7 +17,6 @@ DEFAULT_PLUGINS = (
     "linux.psscan",
     "linux.bash",
     "linux.sockstat",
-    "linux.netstat",
     "linux.malfind",
     "linux.lsmod",
     "linux.proc.Maps",
