@@ -120,6 +120,9 @@ class VMManager:
         """Return the host-side disk path for vm_name. Used by Dumper."""
         return self._provider.get_disk_path(vm_name)
 
+    def snapshot_created_at(self, vm_name: str, snapshot_name: str) -> str:
+        return self._provider.snapshot_created_at(vm_name, snapshot_name)
+
     def wait_ssh_ready(
         self,
         vm_name: str,

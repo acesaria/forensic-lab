@@ -28,6 +28,7 @@ Introspection:
 
 Snapshots (disk-only, taken while VM is shutoff):
     snapshot_exists(vm_name, snapshot_name) -> bool
+    snapshot_created_at(vm_name, snapshot_name) -> str
     create_snapshot(vm_name, snapshot_name) -> None
     revert_snapshot(vm_name, snapshot_name) -> None
 
@@ -44,6 +45,7 @@ import logging
 import subprocess
 import time
 import xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -487,6 +489,23 @@ class Provider:
             return True
         except libvirt.libvirtError:
             return False
+
+    def snapshot_created_at(self, vm_name: str, snapshot_name: str) -> str:
+        dom = self._connect().lookupByName(vm_name)
+        snap = dom.snapshotLookupByName(snapshot_name)
+        creation_time = ET.fromstring(snap.getXMLDesc(0)).findtext("creationTime")
+        if creation_time is None:
+            raise RuntimeError(
+                f"Snapshot '{snapshot_name}' on '{vm_name}' has no creationTime"
+            )
+        try:
+            created_at = datetime.fromtimestamp(int(creation_time), timezone.utc)
+        except (ValueError, OverflowError, OSError) as exc:
+            raise RuntimeError(
+                f"Snapshot '{snapshot_name}' on '{vm_name}' has invalid creationTime: "
+                f"{creation_time!r}"
+            ) from exc
+        return created_at.isoformat(timespec="seconds").replace("+00:00", "Z")
 
     def create_snapshot(self, vm_name: str, snapshot_name: str) -> None:
         """Create a disk-only snapshot. VM must be shutoff before calling this."""

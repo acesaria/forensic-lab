@@ -36,6 +36,7 @@ def run_scenario(
     repo_root: str | Path | None = None,
     distro: str | None = None,
     profile: str | None = None,
+    baseline: dict[str, str] | None = None,
     internet_on: Callable[[], None] | None = None,
     internet_off: Callable[[], None] | None = None,
 ) -> RunContext:
@@ -51,6 +52,7 @@ def run_scenario(
         prerequisites=plan.prerequisites,
         distro=distro,
         profile=profile or "vanilla",
+        baseline=baseline,
         repo_root=repo_root,
         internet_on=internet_on,
         internet_off=internet_off,

@@ -29,6 +29,7 @@ def extract_plugins(
     distro_id: str,
     plugins: tuple[str, ...] = DEFAULT_PLUGINS,
     kernel_release: str | None = None,
+    isf_path: Path | None = None,
     errors: dict[str, str] | None = None,
     invocations: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, list[dict[str, Any]] | None]:
@@ -43,6 +44,7 @@ def extract_plugins(
                 distro_id,
                 plugin,
                 kernel_release=kernel_release,
+                isf_path=isf_path,
                 invocation=invocation,
             )
             invocation.setdefault("error", None)

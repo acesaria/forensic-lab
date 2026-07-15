@@ -147,9 +147,11 @@ class VolatilityRunner:
         plugin: str,
         extra_args: list[str] | None = None,
         kernel_release: str | None = None,
+        isf_path: Path | None = None,
         invocation: dict | None = None,
     ) -> list[dict]:
-        isf_path = self.resolve_isf(distro_id, kernel_release)
+        if isf_path is None:
+            isf_path = self.resolve_isf(distro_id, kernel_release)
         return _run_vol_command(
             self._vol_bin,
             memory_path,

@@ -189,6 +189,9 @@ class ForensicOrchestrator:
         console.step_header("baseline restoration and readiness")
         try:
             vm_name = self._reset_lab(distro_id)
+            snapshot_created_at = self.vm_manager.snapshot_created_at(
+                vm_name, BASELINE_SNAPSHOT
+            )
         finally:
             console.section_end()
         run_id = _make_run_id(distro_id, scenario_id)
@@ -209,6 +212,11 @@ class ForensicOrchestrator:
                     repo_root=self.repo_root,
                     distro=distro_id,
                     profile=profile,
+                    baseline={
+                        "vm_name": vm_name,
+                        "snapshot": BASELINE_SNAPSHOT,
+                        "snapshot_created_at": snapshot_created_at,
+                    },
                     internet_on=functools.partial(self.vm_manager.internet_on, vm_name),
                     internet_off=functools.partial(self.vm_manager.internet_off, vm_name),
                 )
@@ -223,6 +231,7 @@ class ForensicOrchestrator:
             console.section_end()
 
         if not acquire:
+            ctx.finalize_full_run()
             console.step_header("summary")
             console.ok(f"scenario status: {ctx.final_status}")
             console.info(f"distro/profile: {distro_id} / {profile}")
@@ -244,6 +253,7 @@ class ForensicOrchestrator:
             ctx=ctx,
             kernel_release=(guest or {}).get("kernel"),
         )
+        ctx.finalize_full_run()
         console.step_header("summary")
         console.ok(f"scenario status: {ctx.final_status}")
         console.info(f"distro/profile: {distro_id} / {profile}")
@@ -345,11 +355,16 @@ class ForensicOrchestrator:
         vol_errors: dict[str, str] = {}
         vol_invocations: dict[str, dict[str, Any]] = {}
         try:
+            isf_path = self._vol_runner.resolve_isf(
+                distro_id, kernel_release
+            ).resolve()
+            isf_sha256 = file_sha256(isf_path)
             vol_rows = extract_plugins(
                 self._vol_runner,
                 memory_path,
                 distro_id,
                 kernel_release=kernel_release,
+                isf_path=isf_path,
                 errors=vol_errors,
                 invocations=vol_invocations,
             )
@@ -385,6 +400,7 @@ class ForensicOrchestrator:
                 "path": str(vol_path),
                 "tool": "volatility3",
                 "version": reported_version("volatility3", self._raw_tools),
+                "isf": {"path": str(isf_path), "sha256": isf_sha256},
                 "plugin_rows": plugin_counts,
                 "result": result_state,
                 "invocations": vol_invocations,

@@ -23,6 +23,7 @@ class RunContext:
         prerequisites: dict[str, Any] | None = None,
         distro: str | None = None,
         profile: str = "vanilla",
+        baseline: dict[str, str] | None = None,
         repo_root: str | Path | None = None,
         internet_on: Callable[[], None] | None = None,
         internet_off: Callable[[], None] | None = None,
@@ -36,6 +37,7 @@ class RunContext:
         self.prerequisites = prerequisites or {}
         self.distro = distro
         self.profile = profile
+        self.baseline = dict(baseline) if baseline is not None else None
         self.repo_root = Path(repo_root) if repo_root is not None else None
         self.internet_on = internet_on
         self.internet_off = internet_off
@@ -45,6 +47,7 @@ class RunContext:
         self.command_log_path = self.out_dir / "command_log.jsonl"
         self.started_at = self.now()
         self.ended_at: str | None = None
+        self.full_run_ended_at: str | None = None
         self.final_status = "running"
         self.guest: dict[str, Any] = {}
         self.scenario_facts: dict[str, Any] = {}
@@ -80,6 +83,10 @@ class RunContext:
     def finalize(self, status: str) -> None:
         self.final_status = status
         self.ended_at = self.now()
+        self._write_manifest()
+
+    def finalize_full_run(self) -> None:
+        self.full_run_ended_at = self.now()
         self._write_manifest()
 
     def record_scenario_facts(self, facts: dict[str, Any]) -> None:
@@ -132,10 +139,13 @@ class RunContext:
             "timestamps": {
                 "started_at": self.started_at,
                 "ended_at": self.ended_at,
+                "full_run_ended_at": self.full_run_ended_at,
             },
             "status": self.final_status,
             "artifacts": dict(sorted(self.artifacts.items())),
         }
+        if self.baseline is not None:
+            data["baseline"] = self.baseline
         if self.scenario_facts:
             data["scenario_facts"] = self.scenario_facts
         self.manifest_path.write_text(
