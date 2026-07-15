@@ -202,7 +202,10 @@ def test_declarative_experiment_preserves_vm_and_acquisition_order(
         assert fake_vm.state == "on"
         events.append("scenario")
         scenario_call.update(distro=kwargs["distro"], profile=kwargs["profile"])
-        return FakeContext()
+        ctx = FakeContext()
+        ctx.final_status = "completed"
+        ctx.manifest_path = Path(kwargs["out_dir"]) / "manifest.json"
+        return ctx
 
     def fake_raw_extraction(
         _run_id,
@@ -214,7 +217,11 @@ def test_declarative_experiment_preserves_vm_and_acquisition_order(
         assert fake_vm.state == "off"
         assert Path(manifest_path).is_file()
         events.append("raw_extraction")
-        return {"status": "recorded"}
+        return {
+            "volatility": {"status": "completed"},
+            "tsk": {"status": "completed"},
+            "plaso": {"status": "completed"},
+        }
 
     paths = ProjectPaths(
         repo_root=Path.cwd(),

@@ -2,7 +2,7 @@
 orchestrator/core/console.py
 
 Tiny centralized helpers for status lines. Thin wrapper over `logging` so
-DEBUG behavior, log levels, and per-module loggers are untouched.
+formatting, log levels, and per-module loggers stay centralized.
 
 Convention
 ----------
@@ -11,6 +11,7 @@ Convention
   [i]  info / state           console.info(msg)
   [!]  warning                console.warn(msg)
   [-]  error                  console.err(msg)
+  [d]  debug record           PrefixColorFormatter
   === title ===  section      console.section(title)
   --- label  ---  step header console.step_header(label)
 
@@ -53,6 +54,7 @@ _COLORS = {
     "[i]": "\033[36m",  # cyan:   info
     "[!]": "\033[33m",  # yellow: warning
     "[-]": "\033[31m",  # red:    error
+    "[d]": "\033[2m",   # dim:    debug
 }
 
 _INDENT_UNIT = "    "
@@ -72,15 +74,18 @@ def _color_enabled() -> bool:
 
 
 class PrefixColorFormatter(logging.Formatter):
-    """Color the leading [X] token of a record; pass everything else through."""
+    """Prefix DEBUG records and color recognized leading status tokens."""
 
     def format(self, record: logging.LogRecord) -> str:
         msg = super().format(record)
-        if not _color_enabled():
-            return msg
         # Preserve leading newlines and indentation; locate the prefix after them.
         stripped = msg.lstrip("\n").lstrip(" ")
         leading = msg[: len(msg) - len(stripped)]
+        if record.levelno == logging.DEBUG and not stripped.startswith("[d]"):
+            stripped = f"[d] {stripped}"
+            msg = f"{leading}{stripped}"
+        if not _color_enabled():
+            return msg
         for token, color in _COLORS.items():
             if stripped.startswith(token):
                 return f"{leading}{color}{token}{_RESET}{stripped[len(token):]}"
@@ -139,9 +144,8 @@ def step_header(label: str) -> None:
 
 
 def section_end() -> None:
-    """Blank line + reset depth to 0. Closes a step_header block."""
+    """Reset depth to 0. Closes a step_header block."""
     _indent_level.set(0)
-    _log.info("")
 
 
 # --- explicit nesting ------------------------------------------------------

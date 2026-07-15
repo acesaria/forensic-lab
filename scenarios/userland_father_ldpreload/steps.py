@@ -3,15 +3,13 @@
 from __future__ import annotations
 
 import json
-import logging
 import shlex
 from pathlib import Path
 
+from orchestrator.core import console
 from orchestrator.core.provenance import excerpt, file_sha256
 from orchestrator.scenarios.executors import SSHClientExecutor
 
-
-logger = logging.getLogger(__name__)
 
 SCENARIO_ROOT = Path(__file__).resolve().parent
 FATHER_ARCHIVE = SCENARIO_ROOT / "files/father-upstream-4eb2712.tar"
@@ -24,7 +22,7 @@ FATHER_COMMIT = "4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"
 def prepare_father_source(ctx, step):
     """Copy the pinned source and the small activation helper into the guest."""
     paths = _vm_parameters(ctx)
-    logger.info("[1/4] staging pinned Father source in the guest")
+    console.step("1/4 Staging pinned Father source...")
 
     for source, destination in (
         (FATHER_ARCHIVE, paths["upstream_archive_path"]),
@@ -50,7 +48,7 @@ def prepare_father_source(ctx, step):
 def configure_father(ctx, step):
     """Extract Father and set the fixed calibration values in its config.h."""
     paths = _vm_parameters(ctx)
-    logger.info("[2/4] configuring the extracted Father copy")
+    console.step("2/4 Configuring the extracted Father copy...")
 
     values = {
         "PRELOAD": paths["preload_hide_token"],
@@ -90,7 +88,10 @@ def configure_father(ctx, step):
 def build_father_rootkit(ctx, step):
     """Verify build prerequisites, then build the pinned rk.so."""
     paths = _vm_parameters(ctx)
-    logger.info("[3/4] building pinned Father rk.so in the guest")
+    console.step(
+        "3/4 Verifying baseline build prerequisites and building pinned Father "
+        "rk.so (no scenario-time package installation)..."
+    )
     _ensure_build_dependencies(ctx, step)
 
     _run(
@@ -115,7 +116,7 @@ def build_father_rootkit(ctx, step):
 def install_activate_and_validate(ctx, step):
     """Run the guest transaction that installs, activates, and validates Father."""
     paths = _vm_parameters(ctx)
-    logger.info("[4/4] activating /etc/ld.so.preload atomically")
+    console.step("4/4 Activating system-wide preload...")
 
     helper_args = [
         "/usr/bin/python3",

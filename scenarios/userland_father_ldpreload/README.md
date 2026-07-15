@@ -98,8 +98,6 @@ emergency-recovery mechanism.
   token away from `/etc/ld.so.preload` and does not trigger its shell,
   privilege-escalation, other file-hiding, network-hiding, or other
   capabilities, but the loaded code is not a benign substitute.
-- Do not run `cli.py run-scenario` for this scenario: that command uses the
-  local executor and is intentionally rejected.
 - Do not reuse the guest for unrelated work after activation. Acquire the
   evidence, then restore the baseline snapshot.
 - This calibration adds no evasion, cleanup, automatic detector, canonical

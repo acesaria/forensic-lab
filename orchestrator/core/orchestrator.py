@@ -179,14 +179,22 @@ class ForensicOrchestrator:
                 f"scenario '{scenario_id}': scenario.yml not found: {scenario_yml}"
             )
 
-        console.section(f"experiment: {scenario_id} on {distro_id}")
-        vm_name = self._reset_lab(distro_id)
+        profile = "vanilla"
+        console.section(
+            f"experiment: {scenario_id} | distro: {distro_id} | profile: {profile}"
+        )
+        console.step_header("baseline restoration and readiness")
+        try:
+            vm_name = self._reset_lab(distro_id)
+        finally:
+            console.section_end()
         run_id = _make_run_id(distro_id, scenario_id)
         run_root = self._paths.experiments_dir / run_id
 
         ctx = None
         guest: dict[str, Any] | None = None
 
+        console.step_header("scenario execution")
         try:
             with self.vm_manager.open_ssh(vm_name) as ssh:
                 ctx = run_scenario(
@@ -196,7 +204,7 @@ class ForensicOrchestrator:
                     run_id=run_id,
                     repo_root=self.repo_root,
                     distro=distro_id,
-                    profile="vanilla",
+                    profile=profile,
                     internet_on=functools.partial(self.vm_manager.internet_on, vm_name),
                     internet_off=functools.partial(self.vm_manager.internet_off, vm_name),
                 )
@@ -211,19 +219,44 @@ class ForensicOrchestrator:
             console.section_end()
 
         if not acquire:
-            console.ok(f"declarative run complete (no acquisition): {run_root}")
+            console.step_header("summary")
+            console.ok(f"scenario status: {ctx.final_status}")
+            console.info(f"distro/profile: {distro_id} / {profile}")
+            console.info("acquisition: intentionally skipped (--no-acquire)")
+            console.info("raw extraction: intentionally skipped (--no-acquire)")
+            console.info("final VM state: running")
+            console.info(f"run directory: {run_root}")
+            console.info(f"root manifest: {ctx.manifest_path}")
+            console.section_end()
             return None
 
         manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
         if ctx is not None:
             ctx.record_acquisition_output(manifest_path)
-        self._extract_raw_outputs(
+        raw_status, raw_status_path = self._extract_raw_outputs(
             run_id,
             distro_id,
             manifest_path,
             ctx=ctx,
             kernel_release=(guest or {}).get("kernel"),
         )
+        console.step_header("summary")
+        console.ok(f"scenario status: {ctx.final_status}")
+        console.info(f"distro/profile: {distro_id} / {profile}")
+        console.ok("acquisition status: completed")
+        for label, key in (
+            ("Volatility", "volatility"),
+            ("TSK", "tsk"),
+            ("Plaso", "plaso"),
+        ):
+            state = raw_status.get(key, {}).get("status", "unknown")
+            emit = console.ok if state == "completed" else console.warn
+            emit(f"{label}: {state}")
+        console.info("final VM state: off")
+        console.info(f"run directory: {run_root}")
+        console.info(f"root manifest: {ctx.manifest_path}")
+        console.info(f"raw extraction status: {raw_status_path}")
+        console.section_end()
         return manifest_path
 
     @staticmethod
@@ -261,27 +294,30 @@ class ForensicOrchestrator:
         *,
         ctx=None,
         kernel_release: str | None = None,
-    ) -> None:
+    ) -> tuple[dict[str, Any], Path]:
         """Produce raw TSK, Plaso, and Volatility exports after acquisition."""
         analysis_dir = self._paths.run_analysis_dir(run_id)
         analysis_dir.mkdir(parents=True, exist_ok=True)
 
         console.step_header("raw extraction")
-        status = self._produce_raw_outputs(
-            run_id,
-            distro_id,
-            manifest_path,
-            analysis_dir,
-            kernel_release=kernel_release,
-        )
-        status_path = analysis_dir / "raw_extraction_status.json"
-        status_path.write_text(
-            json.dumps(status, indent=2, sort_keys=True) + "\n",
-            encoding="utf-8",
-        )
-        if ctx is not None:
-            ctx.record_raw_analysis_output(status_path)
-        console.section_end()
+        try:
+            status = self._produce_raw_outputs(
+                run_id,
+                distro_id,
+                manifest_path,
+                analysis_dir,
+                kernel_release=kernel_release,
+            )
+            status_path = analysis_dir / "raw_extraction_status.json"
+            status_path.write_text(
+                json.dumps(status, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            if ctx is not None:
+                ctx.record_raw_analysis_output(status_path)
+            return status, status_path
+        finally:
+            console.section_end()
 
     def _produce_raw_outputs(
         self,
@@ -328,7 +364,7 @@ class ForensicOrchestrator:
                     else "partial_results"
                 )
                 console.warn(
-                    "vol3 extraction degraded: "
+                    f"vol3 extraction {state}: "
                     + "; ".join(f"{name}: {err}" for name, err in vol_errors.items())
                 )
             else:
@@ -349,7 +385,7 @@ class ForensicOrchestrator:
             if vol_errors:
                 status["volatility"]["errors"] = vol_errors
         except Exception as exc:
-            console.warn(f"vol3 extraction degraded: {exc}")
+            console.warn(f"vol3 extraction failed: {exc}")
             status["volatility"] = _failed_status(
                 "volatility3",
                 reported_version("volatility3", self._raw_tools),
@@ -385,7 +421,7 @@ class ForensicOrchestrator:
                 "output": _output_metadata(bodyfile_path),
             }
         except Exception as exc:
-            console.warn(f"tsk extraction degraded: {exc}")
+            console.warn(f"tsk extraction failed: {exc}")
             status["tsk"] = _failed_status(
                 "sleuthkit",
                 reported_version("sleuthkit", self._raw_tools),
@@ -417,7 +453,7 @@ class ForensicOrchestrator:
                 },
             }
         except Exception as exc:
-            console.warn(f"plaso timeline degraded: {exc}")
+            console.warn(f"plaso timeline failed: {exc}")
             status["plaso"] = _failed_status(
                 "plaso",
                 reported_version("plaso", self._raw_tools),
@@ -587,16 +623,20 @@ class ForensicOrchestrator:
         disk_dump_path = run_dir / "disk" / EVIDENCE_DISK_FILENAME
 
         console.step_header("acquisition")
-        memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)
-        # qemu-img convert needs the qcow2 not held by QEMU; a clean guest
-        # shutdown is the simplest way to release the lock.
-        console.step(f"acquiring disk from '{vm_name}'...")
-        self.vm_manager.shutdown_vm(vm_name)
-        disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
-
-        console.section_end()
-
-        return self.dumper.write_manifest(run_id, scenario_id, memory_meta, disk_meta)
+        try:
+            memory_meta = self.dumper.acquire_memory(vm_name, memory_dump_path)
+            # qemu-img convert needs the qcow2 not held by QEMU; a clean guest
+            # shutdown is the simplest way to release the lock.
+            console.step(
+                f"shutting down '{vm_name}' for offline disk acquisition..."
+            )
+            self.vm_manager.shutdown_vm(vm_name)
+            disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
+            return self.dumper.write_manifest(
+                run_id, scenario_id, memory_meta, disk_meta
+            )
+        finally:
+            console.section_end()
 
 
 # --- module helpers ------------------------------------------------------

@@ -20,9 +20,18 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forensic-lab",
         description=(
-            "Linux post-mortem forensic lab. Primary thesis path: "
-            "declarative scenario execution -> run manifest/command log -> "
-            "acquisition -> raw forensic exports -> manual investigation."
+            "Linux post-mortem forensic lab.\n"
+            "Primary thesis path: declarative scenario execution -> "
+            "run manifest/command log\n"
+            "  -> acquisition -> raw forensic exports -> manual investigation."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "First use:\n"
+            "  .venv/bin/python cli.py init\n"
+            "  .venv/bin/python cli.py setup --distro ubuntu-22.04\n"
+            "  .venv/bin/python cli.py run --distro ubuntu-22.04 "
+            "--scenario userland_father_ldpreload"
         ),
     )
     parser.add_argument(
@@ -33,34 +42,37 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
-    # init: one-time host setup (sudo required)
+    init_help = (
+        "One-time host initialization for directories, sudoers, and libvirt "
+        "infrastructure"
+    )
     sub.add_parser(
         "init",
-        help="One-time host setup: system dirs, sudoers, libvirt network/pool",
+        help=init_help,
+        description=init_help,
     )
 
-    # setup: prepare lab VM + build ISF + verify pipeline (idempotent)
+    setup_help = "Prepare one distro/profile VM, baseline, and symbols; run after init"
     setup = sub.add_parser(
         "setup",
-        help=(
-            "Create lab VM, provision baseline, build ISF, and verify raw "
-            "extraction tools (idempotent)"
-        ),
+        help=setup_help,
+        description=setup_help,
     )
     setup.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
 
-    # run: execute an experiment
+    run_help = (
+        "Run one scenario using an existing prepared baseline; setup is not "
+        "started automatically"
+    )
     run = sub.add_parser(
         "run",
-        help=(
-            "Run a VM experiment. The active thesis registry path is "
-            "userland_father_ldpreload."
-        ),
+        help=run_help,
+        description=run_help,
     )
     run.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
     run.add_argument(
         "--scenario",
-        required=True,
+        default="userland_father_ldpreload",
         choices=scenario_keys,
         help="Controlled scenario key to run",
     )
@@ -71,17 +83,13 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         help="Acquire memory + disk after the scenario (default: enabled)",
     )
 
-    # destroy: remove lab VM and storage
-    destroy = sub.add_parser("destroy", help="Destroy lab VM and storage")
-    destroy.add_argument("--distro", required=True, help="Distro ID")
-
-    run_scenario = sub.add_parser(
-        "run-scenario",
-        help="Run a declarative scenario.yml and write a manifest plus command log",
+    destroy_help = "Remove the selected lab VM and its VM storage"
+    destroy = sub.add_parser(
+        "destroy",
+        help=destroy_help,
+        description=destroy_help,
     )
-    run_scenario.add_argument("scenario_yml")
-    run_scenario.add_argument("--out-dir", default=None)
-    run_scenario.add_argument("--run-id", default=None)
+    destroy.add_argument("--distro", required=True, help="Distro ID")
 
     return parser
 
@@ -127,31 +135,6 @@ def _check_prerequisites(raw_tools: dict[str, str]) -> None:
         raise RuntimeError("prereq: Missing required binaries:\n" + "\n".join(missing))
 
 
-# --- no-lab-host handlers ------------------------------------------------
-
-
-def _cmd_run_scenario(args: argparse.Namespace) -> int:
-    from orchestrator.scenarios import run_scenario
-
-    ctx = run_scenario(
-        args.scenario_yml,
-        out_dir=args.out_dir,
-        run_id=args.run_id,
-        repo_root=Path(__file__).resolve().parent,
-    )
-    print(f"scenario run written: {ctx.out_dir}")
-    print(f"  manifest: {ctx.manifest_path}")
-    print(f"  command_log: {ctx.command_log_path}")
-    return 0
-
-
-# This command needs neither libvirt nor the acquisition toolchain, so main()
-# dispatches it before the prerequisite check and orchestrator construction.
-_NO_LAB_HOST_HANDLERS = {
-    "run-scenario": _cmd_run_scenario,
-}
-
-
 # --- main ----------------------------------------------------------------
 
 
@@ -160,9 +143,6 @@ def main() -> None:
     scenarios = load_scenarios(repo_root)
     args = build_parser(tuple(sorted(scenarios.keys()))).parse_args()
     _setup_logging(args.debug)
-
-    if args.command in _NO_LAB_HOST_HANDLERS:
-        sys.exit(_NO_LAB_HOST_HANDLERS[args.command](args))
 
     # The 'setup' and 'run' paths need a valid distro profile; fail fast with a
     # config error before any VM work starts.
@@ -234,7 +214,11 @@ def main() -> None:
 
             elif args.command == "run":
                 if not orchestrator.lab_exists(distro_id):
-                    console.warn(f"lab '{distro_id}' not found; run 'setup' first")
+                    console.err(f"lab VM for distro '{distro_id}' not found")
+                    console.info(
+                        "setup command: "
+                        f".venv/bin/python cli.py setup --distro {distro_id}"
+                    )
                     raise SystemExit(1)
                 # argparse choices guarantee the key exists in the registry.
                 scenario_cfg = scenarios[args.scenario]

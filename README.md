@@ -77,9 +77,6 @@ python cli.py run --distro ubuntu-22.04 --scenario userland_father_ldpreload
 python cli.py destroy --distro ubuntu-22.04
 ```
 
-The Father scenario is VM-only and refuses `run-scenario`, whose executor is
-local. Use the focused scenario tests for host-side syntax and plan validation.
-
 Full runs now stop after scenario execution, acquisition, and raw
 TSK/Plaso/Volatility extraction. Current thesis use is the scenario log, run
 manifest, acquired evidence, raw exports, hashes, tool failures, and manual
