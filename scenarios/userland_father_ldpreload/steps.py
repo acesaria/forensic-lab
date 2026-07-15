@@ -88,7 +88,7 @@ def configure_father(ctx, step):
 
 
 def build_father_rootkit(ctx, step):
-    """Install missing build prerequisites, then build the pinned rk.so."""
+    """Verify build prerequisites, then build the pinned rk.so."""
     paths = _vm_parameters(ctx)
     logger.info("[3/4] building pinned Father rk.so in the guest")
     _ensure_build_dependencies(ctx, step)
@@ -216,60 +216,17 @@ def _ensure_build_dependencies(ctx, step) -> None:
         for item in prerequisites.get(group) or []
     ]
     checks = " && ".join(f"({item['check']})" for item in items)
-    probe = f"if {checks}; then echo present; else echo missing; fi"
-    if _run(
+    result = _run(
         ctx,
         step,
-        probe,
+        checks,
         actor="lab",
         record_type="prerequisite",
-    ).stdout.strip() == "present":
-        return
-
-    _set_internet(ctx, step, enabled=True)
-    try:
-        packages = " ".join(
-            shlex.quote(package)
-            for package in sorted({item["ubuntu_package"] for item in items})
-        )
-        _run(
-            ctx,
-            step,
-            "sudo apt-get update && "
-            f"sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y {packages}",
-            timeout=300,
-            actor="lab",
-            record_type="prerequisite",
-        )
-    finally:
-        _set_internet(ctx, step, enabled=False)
-
-    verified = _run(
-        ctx,
-        step,
-        probe,
-        actor="lab",
-        record_type="prerequisite",
-    ).stdout.strip()
-    if verified != "present":
-        raise RuntimeError("Father build prerequisites are still missing")
-
-
-def _set_internet(ctx, step, *, enabled: bool) -> None:
-    callback = ctx.internet_on if enabled else ctx.internet_off
-    if callback is None:
-        return
-    callback()
-    ctx.log_step(
-        {
-            "step_id": step["id"],
-            "record_type": "prerequisite",
-            "actor": "lab",
-            "action": "internet_on" if enabled else "internet_off",
-            "status": "success",
-            "ended_at": ctx.now(),
-        }
+        check=False,
     )
+    if result.exit_code == 0:
+        return
+    raise RuntimeError("VM baseline is missing Father build prerequisites")
 
 
 def _last_json(output: str) -> dict:

@@ -9,7 +9,7 @@ safety:
   - disposable isolated thesis VM only
   - VM snapshot restoration is the primary cleanup mechanism
   - VM-backed SSH execution is mandatory; local execution is refused
-  - no external network after build prerequisites
+  - scenario execution remains offline; build prerequisites are preinstalled
   - no evasion or cleanup variant behavior
 
 paths:
@@ -75,18 +75,13 @@ prerequisites:
     tools:
       - name: gcc
         check: command -v gcc >/dev/null 2>&1
-        ubuntu_package: gcc
       - name: make
         check: command -v make >/dev/null 2>&1
-        ubuntu_package: make
     headers:
       - name: security/pam_appl.h
         check: test -f /usr/include/security/pam_appl.h
-        ubuntu_package: libpam0g-dev
       - name: gcrypt.h
         check: test -f /usr/include/gcrypt.h
-        ubuntu_package: libgcrypt20-dev
     libraries:
       - name: libgcrypt
         check: ldconfig -p | grep -q 'libgcrypt\.so'
-        ubuntu_package: libgcrypt20
