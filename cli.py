@@ -75,11 +75,6 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     destroy = sub.add_parser("destroy", help="Destroy lab VM and storage")
     destroy.add_argument("--distro", required=True, help="Distro ID")
 
-    sub.add_parser(
-        "verify",
-        help="Check pinned raw extraction tool versions",
-    )
-
     run_scenario = sub.add_parser(
         "run-scenario",
         help="Run a declarative scenario.yml and write a manifest plus command log",
@@ -115,6 +110,7 @@ def _check_prerequisites(raw_tools: dict[str, str]) -> None:
         ("cloud-localds", "cloud-localds", "cloud-image-utils"),
         ("ansible-playbook", "ansible-playbook", "ansible"),
         ("ewfacquire", "ewfacquire", "libewf-dev"),
+        ("ewfverify", "ewfverify", "libewf-dev"),
         ("volatility3", raw_tools["volatility3"], "volatility3"),
         ("mmls", raw_tools["mmls"], "sleuthkit"),
         ("fls", raw_tools["fls"], "sleuthkit"),
@@ -134,27 +130,6 @@ def _check_prerequisites(raw_tools: dict[str, str]) -> None:
 # --- no-lab-host handlers ------------------------------------------------
 
 
-def _cmd_verify(args: argparse.Namespace) -> int:
-    from orchestrator.forensics.pipeline_config import (
-        load_pipeline_config,
-        raw_tool_paths,
-        verify_versions,
-    )
-
-    repo_root = Path(__file__).resolve().parent
-    config_path = repo_root / "config.yaml"
-    host_cfg = load_config(repo_root)["host"] if config_path.is_file() else {}
-    cfg = load_pipeline_config()
-    problems = verify_versions(cfg, raw_tool_paths(host_cfg))
-    if problems:
-        print("version problems:")
-        for p in problems:
-            print(f"  - {p}")
-        return 1 if cfg.get("version_policy") == "strict" else 0
-    print("all pinned tool versions satisfied")
-    return 0
-
-
 def _cmd_run_scenario(args: argparse.Namespace) -> int:
     from orchestrator.scenarios import run_scenario
 
@@ -170,10 +145,9 @@ def _cmd_run_scenario(args: argparse.Namespace) -> int:
     return 0
 
 
-# These commands need neither libvirt nor the acquisition toolchain, so main()
-# dispatches them before the prerequisite check and orchestrator construction.
+# This command needs neither libvirt nor the acquisition toolchain, so main()
+# dispatches it before the prerequisite check and orchestrator construction.
 _NO_LAB_HOST_HANDLERS = {
-    "verify": _cmd_verify,
     "run-scenario": _cmd_run_scenario,
 }
 

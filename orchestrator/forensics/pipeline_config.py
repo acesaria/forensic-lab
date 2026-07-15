@@ -1,21 +1,13 @@
-# orchestrator/forensics/pipeline_config.py
-#
-# Reproducibility config: pinned raw extraction tool versions from
-# pipeline.yaml and the installed tool version check used by `cli.py verify`.
+"""Raw-tool executable resolution and live version reporting."""
 
 from __future__ import annotations
 
-import os
 import re
 import shutil
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 from orchestrator.core.provenance import command_output
-
-_PKG_DIR = Path(__file__).resolve().parent
 
 _RAW_TOOL_SETTINGS = {
     "volatility3": ("vol_bin", "vol3"),
@@ -25,11 +17,6 @@ _RAW_TOOL_SETTINGS = {
     "log2timeline": ("log2timeline_bin", "log2timeline"),
     "psort": ("psort_bin", "psort"),
 }
-
-
-def load_pipeline_config(path: str | Path | None = None) -> dict[str, Any]:
-    p = Path(path) if path else _PKG_DIR / "pipeline.yaml"
-    return yaml.safe_load(p.read_text(encoding="utf-8"))
 
 
 def raw_tool_paths(host_cfg: dict[str, Any]) -> dict[str, str]:
@@ -62,35 +49,3 @@ def reported_version(tool: str, tools: dict[str, str]) -> str | None:
     }
     output = command_output(commands[tool], allow_nonzero=True)
     return output.splitlines()[0] if output else None
-
-
-def verify_versions(
-    pipeline_cfg: dict[str, Any],
-    tools: dict[str, str],
-) -> list[str]:
-    # Returns a list of human-readable mismatch/absence problems. Empty == OK.
-    # The pinned version string must appear in the tool's reported version text.
-    pins = pipeline_cfg.get("versions", {})
-    problems: list[str] = []
-    for tool, pin in pins.items():
-        if tool not in {"plaso", "volatility3", "sleuthkit"}:
-            continue
-        executable_key = {
-            "plaso": "log2timeline",
-            "volatility3": "volatility3",
-            "sleuthkit": "fls",
-        }[tool]
-        executable = tools[executable_key]
-        candidate = Path(executable).expanduser()
-        available = shutil.which(executable) is not None or (
-            candidate.is_file() and os.access(candidate, os.X_OK)
-        )
-        if not available:
-            problems.append(f"{tool}: not installed (need {pin})")
-            continue
-        reported = reported_version(tool, tools)
-        if reported is None:
-            problems.append(f"{tool}: version unavailable (need {pin})")
-        elif str(pin) not in reported:
-            problems.append(f"{tool}: installed version does not match pin {pin}")
-    return problems

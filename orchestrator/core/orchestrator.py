@@ -57,7 +57,7 @@ from orchestrator.forensics.plaso_runner import (
     run_timeline,
 )
 from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
-from orchestrator.forensics.pipeline_config import load_pipeline_config, reported_version
+from orchestrator.forensics.pipeline_config import reported_version
 from orchestrator.scenarios import run_scenario
 from orchestrator.scenarios.executors import SSHClientExecutor
 
@@ -253,12 +253,6 @@ class ForensicOrchestrator:
                 facts[key.strip()] = value.strip()
         return facts
 
-    def _pipeline_versions(self) -> dict[str, Any]:
-        try:
-            return load_pipeline_config().get("versions", {})
-        except Exception:
-            return {}
-
     def _extract_raw_outputs(
         self,
         run_id: str,
@@ -302,7 +296,6 @@ class ForensicOrchestrator:
         manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         memory_path = Path(manifest["memory_image"]["path"])
         disk_path = Path(manifest["disk_image"]["path"])
-        versions = self._pipeline_versions()
         status: dict[str, Any] = {}
 
         vol_errors: dict[str, str] = {}
@@ -347,10 +340,7 @@ class ForensicOrchestrator:
                 "status": state,
                 "path": str(vol_path),
                 "tool": "volatility3",
-                "configured_version": versions.get("volatility3"),
-                "reported_version": reported_version(
-                    "volatility3", self._raw_tools
-                ),
+                "version": reported_version("volatility3", self._raw_tools),
                 "plugin_rows": plugin_counts,
                 "result": result_state,
                 "invocations": vol_invocations,
@@ -362,7 +352,6 @@ class ForensicOrchestrator:
             console.warn(f"vol3 extraction degraded: {exc}")
             status["volatility"] = _failed_status(
                 "volatility3",
-                versions.get("volatility3"),
                 reported_version("volatility3", self._raw_tools),
                 exc,
                 paths={"path": str(analysis_dir / "vol3.json")},
@@ -389,8 +378,7 @@ class ForensicOrchestrator:
                 "status": "completed",
                 "path": str(bodyfile_path),
                 "tool": "sleuthkit",
-                "configured_version": versions.get("sleuthkit"),
-                "reported_version": reported_version("sleuthkit", self._raw_tools),
+                "version": reported_version("sleuthkit", self._raw_tools),
                 "row_count": len(bodyfile.splitlines()),
                 "result": "zero_results" if not bodyfile else "results",
                 "invocations": tsk_invocations,
@@ -400,7 +388,6 @@ class ForensicOrchestrator:
             console.warn(f"tsk extraction degraded: {exc}")
             status["tsk"] = _failed_status(
                 "sleuthkit",
-                versions.get("sleuthkit"),
                 reported_version("sleuthkit", self._raw_tools),
                 exc,
                 paths={"path": str(analysis_dir / "bodyfile")},
@@ -417,8 +404,7 @@ class ForensicOrchestrator:
                 "storage_path": str(storage_path),
                 "path": str(timeline_path),
                 "tool": "plaso",
-                "configured_version": versions.get("plaso"),
-                "reported_version": reported_version("plaso", self._raw_tools),
+                "version": reported_version("plaso", self._raw_tools),
                 "event_count": len(events),
                 "result": "zero_results" if not events else "results",
                 "invocations": {
@@ -434,7 +420,6 @@ class ForensicOrchestrator:
             console.warn(f"plaso timeline degraded: {exc}")
             status["plaso"] = _failed_status(
                 "plaso",
-                versions.get("plaso"),
                 reported_version("plaso", self._raw_tools),
                 exc,
                 paths={
@@ -619,8 +604,7 @@ class ForensicOrchestrator:
 
 def _failed_status(
     tool: str,
-    configured_version: Any,
-    actual_version: str | None,
+    version: str | None,
     exc: Exception,
     *,
     paths: dict[str, str] | None = None,
@@ -629,8 +613,7 @@ def _failed_status(
     status = {
         "status": "failed",
         "tool": tool,
-        "configured_version": configured_version,
-        "reported_version": actual_version,
+        "version": version,
         "error": str(exc),
     }
     if paths:
