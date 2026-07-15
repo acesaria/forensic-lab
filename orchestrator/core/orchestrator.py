@@ -32,6 +32,7 @@ run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=Fal
 from datetime import datetime
 import functools
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -190,6 +191,7 @@ class ForensicOrchestrator:
             console.section_end()
         run_id = _make_run_id(distro_id, scenario_id)
         run_root = self._paths.experiments_dir / run_id
+        run_display = Path(os.path.relpath(run_root, self.repo_root))
 
         ctx = None
         guest: dict[str, Any] | None = None
@@ -225,8 +227,8 @@ class ForensicOrchestrator:
             console.info("acquisition: intentionally skipped (--no-acquire)")
             console.info("raw extraction: intentionally skipped (--no-acquire)")
             console.info("final VM state: running")
-            console.info(f"run directory: {run_root}")
-            console.info(f"root manifest: {ctx.manifest_path}")
+            console.info(f"run directory: {run_display}")
+            console.info(f"root manifest: {run_display / ctx.manifest_path.name}")
             console.section_end()
             return None
 
@@ -253,9 +255,12 @@ class ForensicOrchestrator:
             emit = console.ok if state == "completed" else console.warn
             emit(f"{label}: {state}")
         console.info("final VM state: off")
-        console.info(f"run directory: {run_root}")
-        console.info(f"root manifest: {ctx.manifest_path}")
-        console.info(f"raw extraction status: {raw_status_path}")
+        console.info(f"run directory: {run_display}")
+        console.info(f"root manifest: {run_display / ctx.manifest_path.name}")
+        console.info(
+            "raw extraction status: "
+            f"{run_display / raw_status_path.relative_to(run_root)}"
+        )
         console.section_end()
         return manifest_path
 
