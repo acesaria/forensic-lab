@@ -166,8 +166,10 @@ class Dumper:
             }
         )
         self._write_status(status_path, record)
+        display_path = os.path.relpath(dest, self._paths.repo_root)
         console.ok(
-            f"memory dump done ({elapsed:.1f}s): {dest}, {_format_bytes(size_bytes)}"
+            f"memory dump done ({elapsed:.1f}s): "
+            f"{display_path}, {_format_bytes(size_bytes)}"
         )
         return ImageMetadata(
             path=str(dest),
@@ -288,7 +290,8 @@ class Dumper:
         manifest_path = self.run_dir(run_id) / "acquisition.json"
         with open(manifest_path, "w") as f:
             json.dump(asdict(manifest), f, indent=2)
-        console.ok(f"acquisition manifest written: {manifest_path}")
+        display_path = os.path.relpath(manifest_path, self._paths.repo_root)
+        console.ok(f"acquisition manifest written: {display_path}")
         return str(manifest_path)
 
     # --- private: disk acquisition steps ---------------------------------
@@ -463,9 +466,10 @@ class Dumper:
             size_info = (
                 f"{segment_count} segments, ewf {_format_bytes(ewf_total_size)} total"
             )
+        display_path = os.path.relpath(segments[0], self._paths.repo_root)
         console.ok(
             f"disk acquisition done ({elapsed:.1f}s): "
-            f"{segments[0]} "
+            f"{display_path} "
             f"(virtual {_format_bytes(virtual_size)}, {size_info})"
         )
 

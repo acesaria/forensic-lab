@@ -129,7 +129,8 @@ class ForensicOrchestrator:
         isf_path = self._paths.isf_dir / isf_name
 
         if isf_path.exists():
-            console.info(f"symbol file already present: {isf_path.absolute()}")
+            display_path = os.path.relpath(isf_path, self.repo_root)
+            console.info(f"symbol file already present: {display_path}")
             return isf_path
 
         role_cfg = self._role_defaults.get("build-isf")
@@ -147,7 +148,8 @@ class ForensicOrchestrator:
         if not isf_path.exists():
             raise RuntimeError(f"ISF build completed but output not found: {isf_path}")
 
-        console.ok(f"ISF exported: {isf_path}")
+        display_path = os.path.relpath(isf_path, self.repo_root)
+        console.ok(f"ISF exported: {display_path}")
         return isf_path
 
     def lab_exists(self, distro_id: str) -> bool:
@@ -337,6 +339,7 @@ class ForensicOrchestrator:
         manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
         memory_path = Path(manifest["memory_image"]["path"])
         disk_path = Path(manifest["disk_image"]["path"])
+        analysis_display = Path(os.path.relpath(analysis_dir, self.repo_root))
         status: dict[str, Any] = {}
 
         vol_errors: dict[str, str] = {}
@@ -376,7 +379,7 @@ class ForensicOrchestrator:
                 result_state = (
                     "results" if any(plugin_counts.values()) else "zero_results"
                 )
-                console.ok(f"vol3 output written: {vol_path}")
+                console.ok(f"vol3 output written: {analysis_display / vol_path.name}")
             status["volatility"] = {
                 "status": state,
                 "path": str(vol_path),
@@ -414,7 +417,9 @@ class ForensicOrchestrator:
             for invocation in tsk_invocations:
                 if Path(invocation["command"][0]).name == "fls":
                     invocation["stdout_path"] = str(bodyfile_path)
-            console.ok(f"tsk bodyfile written: {bodyfile_path}")
+            console.ok(
+                f"tsk bodyfile written: {analysis_display / bodyfile_path.name}"
+            )
             status["tsk"] = {
                 "status": "completed",
                 "path": str(bodyfile_path),
@@ -494,7 +499,8 @@ class ForensicOrchestrator:
             file_filter=file_filter,
         )
         events = result["events"]
-        console.ok(f"timeline built: {len(events)} event(s) ({timeline_path})")
+        display_path = os.path.relpath(timeline_path, self.repo_root)
+        console.ok(f"timeline built: {len(events)} event(s) ({display_path})")
         return result
 
     # --- teardown --------------------------------------------------------
