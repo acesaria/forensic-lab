@@ -1,13 +1,52 @@
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 
 import pytest
 
+from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.provenance import command_output
 from orchestrator.forensics.dumper import Dumper
 from orchestrator.forensics.extract import extract_plugins
 from orchestrator.forensics.pipeline_config import reported_version
+
+
+def test_memory_dump_precreates_readable_user_file_without_sudo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    paths = ProjectPaths(
+        repo_root=tmp_path,
+        shared_dir=tmp_path / "shared",
+        state_dir=tmp_path / "state",
+        ssh_key=tmp_path / "ssh_key",
+        ssh_pub_key=tmp_path / "ssh_key.pub",
+    )
+    dumper = Dumper(paths)
+    dest = tmp_path / "run" / "dumps" / "memory" / "mem.raw"
+    payload = b"memory image"
+    commands = []
+
+    def fake_run(command, **_kwargs):
+        commands.append(command)
+        if command == ["virsh", "--version"]:
+            return subprocess.CompletedProcess(command, 0, "10.0.0\n", "")
+        assert dest.exists()
+        assert dest.stat().st_mode & 0o777 == 0o600
+        dest.write_bytes(payload)
+        return subprocess.CompletedProcess(command, 0, "dumped\n", "")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    metadata = dumper.acquire_memory("lab-vm", dest)
+
+    assert dest.read_bytes() == payload
+    assert metadata.sha256 == hashlib.sha256(payload).hexdigest()
+    assert all(command[0] != "sudo" for command in commands)
+    status = json.loads(
+        (dest.parent / "virsh_dump_status.json").read_text(encoding="utf-8")
+    )
+    assert status["status"] == "completed"
 
 
 def test_ewfverify_failure_is_preserved_and_fails_acquisition_status(

@@ -103,10 +103,13 @@ class Dumper:
     def acquire_memory(self, domain: str, dest: Path) -> ImageMetadata:
         """
         Dump live RAM via virsh. Domain must be ON.
-        dest is owned by the calling user -- experiments dir is pre-chowned at init.
+        dest is pre-created by the calling user so libvirt preserves its ownership.
         """
         if dest.exists():
             dest.unlink()
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.touch(mode=0o600, exist_ok=False)
+        dest.chmod(0o600)
 
         started = time.time()
         console.step(f"acquiring memory from '{domain}'...")
@@ -146,13 +149,17 @@ class Dumper:
             )
             self._write_status(status_path, record)
             raise RuntimeError("Memory dump failed: output file not created or empty")
+        if not os.access(dest, os.R_OK):
+            record.update(
+                {
+                    "status": "failed",
+                    "acquisition_status": "failed",
+                    "error": "output file is not readable by the current process",
+                }
+            )
+            self._write_status(status_path, record)
+            raise RuntimeError("Memory dump failed: output file is not readable")
 
-        # libvirt may create the dump as root even when virsh was invoked by
-        # the unprivileged lab user. Transfer it before hashing the evidence.
-        subprocess.run(
-            ["sudo", "chown", f"{os.getuid()}:{os.getgid()}", str(dest)],
-            check=True,
-        )
         elapsed = time.time() - started
         size_bytes = dest.stat().st_size
         sha256 = file_sha256(dest)
@@ -233,12 +240,11 @@ class Dumper:
         tool: str,
         prior_commands: list[dict[str, object]] | None = None,
     ) -> ImageMetadata:
-        # Wrap the staged raw image to EWF, validate + chown the segments, and
-        # build the manifest metadata.
+        # Wrap the staged raw image to EWF, validate the segments, and build
+        # the manifest metadata. ewfacquire runs as the calling user.
         ewfacquire_result = self._run_ewfacquire(raw_path, ewf_prefix)
         ewf_segments = sorted(glob.glob(f"{ewf_prefix}.E??"))
         self._validate_ewf_segments(ewf_segments, ewf_prefix)
-        self._chown_segments(ewf_segments)
         segment_metadata = [
             {
                 "path": str(Path(segment)),
@@ -446,11 +452,6 @@ class Dumper:
         for seg in segments:
             if Path(seg).stat().st_size == 0:
                 raise RuntimeError(f"EWF segment is zero bytes: {seg}")
-
-    def _chown_segments(self, segments: list[str]) -> None:
-        owner = f"{os.getuid()}:{os.getgid()}"
-        for seg in segments:
-            subprocess.run(["sudo", "chown", owner, seg], check=True)
 
     def _log_disk_result(
         self,
