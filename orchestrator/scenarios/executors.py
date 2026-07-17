@@ -65,6 +65,14 @@ class SSHClientExecutor:
     def __init__(self, ssh_client) -> None:
         self.ssh_client = ssh_client
 
+    @property
+    def host(self) -> str:
+        return self.ssh_client.host
+
+    @property
+    def port(self) -> int:
+        return self.ssh_client.port
+
     def run(self, command: str, timeout: int = 120) -> CommandResult:
         exit_code, stdout, stderr = self.ssh_client.run(command, timeout=timeout)
         return CommandResult(exit_code, stdout, stderr)

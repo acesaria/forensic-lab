@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import importlib.util
-import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from types import ModuleType
+from typing import Any
 
 from orchestrator.scenarios.executors import LocalExecutor, ScenarioExecutor
 from orchestrator.scenarios.loader import ScenarioPlan, load_scenario_plan
@@ -37,8 +37,6 @@ def run_scenario(
     distro: str | None = None,
     profile: str | None = None,
     baseline: dict[str, str] | None = None,
-    internet_on: Callable[[], None] | None = None,
-    internet_off: Callable[[], None] | None = None,
 ) -> RunContext:
     plan = load_scenario_plan(scenario_yml)
     run_id = run_id or _run_id(plan)
@@ -54,15 +52,16 @@ def run_scenario(
         profile=profile or "vanilla",
         baseline=baseline,
         repo_root=repo_root,
-        internet_on=internet_on,
-        internet_off=internet_off,
     )
-    hooks = _load_hooks(plan)
     try:
+        hooks = _load_hooks(plan)
         for step in plan.steps:
             _run_step(ctx, plan, hooks, step)
     except ScenarioStepError as exc:
         ctx.finalize("prevented" if exc.prevented else "failed")
+        raise
+    except Exception:
+        ctx.finalize("failed")
         raise
     if ctx.final_status == "running":
         ctx.finalize("completed")
@@ -72,7 +71,7 @@ def run_scenario(
 def _run_step(
     ctx: RunContext,
     plan: ScenarioPlan,
-    hooks: dict[str, Callable[[RunContext, dict[str, Any]], Any]],
+    hooks: ModuleType | None,
     step: dict[str, Any],
 ) -> None:
     step_id = str(step.get("id") or step.get("step_id") or "")
@@ -85,43 +84,42 @@ def _run_step(
         if step_type == "shell":
             metadata = _step_shell(ctx, step)
         elif step_type == "upload":
-            _step_upload(ctx, plan, step)
+            metadata = _step_upload(ctx, plan, step)
+        elif step_type == "terminal":
+            metadata = _step_terminal(ctx, step)
         elif step_type == "python":
-            _step_python(ctx, hooks, step)
-        elif step_type == "sleep":
-            time.sleep(float(step.get("seconds", 1)))
+            metadata = _step_python(ctx, hooks, step)
         else:
             raise ScenarioStepError(f"{step_id}: unsupported step type {step_type!r}")
         ended = ctx.now()
         ctx.log_step(
             {
+                **metadata,
                 "step_id": step_id,
                 "type": step_type,
                 "status": "success",
                 "started_at": started,
                 "ended_at": ended,
-                **metadata,
             }
         )
     except Exception as exc:
         ended = ctx.now()
         exc_metadata = getattr(exc, "metadata", {})
-        status = "prevented" if getattr(exc, "prevented", False) else "failed"
+        status = "prevented" if getattr(exc, "prevented", False) else "failure"
         ctx.log_step(
             {
+                **exc_metadata,
                 "step_id": step_id,
                 "type": step_type,
-                "status": "failure",
+                "status": status,
                 "started_at": started,
                 "ended_at": ended,
                 "error": str(exc),
-                **exc_metadata,
             }
         )
-        if not step.get("continue_on_error", False):
-            if isinstance(exc, ScenarioStepError):
-                raise
-            raise ScenarioStepError(f"{step_id} failed: {exc}") from exc
+        if isinstance(exc, ScenarioStepError):
+            raise
+        raise ScenarioStepError(f"{step_id} failed: {exc}") from exc
 
 
 def _step_shell(ctx: RunContext, step: dict[str, Any]) -> dict[str, Any]:
@@ -143,7 +141,9 @@ def _step_shell(ctx: RunContext, step: dict[str, Any]) -> dict[str, Any]:
     return metadata
 
 
-def _step_upload(ctx: RunContext, plan: ScenarioPlan, step: dict[str, Any]) -> None:
+def _step_upload(
+    ctx: RunContext, plan: ScenarioPlan, step: dict[str, Any]
+) -> dict[str, Any]:
     src = step.get("src")
     dest = step.get("dest")
     if not src or not dest:
@@ -151,39 +151,66 @@ def _step_upload(ctx: RunContext, plan: ScenarioPlan, step: dict[str, Any]) -> N
     local = plan.root / str(src)
     if not local.is_file():
         raise ScenarioStepError(f"upload source not found: {local}")
-    ctx.executor.put(local, str(ctx.render(dest)))
+    remote = str(ctx.render(dest))
+    ctx.executor.put(local, remote)
+    return {"source": str(local), "destination": remote}
+
+
+def _step_terminal(ctx: RunContext, step: dict[str, Any]) -> dict[str, Any]:
+    command = ctx.render(step.get("command") or "")
+    if not command:
+        raise ScenarioStepError("terminal step missing command")
+    run_in_terminal = getattr(ctx.executor, "run_in_terminal", None)
+    if not callable(run_in_terminal):
+        raise ScenarioStepError("terminal step requires the VM-backed SSH executor")
+    result = run_in_terminal(command, timeout=int(step.get("timeout", 120)))
+    ctx.step_outputs[str(step["id"])] = result.stdout
+    transcript_path = ctx.out_dir / "terminal_transcript.txt"
+    transcript_path.write_text(result.stdout, encoding="utf-8")
+    metadata = {
+        "command": command,
+        "exit_code": result.exit_code,
+        "transcript_path": transcript_path.name,
+        "terminal_transcript_excerpt": excerpt(result.stdout),
+    }
+    if result.exit_code != 0:
+        raise ScenarioStepError(
+            f"terminal command exited {result.exit_code}", metadata=metadata
+        )
+    return metadata
 
 
 def _step_python(
     ctx: RunContext,
-    hooks: dict[str, Callable[[RunContext, dict[str, Any]], Any]],
+    hooks: ModuleType | None,
     step: dict[str, Any],
-) -> None:
+) -> dict[str, Any]:
     func_name = step.get("function")
     if not func_name:
         raise ScenarioStepError("python step missing function")
-    func = hooks.get(str(func_name))
-    if func is None:
+    func = getattr(hooks, str(func_name), None) if hooks is not None else None
+    if not callable(func):
         raise ScenarioStepError(f"python hook not found: {func_name}")
-    func(ctx, step)
-
-
-def _load_hooks(plan: ScenarioPlan) -> dict[str, Callable[[RunContext, dict[str, Any]], Any]]:
-    if plan.hooks_path is None:
+    metadata = func(ctx, step)
+    if metadata is None:
         return {}
+    if not isinstance(metadata, dict):
+        raise ScenarioStepError(f"python hook returned non-mapping metadata: {func_name}")
+    return metadata
+
+
+def _load_hooks(plan: ScenarioPlan) -> ModuleType | None:
+    if plan.hooks_path is None:
+        return None
     spec = importlib.util.spec_from_file_location(
         f"scenario_hooks_{plan.scenario_id}",
         plan.hooks_path,
     )
     if spec is None or spec.loader is None:
-        return {}
+        return None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    return {
-        name: value
-        for name, value in vars(module).items()
-        if callable(value) and not name.startswith("_")
-    }
+    return module
 
 
 def _run_id(plan: ScenarioPlan) -> str:

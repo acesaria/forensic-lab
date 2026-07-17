@@ -8,6 +8,7 @@ Keeps things simple: one connection per SSHClient instance,
 called by vm_manager and orchestrator only.
 """
 
+import shlex
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -28,6 +29,14 @@ class SSHClient:
         self._key_path = key_path
         self._port = port
         self._client: Optional[paramiko.SSHClient] = None
+
+    @property
+    def host(self) -> str:
+        return self._ip
+
+    @property
+    def port(self) -> int:
+        return self._port
 
     def connect(self, timeout: int = 30) -> None:
         client = paramiko.SSHClient()
@@ -80,21 +89,19 @@ class SSHClient:
         return out.strip()
 
     def run_in_terminal(self, cmd: str, timeout: int = 300) -> Tuple[int, str]:
-        """Type one command into interactive Bash and return status + transcript."""
+        """Run one command in interactive Bash and return status + transcript."""
         if self._client is None:
             raise RuntimeError("SSHClient not connected")
         if "\n" in cmd:
             raise ValueError("terminal command must be one line")
 
         stdin, stdout, stderr = self._client.exec_command(
-            "/bin/bash -i",
+            f"/bin/bash -i -c {shlex.quote(cmd)}",
             get_pty=True,
             timeout=timeout,
         )
         channel = stdout.channel
         try:
-            stdin.write(f"{cmd}\nexit\n")
-            stdin.flush()
             transcript = stdout.read().decode(errors="replace")
             exit_code = channel.recv_exit_status()
             return exit_code, transcript

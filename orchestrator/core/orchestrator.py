@@ -30,7 +30,6 @@ run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=Fal
 """
 
 from datetime import datetime
-import functools
 import json
 import os
 from pathlib import Path
@@ -217,8 +216,6 @@ class ForensicOrchestrator:
                         "snapshot": BASELINE_SNAPSHOT,
                         "snapshot_created_at": snapshot_created_at,
                     },
-                    internet_on=functools.partial(self.vm_manager.internet_on, vm_name),
-                    internet_off=functools.partial(self.vm_manager.internet_off, vm_name),
                 )
                 if guest is None:
                     guest = self._guest_facts(ssh)

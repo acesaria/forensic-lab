@@ -6,7 +6,7 @@ import json
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from orchestrator.scenarios.executors import ScenarioExecutor
 
@@ -25,8 +25,6 @@ class RunContext:
         profile: str = "vanilla",
         baseline: dict[str, str] | None = None,
         repo_root: str | Path | None = None,
-        internet_on: Callable[[], None] | None = None,
-        internet_off: Callable[[], None] | None = None,
     ) -> None:
         self.run_id = run_id
         self.scenario_id = scenario_id
@@ -39,8 +37,6 @@ class RunContext:
         self.profile = profile
         self.baseline = dict(baseline) if baseline is not None else None
         self.repo_root = Path(repo_root) if repo_root is not None else None
-        self.internet_on = internet_on
-        self.internet_off = internet_off
         self.out_dir.mkdir(parents=True, exist_ok=True)
         self.work_dir.mkdir(parents=True, exist_ok=True)
         self.manifest_path = self.out_dir / "manifest.json"
@@ -50,6 +46,7 @@ class RunContext:
         self.full_run_ended_at: str | None = None
         self.final_status = "running"
         self.guest: dict[str, Any] = {}
+        self.step_outputs: dict[str, str] = {}
         self.scenario_facts: dict[str, Any] = {}
         self.artifacts: dict[str, str] = {
             "command_log": self._relative_path(self.command_log_path),

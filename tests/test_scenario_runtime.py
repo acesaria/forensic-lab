@@ -193,8 +193,8 @@ def test_ssh_client_run_in_terminal_uses_interactive_bash_and_returns_status():
     code, transcript = client.run_in_terminal("bash /tmp/run.sh", timeout=9)
 
     assert (code, transcript) == (7, "combined terminal transcript\r\n")
-    assert fake.calls == [("/bin/bash -i", True, 9)]
-    assert fake.stdin.writes == ["bash /tmp/run.sh\nexit\n"]
+    assert fake.calls == [("/bin/bash -i -c 'bash /tmp/run.sh'", True, 9)]
+    assert fake.stdin.writes == []
     assert fake.stdin.closed and fake.stdout.closed and fake.stderr.closed
     assert fake.channel.closed
 

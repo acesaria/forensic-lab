@@ -1,79 +1,86 @@
 # userland_father_ldpreload
 
-`userland_father_ldpreload` is a simple calibration case for real system-wide
-LD_PRELOAD persistence plus one Father-native file-hiding check. It builds the
-pinned Father source inside a disposable guest, installs the resulting shared
-object at `/usr/local/lib/forensic-lab/father/selinux.so.3`, and atomically
-activates it through `/etc/ld.so.preload`.
+This disposable-VM scenario builds the pinned Father source, activates its
+shared object system-wide through `/etc/ld.so.preload`, proves one native
+file-hiding behavior, and opens Father's native `accept()` backdoor long enough
+for memory acquisition.
 
-The scenario is for isolated thesis VMs only. It refuses the local executor, so
-the Father archive, build, shared object, and activation helper are never run on
-the development host.
+The short implementation path is:
 
-## Prerequisites
+1. `scenario.yml` verifies the source, uploads the archive and
+   `files/run_scenario.sh`, then invokes that script once in interactive Bash.
+2. The script builds and activates Father, leaves three mapped processes alive,
+   restarts `ssh.service`, and verifies the new root sshd maps Father.
+3. `steps.py` starts the small host `files/verify_backdoor.sh` client, which
+   validates `id` and remains alive while the orchestrator begins acquisition.
 
-- a disposable, isolated lab VM restored to its baseline snapshot;
-- VM-backed execution through `.venv/bin/python cli.py run`;
-- working SSH access and non-interactive `sudo -n` to effective UID 0 in the guest;
-- guest `python3`, `gcc`, `make`, `libpam0g-dev`, `libgcrypt20-dev`, and
-  `libgcrypt20`, all preinstalled in the offline baseline;
-- dynamically linked `/usr/bin/python3`, `/usr/bin/sleep`, and `/bin/ls`
-  binaries.
+The vendored archive is locked by `father.lock.yml` to upstream commit
+`4eb2712caf612a7dc55fd4f34ff5c72b74c7c332` and is hash-checked before upload.
 
-## Operational effect
+## Guest execution
 
-The implementation reading order is `scenario.yml`, the thin host-side
-`steps.py`, the linear `files/run_father_calibration.sh`, and the focused
-privileged `files/activate_system_preload.py` helper. The lock remains host-side
-and its declared archive SHA-256 is verified before any upload.
+The existing Paramiko connection opens one `/bin/bash -i` PTY, types the one
+script invocation followed by `exit`, and waits for channel closure. There is
+no prompt parsing, repeated interactive command execution, completion token,
+or synthetic history. Normal Bash logout saves the invocation in
+`.bash_history`, and the command log records its real exit status and transcript
+excerpt. The full combined output is retained as `terminal_transcript.txt` at
+the run root.
 
-The orchestrator's existing Paramiko connection starts `/bin/bash -i` with one
-PTY, types one fixed script invocation followed by `exit`, and reads the
-combined terminal transcript to channel closure. Bash therefore saves genuine
-history on normal logout, while the channel supplies one real final exit status.
-There is no prompt parsing, per-command remote orchestration, or synthetic
-history.
+The script directly performs the fixed experiment sequence:
 
-The Bash script is one direct sequence: check offline prerequisites, extract
-and configure Father, build `rk.so`, create the hiding probe, invoke the
-privileged helper, validate hiding, and print the helper's JSON as its final
-structured output line.
+- check the offline build prerequisites;
+- extract and configure the pinned source;
+- build `rk.so` and install it at
+  `/usr/local/lib/forensic-lab/father/selinux.so.3`;
+- retain the former preload file, or an explicit absence marker, under the run
+  directory;
+- write the installed library to `/etc/ld.so.preload`;
+- start three detached root `sleep` processes and verify their mappings;
+- restart `ssh.service` and verify the new listener's mapping;
+- leave all successful-run effects present for acquisition.
 
-The run-local configuration keeps the preload-name token away from
-`/etc/ld.so.preload` and sets Father's file-hiding prefix to `__malicious_`.
-Before activation, `ls -l` must see `probe/__malicious_file` and writes
-`before.txt`. After activation, a new `ls -l` must fail to see that same file
-and writes `after.txt`, while the Bash process started before activation uses
-its built-in `[[ -e ... ]]` check to prove the file still exists. This is the
-only hiding behavior exercised.
+Snapshot restoration is the cleanup mechanism. The script deliberately has no
+transaction helper or successful-run rollback.
 
-Before changing `/etc/ld.so.preload`, the root activation helper starts one
-Python process with an explicit `LD_PRELOAD` value and requires the shared
-object to appear in that process's `/proc/self/maps`.
+## Native file hiding
 
-After that preflight succeeds, the helper preserves the exact pre-existing
-`/etc/ld.so.preload` bytes under
-`/tmp/forensic-lab/father_ldpreload/recovery/`. If the file did not exist, it
-writes an explicit `ld.so.preload.was_absent` marker instead. The final preload
-content retains any existing entries, adds the Father path, and is installed
-with an atomic same-directory replacement.
+The run-local source sets Father's `STRING` token to the controlled prefix
+`__malicious_` and keeps `PRELOAD` non-matching. The pinned source implements
+this behavior in its `readdir()` hook; it does not hook the `statx` path used by
+some exact-path `ls` calls.
 
-Activation starts three detached `/usr/bin/sleep` processes for 30 minutes.
-The step succeeds only if every process remains alive and maps the installed
-shared object. The run manifest records one concise `scenario_facts` block:
+The script saves plain before/after listings of the probe directory. A newly
+started, Father-loaded `ls` must omit `__malicious_file`; the Bash process that
+predates activation then checks that `before.txt` remains visible and proves the
+marker still exists with `[[ -e ... ]]`. No completion token or synthetic shell
+interaction is used, and both outputs and the marker remain on disk.
 
-- deployed files;
-- system-wide preload activation;
-- affected PIDs;
-- privilege used;
-- treatment-validation result for system-wide mappings and file hiding.
+## Native backdoor
 
-These are experimental treatment checks, not automatic detection results or a
-forensic conclusion. The append-only command log retains the verified source
-identity, three uploaded destinations, fixed script invocation, integer exit
-status, timestamps, and terminal-transcript excerpt.
+`SOURCEPORT 54321` is the connecting client's source port; Father does not
+listen on 54321. Its hook must be loaded into a real listening service that
+calls `accept()`. The script therefore restarts the root sshd after activation,
+and the host client connects to that service's TCP port 22 from source port
+54321.
 
-## Acquisition moment
+The hook forks after the real `accept()`, prompts on the accepted socket, and
+checks one raw read for `SHELL_PASS`, pinned here as `lobster`. The client waits
+for the first response bytes without parsing a prompt, sends that password with
+a terminating NUL, waits for Father's authentication response to grow, then
+sends `id`. No environment value or SSH authentication participates in this
+path.
+
+The child keeps sshd's effective UID 0, changes to Father's magic GID 1337,
+duplicates the accepted socket onto standard input/output/error, and executes
+`/bin/sh`. Validation therefore requires both `uid=0(root)` and `gid=1337` in
+`father_backdoor_response.txt`.
+
+The host `nc` process and its stdin remain open after the scenario returns, so
+the shell and TCP connection stay established during RAM acquisition. Shutting
+down the VM afterward closes the connection naturally.
+
+## Run and live-validation boundary
 
 Use the normal full run:
 
@@ -82,40 +89,11 @@ Use the normal full run:
   --scenario userland_father_ldpreload
 ```
 
-The orchestrator begins memory acquisition after all three mapped processes
-have passed validation and while the VM is still ON. It then powers the VM OFF
-for disk acquisition. The probe marker, extracted source and build artifacts,
-installed library, `/etc/ld.so.preload`, recovery artifact, and three mapped
-processes are all left in place through acquisition. The marker is never
-deleted or altered after validation.
+The first controlled smoke run must confirm that restarting `ssh.service` does
+not disturb the already-established Paramiko PTY, that Ubuntu's sshd calls the
+hooked `accept()` symbol, and that the pinned `readdir()` hook hides the marker
+under the guest's actual glibc/coreutils. Host OpenBSD `nc` must support `-p`,
+and host source port 54321 must be free.
 
-`--no-acquire` is only for controlled troubleshooting and leaves the activated
-guest running. Restore the VM snapshot immediately afterward.
-
-## Failure-only recovery
-
-The privileged activation helper remains alive while it changes the preload
-configuration and validates the child processes. If the explicit preflight,
-atomic activation, process liveness check, or mapping check fails, that already
-running helper terminates any children, atomically restores the original
-`/etc/ld.so.preload` state (including original absence), and restores or removes
-the installed library. The failed validation and any recovery error remain
-explicit in the command log and failed manifest status.
-
-This rollback is only a failure path; there is no successful-run cleanup
-variant in this scenario. Snapshot restoration remains the primary cleanup and
-emergency-recovery mechanism.
-
-## Known safety constraints
-
-- System-wide preload affects every newly started dynamically linked guest
-  process, including administrative and shutdown commands.
-- Father retains its upstream hooks. The scenario configures the preload-hiding
-  token away from `/etc/ld.so.preload` and exercises only the bounded
-  `__malicious_file` check. It does not trigger its shell,
-  privilege-escalation, network-hiding, or other capabilities, but the loaded
-  code is not a benign substitute.
-- Do not reuse the guest for unrelated work after activation. Acquire the
-  evidence, then restore the baseline snapshot.
-- This calibration adds no evasion, cleanup, automatic detector, canonical
-  matching, expected-observable, or scoring behavior.
+The scenario is for an isolated thesis VM only. System-wide preload affects new
+administrative and shutdown processes; do not reuse the guest for other work.
