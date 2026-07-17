@@ -69,6 +69,12 @@ class SSHClientExecutor:
         exit_code, stdout, stderr = self.ssh_client.run(command, timeout=timeout)
         return CommandResult(exit_code, stdout, stderr)
 
+    def run_in_terminal(self, command: str, timeout: int = 120) -> CommandResult:
+        exit_code, transcript = self.ssh_client.run_in_terminal(
+            command, timeout=timeout
+        )
+        return CommandResult(exit_code, transcript, "")
+
     def put(self, local: Path, remote: str) -> None:
         parent = posixpath.dirname(remote)
         if parent:

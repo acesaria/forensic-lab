@@ -7,6 +7,7 @@ import pytest
 
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.paths import ProjectPaths
+from orchestrator.core.ssh_client import SSHClient
 from orchestrator.scenarios import run_scenario
 from orchestrator.scenarios.engine import ScenarioStepError
 from orchestrator.scenarios.executors import SSHClientExecutor
@@ -113,6 +114,7 @@ def test_ssh_client_executor_adapts_existing_ssh_client_api():
     class FakeSSH:
         def __init__(self):
             self.commands = []
+            self.terminal_commands = []
             self.uploads = []
 
         def run(self, command, timeout=300):
@@ -122,16 +124,79 @@ def test_ssh_client_executor_adapts_existing_ssh_client_api():
         def put(self, local, remote):
             self.uploads.append((local, remote))
 
+        def run_in_terminal(self, command, timeout=300):
+            self.terminal_commands.append((command, timeout))
+            return 4, "terminal transcript"
+
     fake = FakeSSH()
     executor = SSHClientExecutor(fake)
 
     result = executor.run("true", timeout=7)
+    terminal_result = executor.run_in_terminal("bash /tmp/run.sh", timeout=9)
     executor.put(Path("local.txt"), "/tmp/lab/remote.txt")
 
     assert result.exit_code == 0
     assert result.stdout == "ok"
+    assert terminal_result.exit_code == 4
+    assert terminal_result.stdout == "terminal transcript"
     assert fake.commands == [("true", 7), ("mkdir -p /tmp/lab", 30)]
+    assert fake.terminal_commands == [("bash /tmp/run.sh", 9)]
     assert fake.uploads == [(Path("local.txt"), "/tmp/lab/remote.txt")]
+
+
+def test_ssh_client_run_in_terminal_uses_interactive_bash_and_returns_status():
+    class FakeChannel:
+        def __init__(self):
+            self.closed = False
+
+        def recv_exit_status(self):
+            return 7
+
+        def close(self):
+            self.closed = True
+
+    class FakeFile:
+        def __init__(self, channel, data=b""):
+            self.channel = channel
+            self.data = data
+            self.writes = []
+            self.closed = False
+
+        def write(self, data):
+            self.writes.append(data)
+
+        def flush(self):
+            pass
+
+        def read(self):
+            return self.data
+
+        def close(self):
+            self.closed = True
+
+    class FakeParamikoClient:
+        def __init__(self):
+            self.calls = []
+            self.channel = FakeChannel()
+            self.stdin = FakeFile(self.channel)
+            self.stdout = FakeFile(self.channel, b"combined terminal transcript\r\n")
+            self.stderr = FakeFile(self.channel)
+
+        def exec_command(self, command, *, get_pty, timeout):
+            self.calls.append((command, get_pty, timeout))
+            return self.stdin, self.stdout, self.stderr
+
+    fake = FakeParamikoClient()
+    client = SSHClient("192.0.2.1", "lab", Path("/tmp/test-key"))
+    client._client = fake
+
+    code, transcript = client.run_in_terminal("bash /tmp/run.sh", timeout=9)
+
+    assert (code, transcript) == (7, "combined terminal transcript\r\n")
+    assert fake.calls == [("/bin/bash -i", True, 9)]
+    assert fake.stdin.writes == ["bash /tmp/run.sh\nexit\n"]
+    assert fake.stdin.closed and fake.stdout.closed and fake.stderr.closed
+    assert fake.channel.closed
 
 
 def test_declarative_experiment_preserves_vm_and_acquisition_order(

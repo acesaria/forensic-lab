@@ -25,7 +25,7 @@ def test_userland_father_refuses_local_execution(tmp_path: Path):
     )
 
     with pytest.raises(RuntimeError, match="VM-backed SSH executor"):
-        module.prepare_father_source(ctx, plan.steps[0])
+        module.run_father_calibration(ctx, plan.steps[0])
 
     assert not ctx.command_log_path.exists()
 
@@ -36,7 +36,17 @@ def test_run_manifest_records_only_concise_father_operational_facts(tmp_path: Pa
         "preload_activation": {"mode": "system-wide"},
         "affected_pids": [101, 102, 103],
         "privilege_used": "sudo -n to effective UID 0",
-        "validation_result": {"status": "passed"},
+        "file_hiding_validation": {
+            "status": "passed",
+            "marker_path": "/guest/probe/__malicious_file",
+            "before_output": "/guest/probe/before.txt",
+            "after_output": "/guest/probe/after.txt",
+        },
+        "validation_result": {
+            "status": "passed",
+            "system_wide_mapping": "passed",
+            "file_hiding": "passed",
+        },
     }
     ctx = RunContext(
         run_id="father-facts",

@@ -1,6 +1,6 @@
 scenario_id: userland_father_ldpreload
 name: Father system-wide LD_PRELOAD calibration
-objective: Generate a bounded calibration case using the pinned Father shared object and real /etc/ld.so.preload persistence.
+objective: Generate a bounded calibration case using the pinned Father shared object, real /etc/ld.so.preload persistence, and one native file-hiding check.
 
 attck:
   - T1574.006
@@ -10,53 +10,40 @@ safety:
   - VM snapshot restoration is the primary cleanup mechanism
   - VM-backed SSH execution is mandatory; local execution is refused
   - scenario execution remains offline; build prerequisites are preinstalled
+  - one fixed script invocation runs in an interactive Bash/PTY shell and normal history is saved on logout
   - no evasion or cleanup variant behavior
 
 paths:
   root: /tmp/forensic-lab/father_ldpreload
-  source_dir: "{root}/source"
   recovery_dir: "{root}/recovery"
-  upstream_archive_path: "{source_dir}/father-upstream-4eb2712.tar"
-  father_lock_path: "{source_dir}/father.lock.yml"
-  activation_helper_path: "{source_dir}/activate_system_preload.py"
-  father_source_tree: "{source_dir}/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"
-  father_config_path: "{father_source_tree}/src/config.h"
-  father_built_library_path: "{father_source_tree}/rk.so"
+  upstream_archive_path: "{root}/source/father-upstream-4eb2712.tar"
+  activation_helper_path: "{root}/source/activate_system_preload.py"
+  run_script_path: "{root}/run_father_calibration.sh"
   installed_library_path: /usr/local/lib/forensic-lab/father/selinux.so.3
   preload_config_path: /etc/ld.so.preload
   preload_backup_path: "{recovery_dir}/ld.so.preload.before"
   preload_absent_marker_path: "{recovery_dir}/ld.so.preload.was_absent"
+  hiding_probe_dir: "{root}/probe"
+  hiding_marker_path: "{hiding_probe_dir}/__malicious_file"
+  hiding_before_path: "{hiding_probe_dir}/before.txt"
+  hiding_after_path: "{hiding_probe_dir}/after.txt"
 
 variables:
-  preload_hide_token: father_calibration_nohide
   process_duration_seconds: 1800
 
 capabilities:
   system_wide_ld_preload: true
   controlled_process_mapping: true
+  father_native_file_hiding_validation: true
+  normal_bash_history: true
   failure_only_recovery: true
   cleanup: false
 
 steps:
-  - id: prepare_father_source
+  - id: run_father_calibration
     type: python
-    function: prepare_father_source
-    intent: Stage the pinned Father archive, lock, and activation helper inside the guest.
-
-  - id: configure_father
-    type: python
-    function: configure_father
-    intent: Configure only the extracted guest copy with the documented installation path.
-
-  - id: build_father_rootkit
-    type: python
-    function: build_father_rootkit
-    intent: Build the pinned Father rk.so inside the guest.
-
-  - id: install_activate_and_validate
-    type: python
-    function: install_activate_and_validate
-    intent: Preflight the installed library, atomically activate /etc/ld.so.preload, and validate multiple mapped processes.
+    function: run_father_calibration
+    intent: Upload the pinned assets and run one linear Father script in an interactive shell.
 
 evidence_sources:
   - disk/filesystem
@@ -65,9 +52,11 @@ evidence_sources:
 
 postconditions:
   - /etc/ld.so.preload names the installed Father shared object
-  - the shared object and preload configuration remain present for acquisition
+  - normal Bash history records the script invocation when the interactive shell logs out before acquisition
+  - __malicious_file is hidden from a new /bin/ls but still exists according to the Bash process started before activation
+  - the marker, preload configuration, installed library, build tree, and activation recovery artifacts remain present for acquisition
   - three controlled dynamically linked processes remain alive with the shared object mapped
-  - the manifest contains only concise operational execution facts
+  - the manifest contains only concise experimental treatment-validation facts
   - automatic detection and forensic conclusions remain out of scope
 
 prerequisites:

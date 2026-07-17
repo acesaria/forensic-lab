@@ -1,10 +1,10 @@
 # userland_father_ldpreload
 
 `userland_father_ldpreload` is a simple calibration case for real system-wide
-LD_PRELOAD persistence. It builds the pinned Father source inside a disposable
-guest, installs the resulting shared object at
-`/usr/local/lib/forensic-lab/father/selinux.so.3`, and atomically activates it
-through `/etc/ld.so.preload`.
+LD_PRELOAD persistence plus one Father-native file-hiding check. It builds the
+pinned Father source inside a disposable guest, installs the resulting shared
+object at `/usr/local/lib/forensic-lab/father/selinux.so.3`, and atomically
+activates it through `/etc/ld.so.preload`.
 
 The scenario is for isolated thesis VMs only. It refuses the local executor, so
 the Father archive, build, shared object, and activation helper are never run on
@@ -13,29 +13,43 @@ the development host.
 ## Prerequisites
 
 - a disposable, isolated lab VM restored to its baseline snapshot;
-- VM-backed execution through `python cli.py run`;
+- VM-backed execution through `.venv/bin/python cli.py run`;
 - working SSH access and non-interactive `sudo -n` to effective UID 0 in the guest;
 - guest `python3`, `gcc`, `make`, `libpam0g-dev`, `libgcrypt20-dev`, and
-  `libgcrypt20` (the orchestrator temporarily enables VM networking only if it
-  must install missing build prerequisites);
-- dynamically linked `/usr/bin/python3` and `/usr/bin/sleep` binaries.
+  `libgcrypt20`, all preinstalled in the offline baseline;
+- dynamically linked `/usr/bin/python3`, `/usr/bin/sleep`, and `/bin/ls`
+  binaries.
 
 ## Operational effect
 
-The implementation reading order is deliberately short: `scenario.yml` defines
-the four actions and all guest paths, `steps.py` performs those actions over
-SSH, and `files/activate_system_preload.py` contains the privileged guest
-transaction. No other scenario module contains Father behavior.
+The implementation reading order is `scenario.yml`, the thin host-side
+`steps.py`, the linear `files/run_father_calibration.sh`, and the focused
+privileged `files/activate_system_preload.py` helper. The lock remains host-side
+and its declared archive SHA-256 is verified before any upload.
 
-The four scenario steps stage and configure the pinned Father archive, build
-its real `rk.so`, and install it at the documented root-owned guest path. Before
-changing `/etc/ld.so.preload`, the root activation helper starts one Python
-process with an explicit `LD_PRELOAD` value and requires the shared object to
-appear in that process's `/proc/self/maps`.
+The orchestrator's existing Paramiko connection starts `/bin/bash -i` with one
+PTY, types one fixed script invocation followed by `exit`, and reads the
+combined terminal transcript to channel closure. Bash therefore saves genuine
+history on normal logout, while the channel supplies one real final exit status.
+There is no prompt parsing, per-command remote orchestration, or synthetic
+history.
 
-The run-local Father configuration uses a non-matching preload-hiding token, so
-this calibration does not add hiding of `/etc/ld.so.preload`. It does not
-exercise Father's other hiding or shell capabilities.
+The Bash script is one direct sequence: check offline prerequisites, extract
+and configure Father, build `rk.so`, create the hiding probe, invoke the
+privileged helper, validate hiding, and print the helper's JSON as its final
+structured output line.
+
+The run-local configuration keeps the preload-name token away from
+`/etc/ld.so.preload` and sets Father's file-hiding prefix to `__malicious_`.
+Before activation, `ls -l` must see `probe/__malicious_file` and writes
+`before.txt`. After activation, a new `ls -l` must fail to see that same file
+and writes `after.txt`, while the Bash process started before activation uses
+its built-in `[[ -e ... ]]` check to prove the file still exists. This is the
+only hiding behavior exercised.
+
+Before changing `/etc/ld.so.preload`, the root activation helper starts one
+Python process with an explicit `LD_PRELOAD` value and requires the shared
+object to appear in that process's `/proc/self/maps`.
 
 After that preflight succeeds, the helper preserves the exact pre-existing
 `/etc/ld.so.preload` bytes under
@@ -52,11 +66,12 @@ shared object. The run manifest records one concise `scenario_facts` block:
 - system-wide preload activation;
 - affected PIDs;
 - privilege used;
-- validation result.
+- treatment-validation result for system-wide mappings and file hiding.
 
-These are execution-validation facts, not automatic detection results or a
-forensic conclusion. The append-only command log retains the build commands,
-source hash, privilege-bearing activation command, and validation output.
+These are experimental treatment checks, not automatic detection results or a
+forensic conclusion. The append-only command log retains the verified source
+identity, three uploaded destinations, fixed script invocation, integer exit
+status, timestamps, and terminal-transcript excerpt.
 
 ## Acquisition moment
 
@@ -69,9 +84,10 @@ Use the normal full run:
 
 The orchestrator begins memory acquisition after all three mapped processes
 have passed validation and while the VM is still ON. It then powers the VM OFF
-for disk acquisition. `/etc/ld.so.preload`, the installed `.so`, and the
-recovery copy or absence marker are deliberately left present throughout this
-sequence.
+for disk acquisition. The probe marker, extracted source and build artifacts,
+installed library, `/etc/ld.so.preload`, recovery artifact, and three mapped
+processes are all left in place through acquisition. The marker is never
+deleted or altered after validation.
 
 `--no-acquire` is only for controlled troubleshooting and leaves the activated
 guest running. Restore the VM snapshot immediately afterward.
@@ -95,9 +111,10 @@ emergency-recovery mechanism.
 - System-wide preload affects every newly started dynamically linked guest
   process, including administrative and shutdown commands.
 - Father retains its upstream hooks. The scenario configures the preload-hiding
-  token away from `/etc/ld.so.preload` and does not trigger its shell,
-  privilege-escalation, other file-hiding, network-hiding, or other
-  capabilities, but the loaded code is not a benign substitute.
+  token away from `/etc/ld.so.preload` and exercises only the bounded
+  `__malicious_file` check. It does not trigger its shell,
+  privilege-escalation, network-hiding, or other capabilities, but the loaded
+  code is not a benign substitute.
 - Do not reuse the guest for unrelated work after activation. Acquire the
   evidence, then restore the baseline snapshot.
 - This calibration adds no evasion, cleanup, automatic detector, canonical
