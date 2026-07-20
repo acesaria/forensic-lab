@@ -72,8 +72,8 @@ class AcquisitionManifest:
     # the experiment directory name under experiments_dir (which holds the
     # dumps/ and analysis/ subtrees).
     run_id: str
-    # scenario_id is the bare scenarios.yaml key (or "verify"); never has a
-    # timestamp baked in. Use this for semantic queries / grouping.
+    # scenario_id is the bare explicit scenario name (or "verify"); never has
+    # a timestamp baked in. Use this for semantic queries / grouping.
     scenario_id: str
     created_at: float
     memory_image: ImageMetadata

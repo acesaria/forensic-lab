@@ -25,7 +25,7 @@ PROJECT_CONTEXT.md first, then only the files the task needs.
   over adding it; prefer editing an existing module over creating one.
 - No new top-level modules, abstractions, dependencies, frameworks, or config
   keys without an explicit request in the task.
-- Per-run behavior toggles are CLI flags, not edits to scenarios.yaml or
+- Per-run behavior toggles are CLI flags, not edits to scenario source or
   config files.
 - Scenarios use classic, well-documented techniques; do not add
   evasion-style plumbing or expand scenario scope.

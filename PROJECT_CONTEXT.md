@@ -33,7 +33,7 @@ old detector/matcher/metrics contribution, not as current methodology.
 
 ## Official workflow
 
-1. controlled scenario execution (declarative `scenario.yml`)
+1. controlled scenario execution through an explicit scenario runner
 2. minimal run manifest and append-only command log
 3. acquisition (memory with VM ON, disk with VM OFF)
 4. hash and provenance recording for acquired evidence
@@ -73,17 +73,18 @@ terms. They are not normative requirements for the current thesis.
 - cli.py                     entry point; setup, VM, verification, scenario and acquisition commands
 - infra/                     libvirt/QEMU, Ansible, distro profiles
 - orchestrator/core/         lifecycle, VM state, paths, config
-- orchestrator/scenarios/    declarative scenario engine
 - orchestrator/forensics/    acquisition + tool runners (plaso/vol3/tsk)
-- scenarios/scenarios/       scenario.yml + steps.py
+- scenarios/                 explicit runners + append-only command logging
 
-Registered thesis scenario:
-- userland_father_ldpreload  scenarios/scenarios/userland_father_ldpreload/scenario.yml
+Available explicit scenarios:
+- interactive_shell          scenarios/interactive_shell/runner.py
+- userland_father_ldpreload  scenarios/userland_father_ldpreload/runner.py
 
-The old detect/match/metrics stack under `orchestrator/evaluation/`, the
-ART/module execution path under `orchestrator/scenario_execution/`, the
-`gt_manifest` migration shim, the detector/matcher/canonical source packages,
-and the automatic finding-baseline cache have been removed.
+The old declarative scenario engine and registry have been removed. The old
+detect/match/metrics stack under `orchestrator/evaluation/`, the ART/module
+execution path under `orchestrator/scenario_execution/`, the `gt_manifest`
+migration shim, the detector/matcher/canonical source packages, and the
+automatic finding-baseline cache have also been removed.
 
 Generated outputs under shared/ are disposable artifacts, not source.
 

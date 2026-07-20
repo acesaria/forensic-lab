@@ -35,9 +35,8 @@ Do not reintroduce legacy automatic-evaluation areas into current source.
 | `cli.py` | Command entry point for setup, VM lifecycle, verification, scenario execution, acquisition, and raw extraction. | active | Touch only for named migration tasks. |
 | `infra/` | libvirt/QEMU, Ansible, distro profiles, image helpers. | active | Ignore unless VM lifecycle/profile work is explicitly in scope. |
 | `orchestrator/core/` | Lifecycle, VM state, run paths, config. | active | Preserve acquisition and provenance contracts. |
-| `orchestrator/scenarios/` | Declarative scenario engine. | active | Keep scenarios deterministic and bounded. |
 | `orchestrator/forensics/` | Acquisition and raw TSK/Plaso/Volatility tool runners. | active | Current extraction surface. |
-| `scenarios/` | Declarative scenario definitions. | active/support | Do not edit scenario YAML in documentation work. |
+| `scenarios/` | Explicit scenario runners and append-only command logging. | active/support | Keep scenario commands direct, deterministic, and bounded. |
 | `docs/` | Orientation, methodology, and historical notes. | docs | Keep current docs aligned with the manual methodology. |
 | `shared/` | Generated experiments, ISF files, and local artifacts. | generated/cache | Do not edit as source. |
 | `.claude/`, `.github/` | Agent and assistant instruction surfaces. | support/docs | Keep lightweight; local settings may be stale. |
@@ -49,8 +48,8 @@ Do not reintroduce legacy automatic-evaluation areas into current source.
 
 | Step | Responsibility | Key files/modules |
 |---|---|---|
-| Scenario registry | Selects registered declarative scenarios. | `scenarios.yaml`, `cli.py` |
-| Scenario execution | Runs `scenario.yml`, writes the run-root command log and minimal manifest index. | `orchestrator/scenarios/engine.py`, `loader.py`, `run_context.py`, `scenarios/scenarios/userland_father_ldpreload/scenario.yml`, `steps.py` |
+| Scenario dispatch | Selects an explicit runner from the requested CLI scenario. | `cli.py`, `orchestrator/core/orchestrator.py` |
+| Scenario execution | Runs readable commands through the existing SSH terminal and writes the run-root command log and minimal manifest index. | `scenarios/interactive_shell/runner.py`, `scenarios/userland_father_ldpreload/runner.py`, `scenarios/command_log.py` |
 | Acquisition | Preserves VM power-state contract and writes `dumps/acquisition.json`: memory while VM is ON, disk after VM shutdown. | `orchestrator/core/orchestrator.py`, `orchestrator/forensics/dumper.py`, `orchestrator/core/vm_manager.py` |
 | Raw extraction | Runs Sleuth Kit, Volatility3, and Plaso over acquired evidence. | `orchestrator/forensics/extract.py`, `sleuth_runner.py`, `vol_runner.py`, `plaso_runner.py` |
 | Provenance | Keeps a minimal root index plus separate acquisition and raw-extraction status records. | `orchestrator/core/`, run output directories |

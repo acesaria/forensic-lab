@@ -106,8 +106,3 @@ def load_profile(repo_root: Path, distro_id: str) -> dict[str, Any]:
         raise FileNotFoundError(f"No profile for '{distro_id}' at {path}")
     with open(path) as f:
         return yaml.safe_load(f)
-
-
-def load_scenarios(repo_root: Path) -> dict[str, Any]:
-    """Load scenarios.yaml. Returns an empty dict if the file is empty."""
-    return yaml.safe_load((repo_root / "scenarios.yaml").read_text()) or {}

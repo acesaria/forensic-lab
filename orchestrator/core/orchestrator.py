@@ -9,7 +9,7 @@ Public API
 setup_infra()              one-time: libvirt network + pool
 prepare_lab(distro_id)     one-time: image + VM + baseline snapshot + pipeline verify
 build_isf(distro_id)       one-time: Volatility symbol file
-run_declarative_experiment(...)  experiment loop
+run_experiment(...)        explicit scenario dispatch + experiment loop
 destroy_lab(distro_id)     teardown
 lab_exists(distro_id)      predicate
 verify_pipeline(distro_id) acquire a baseline image and probe Volatility/SleuthKit/Plaso
@@ -26,7 +26,7 @@ prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM destroyed)
 _reset_lab         ends ON + SSH ready
 _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
-run_declarative_experiment  ends OFF when acquire=True; ends ON when acquire=False
+Father experiments end OFF, including when acquisition is skipped or a step fails
 """
 
 from datetime import datetime, timezone
@@ -58,11 +58,13 @@ from orchestrator.forensics.plaso_runner import (
 )
 from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
 from orchestrator.forensics.pipeline_config import reported_version
-from orchestrator.scenarios import run_scenario
-from orchestrator.scenarios.executors import SSHClientExecutor
 from scenarios.interactive_shell.runner import (
     SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO,
     run_interactive_shell,
+)
+from scenarios.userland_father_ldpreload.runner import (
+    SCENARIO_ID as FATHER_SCENARIO,
+    run_father,
 )
 
 
@@ -162,22 +164,14 @@ class ForensicOrchestrator:
         self,
         distro_id: str,
         scenario_id: str,
-        scenario_cfg: dict[str, Any],
         acquire: bool = True,
     ) -> str | None:
-        """Dispatch one registered scenario without interpreting its internals."""
+        """Dispatch directly to one explicit scenario runner."""
         if scenario_id == INTERACTIVE_SHELL_SCENARIO:
             return self._run_interactive_shell_experiment(distro_id, acquire)
-        if "scenario_yml" not in scenario_cfg:
-            raise RuntimeError(
-                f"Invalid scenario config for '{scenario_id}': missing 'scenario_yml'"
-            )
-        return self.run_declarative_experiment(
-            distro_id,
-            scenario_id,
-            scenario_cfg,
-            acquire=acquire,
-        )
+        if scenario_id == FATHER_SCENARIO:
+            return self._run_father_experiment(distro_id, acquire)
+        raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
     def _run_interactive_shell_experiment(
         self,
@@ -323,124 +317,165 @@ class ForensicOrchestrator:
         console.section_end()
         return acquisition_path
 
-    # --- declarative experiment loop -------------------------------------
+    # --- Father explicit experiment loop ---------------------------------
 
-    def run_declarative_experiment(
+    def _run_father_experiment(
         self,
         distro_id: str,
-        scenario_id: str,
-        scenario_cfg: dict[str, Any],
-        acquire: bool = True,
+        acquire: bool,
     ) -> str | None:
-        """
-        VM-backed run of a declarative scenario.yml.
-
-        Reverts to baseline, runs the scenario's steps inside the guest over SSH
-        (writing manifest.json and command_log.jsonl at the run root), then --
-        unless acquire is False -- acquires RAM+disk and writes raw forensic
-        exports under analysis/. The VM ends OFF when acquire is True, ON
-        otherwise.
-
-        Declarative scenarios always run their full step list; the scenario.yml
-        owns its own step sequence.
-        """
-        scenario_yml = self.repo_root / str(scenario_cfg["scenario_yml"])
-        if not scenario_yml.is_file():
-            raise RuntimeError(
-                f"scenario '{scenario_id}': scenario.yml not found: {scenario_yml}"
-            )
-
+        scenario_id = FATHER_SCENARIO
         profile = "vanilla"
-        console.section(
-            f"experiment: {scenario_id} | distro: {distro_id} | profile: {profile}"
-        )
-        console.step_header("baseline restoration and readiness")
+        vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
+        vm_off = False
         try:
-            vm_name = self._reset_lab(distro_id)
-            snapshot_created_at = self.vm_manager.snapshot_created_at(
-                vm_name, BASELINE_SNAPSHOT
+            console.section(
+                f"experiment: {scenario_id} | distro: {distro_id} | "
+                f"profile: {profile}"
             )
-        finally:
-            console.section_end()
-        run_id = _make_run_id(distro_id, scenario_id)
-        run_root = self._paths.experiments_dir / run_id
-        run_display = Path(os.path.relpath(run_root, self.repo_root))
-
-        ctx = None
-        guest: dict[str, Any] | None = None
-
-        console.step_header("scenario execution")
-        try:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                ctx = run_scenario(
-                    scenario_yml,
-                    executor=SSHClientExecutor(ssh),
-                    out_dir=run_root,
-                    run_id=run_id,
-                    repo_root=self.repo_root,
-                    distro=distro_id,
-                    profile=profile,
-                    baseline={
-                        "vm_name": vm_name,
-                        "snapshot": BASELINE_SNAPSHOT,
-                        "snapshot_created_at": snapshot_created_at,
-                    },
+            console.step_header("baseline restoration and readiness")
+            try:
+                vm_name = self._reset_lab(distro_id)
+                snapshot_created_at = self.vm_manager.snapshot_created_at(
+                    vm_name, BASELINE_SNAPSHOT
                 )
-                if guest is None:
+            finally:
+                console.section_end()
+
+            run_id = _make_run_id(distro_id, scenario_id)
+            run_root = self._paths.experiments_dir / run_id
+            run_root.mkdir(parents=True, exist_ok=True)
+            run_display = Path(os.path.relpath(run_root, self.repo_root))
+            manifest_path = run_root / "manifest.json"
+            command_log_path = run_root / "command_log.jsonl"
+            transcript_path = run_root / "terminal_transcript.txt"
+            response_path = run_root / "father_backdoor_response.txt"
+            command_log_path.touch()
+            guest: dict[str, Any] = {}
+            manifest = {
+                "schema": "forensic-lab.run_manifest",
+                "version": 2,
+                "run_id": run_id,
+                "scenario_id": scenario_id,
+                "platform": {
+                    "distro_id": distro_id,
+                    "guest_os": None,
+                    "kernel": None,
+                    "timezone": "UTC",
+                    "profile": profile,
+                },
+                "repository": {
+                    "commit": command_output(
+                        ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
+                    )
+                },
+                "timestamps": {
+                    "started_at": _utc_now(),
+                    "ended_at": None,
+                    "full_run_ended_at": None,
+                },
+                "status": "running",
+                "artifacts": {
+                    "command_log": command_log_path.name,
+                    "terminal_transcript": transcript_path.name,
+                    "father_backdoor_response": response_path.name,
+                },
+                "baseline": {
+                    "vm_name": vm_name,
+                    "snapshot": BASELINE_SNAPSHOT,
+                    "snapshot_created_at": snapshot_created_at,
+                },
+            }
+            _write_run_manifest(manifest_path, manifest)
+
+            console.step_header("scenario execution")
+            try:
+                with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
-                ctx.update_environment(
-                    guest=guest,
-                    distro=distro_id,
-                )
-        finally:
-            self.vm_manager.internet_off(vm_name, quiet=True)
-            console.section_end()
+                    facts = run_father(
+                        ssh,
+                        transcript_path,
+                        response_path,
+                        command_log_path=command_log_path,
+                        run_id=run_id,
+                    )
+            except Exception:
+                manifest["status"] = "failed"
+                manifest["timestamps"]["ended_at"] = _utc_now()
+                manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+                _write_run_manifest(manifest_path, manifest)
+                raise
+            finally:
+                self.vm_manager.internet_off(vm_name, quiet=True)
+                console.section_end()
 
-        if not acquire:
-            ctx.finalize_full_run()
+            manifest["platform"].update(
+                guest_os=guest.get("distro"),
+                kernel=guest.get("kernel"),
+                timezone=guest.get("timezone"),
+            )
+            manifest["scenario_facts"] = facts
+            manifest["status"] = "completed"
+            manifest["timestamps"]["ended_at"] = _utc_now()
+            _write_run_manifest(manifest_path, manifest)
+
+            if not acquire:
+                self.vm_manager.shutdown_vm(vm_name)
+                vm_off = True
+                manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+                _write_run_manifest(manifest_path, manifest)
+                console.step_header("summary")
+                console.ok("scenario status: completed")
+                console.info(f"distro/profile: {distro_id} / {profile}")
+                console.info("acquisition: intentionally skipped (--no-acquire)")
+                console.info("raw extraction: intentionally skipped (--no-acquire)")
+                console.info("final VM state: off")
+                console.info(f"run directory: {run_display}")
+                console.info(f"root manifest: {run_display / manifest_path.name}")
+                console.section_end()
+                return None
+
+            acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
+            vm_off = True
+            manifest["artifacts"]["acquisition_manifest"] = str(
+                Path(acquisition_path).resolve().relative_to(run_root.resolve())
+            )
+            _write_run_manifest(manifest_path, manifest)
+            raw_status, raw_status_path = self._extract_raw_outputs(
+                run_id,
+                distro_id,
+                acquisition_path,
+                kernel_release=guest.get("kernel"),
+            )
+            manifest["artifacts"]["raw_extraction_status"] = str(
+                raw_status_path.resolve().relative_to(run_root.resolve())
+            )
+            manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+            _write_run_manifest(manifest_path, manifest)
             console.step_header("summary")
-            console.ok(f"scenario status: {ctx.final_status}")
+            console.ok("scenario status: completed")
             console.info(f"distro/profile: {distro_id} / {profile}")
-            console.info("acquisition: intentionally skipped (--no-acquire)")
-            console.info("raw extraction: intentionally skipped (--no-acquire)")
-            console.info("final VM state: running")
+            console.ok("acquisition status: completed")
+            for label, key in (
+                ("Volatility", "volatility"),
+                ("TSK", "tsk"),
+                ("Plaso", "plaso"),
+            ):
+                state = raw_status.get(key, {}).get("status", "unknown")
+                emit = console.ok if state == "completed" else console.warn
+                emit(f"{label}: {state}")
+            console.info("final VM state: off")
             console.info(f"run directory: {run_display}")
-            console.info(f"root manifest: {run_display / ctx.manifest_path.name}")
+            console.info(f"root manifest: {run_display / manifest_path.name}")
+            console.info(
+                "raw extraction status: "
+                f"{run_display / raw_status_path.relative_to(run_root)}"
+            )
             console.section_end()
-            return None
-
-        manifest_path = self._run_acquisition(vm_name, run_id, scenario_id)
-        if ctx is not None:
-            ctx.record_acquisition_output(manifest_path)
-        raw_status, raw_status_path = self._extract_raw_outputs(
-            run_id,
-            distro_id,
-            manifest_path,
-            ctx=ctx,
-            kernel_release=(guest or {}).get("kernel"),
-        )
-        ctx.finalize_full_run()
-        console.step_header("summary")
-        console.ok(f"scenario status: {ctx.final_status}")
-        console.info(f"distro/profile: {distro_id} / {profile}")
-        console.ok("acquisition status: completed")
-        for label, key in (
-            ("Volatility", "volatility"),
-            ("TSK", "tsk"),
-            ("Plaso", "plaso"),
-        ):
-            state = raw_status.get(key, {}).get("status", "unknown")
-            emit = console.ok if state == "completed" else console.warn
-            emit(f"{label}: {state}")
-        console.info("final VM state: off")
-        console.info(f"run directory: {run_display}")
-        console.info(f"root manifest: {run_display / ctx.manifest_path.name}")
-        console.info(
-            "raw extraction status: "
-            f"{run_display / raw_status_path.relative_to(run_root)}"
-        )
-        console.section_end()
-        return manifest_path
+            return acquisition_path
+        finally:
+            if not vm_off:
+                self.vm_manager.shutdown_vm(vm_name)
 
     @staticmethod
     def _guest_facts(ssh: SSHClient) -> dict[str, Any]:
@@ -475,7 +510,6 @@ class ForensicOrchestrator:
         distro_id: str,
         manifest_path: str,
         *,
-        ctx=None,
         kernel_release: str | None = None,
     ) -> tuple[dict[str, Any], Path]:
         """Produce raw TSK, Plaso, and Volatility exports after acquisition."""
@@ -496,8 +530,6 @@ class ForensicOrchestrator:
                 json.dumps(status, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",
             )
-            if ctx is not None:
-                ctx.record_raw_analysis_output(status_path)
             return status, status_path
         finally:
             console.section_end()

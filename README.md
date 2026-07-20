@@ -25,7 +25,7 @@ The thesis workflow is intentionally layered:
 
 1. provision a clean VM from a pinned distro image;
 2. snapshot the pristine baseline;
-3. run a controlled scenario from `scenarios.yaml`;
+3. run a controlled scenario through its explicit Python runner;
 4. write a minimal run manifest and append-only command log;
 5. acquire memory while the VM is ON;
 6. acquire disk while the VM is OFF;
@@ -46,13 +46,12 @@ reconstruction scores are not current thesis outputs.
 ```text
 forensic-lab/
 ├── cli.py                         # command entry point
-├── scenarios.yaml                 # registered scenario keys
 ├── scenarios/
-│   └── scenarios/                 # declarative scenario.yml trees
+│   ├── interactive_shell/         # explicit calibration runner
+│   └── userland_father_ldpreload/ # explicit Father runner + pinned source
 ├── infra/                         # libvirt/QEMU, Ansible, distro profiles
 ├── orchestrator/
 │   ├── core/                      # lifecycle, VM state, paths, provenance
-│   ├── scenarios/                 # declarative scenario engine
 │   └── forensics/                 # acquisition and raw tool runners
 ├── docs/                          # methodology and orientation
 └── shared/                        # generated experiment outputs
@@ -84,8 +83,8 @@ investigation notes. The historical automatic reconstruction implementation is
 kept in the immutable `automatic-reconstruction-v3-final` tag, not in the
 current source tree.
 
-Scenario keys come from `scenarios.yaml`. The current registered thesis
-scenario key remains `userland_father_ldpreload`.
+The CLI dispatches directly to `interactive_shell` or
+`userland_father_ldpreload`; the latter remains the thesis scenario key.
 
 Each generated experiment uses this provenance layout:
 

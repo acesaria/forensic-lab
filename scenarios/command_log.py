@@ -37,6 +37,13 @@ def log_command(
     }
     if error is not None:
         row["error"] = error
+    append_record(path, row)
+
+
+def append_record(path: Path | None, row: dict) -> None:
+    """Append one already-structured scenario record when logging is enabled."""
+    if path is None:
+        return
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
 

@@ -9,14 +9,19 @@ from pathlib import Path
 from infra.provider import Provider
 from orchestrator.core import console
 from orchestrator.core.bootstrap import run_init
-from orchestrator.core.config import load_config, load_profile, load_scenarios
+from orchestrator.core.config import load_config, load_profile
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
+from scenarios.interactive_shell.runner import SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO
+from scenarios.userland_father_ldpreload.runner import SCENARIO_ID as FATHER_SCENARIO
 
 
-def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
+SCENARIO_CHOICES = tuple(sorted((INTERACTIVE_SHELL_SCENARIO, FATHER_SCENARIO)))
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="forensic-lab",
         description=(
@@ -73,7 +78,7 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
     run.add_argument(
         "--scenario",
         default="userland_father_ldpreload",
-        choices=scenario_keys,
+        choices=SCENARIO_CHOICES,
         help="Controlled scenario key to run",
     )
     run.add_argument(
@@ -140,8 +145,7 @@ def _check_prerequisites(raw_tools: dict[str, str]) -> None:
 
 def main() -> None:
     repo_root = Path(__file__).resolve().parent
-    scenarios = load_scenarios(repo_root)
-    args = build_parser(tuple(sorted(scenarios.keys()))).parse_args()
+    args = build_parser().parse_args()
     _setup_logging(args.debug)
 
     # The 'setup' and 'run' paths need a valid distro profile; fail fast with a
@@ -220,11 +224,9 @@ def main() -> None:
                         f".venv/bin/python cli.py setup --distro {distro_id}"
                     )
                     raise SystemExit(1)
-                scenario_cfg = scenarios[args.scenario]
                 orchestrator.run_experiment(
                     distro_id,
                     args.scenario,
-                    scenario_cfg,
                     acquire=args.acquire,
                 )
 
