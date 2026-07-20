@@ -21,7 +21,7 @@ def build_parser(scenario_keys: tuple[str, ...]) -> argparse.ArgumentParser:
         prog="forensic-lab",
         description=(
             "Linux post-mortem forensic lab.\n"
-            "Primary thesis path: declarative scenario execution -> "
+            "Primary thesis path: controlled scenario execution -> "
             "run manifest/command log\n"
             "  -> acquisition -> raw forensic exports -> manual investigation."
         ),
@@ -220,14 +220,8 @@ def main() -> None:
                         f".venv/bin/python cli.py setup --distro {distro_id}"
                     )
                     raise SystemExit(1)
-                # argparse choices guarantee the key exists in the registry.
                 scenario_cfg = scenarios[args.scenario]
-                if "scenario_yml" not in scenario_cfg:
-                    raise RuntimeError(
-                        f"Invalid scenario config for '{args.scenario}': "
-                        "missing 'scenario_yml'"
-                    )
-                orchestrator.run_declarative_experiment(
+                orchestrator.run_experiment(
                     distro_id,
                     args.scenario,
                     scenario_cfg,

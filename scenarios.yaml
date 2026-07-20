@@ -1,4 +1,5 @@
-# Thesis scenario registry. Every entry is a declarative scenario
-# (scenario_yml); the scenario.yml owns its own step sequence.
+# Thesis scenario registry. Code-backed scenarios need no configuration;
+# Father temporarily remains on the legacy declarative path.
+interactive_shell: {}
 userland_father_ldpreload:
   scenario_yml: scenarios/userland_father_ldpreload/scenario.yml
