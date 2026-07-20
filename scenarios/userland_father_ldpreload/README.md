@@ -21,7 +21,7 @@ The vendored archive is locked by `father.lock.yml` to upstream commit
 The runner then:
 
 - extracts and configures the pristine pinned source in the guest;
-- builds, hashes, and installs `rk.so` at
+- builds and installs `rk.so` at
   `/usr/local/lib/forensic-lab/father/selinux.so.3`;
 - lists `__malicious_file`, writes the library path to `/etc/ld.so.preload`,
   then lists the same directory and confirms that the file is hidden;

