@@ -80,3 +80,8 @@ validity, or manual investigation quality.
 Use tests to catch regressions in code that remains active, then validate thesis
 claims against explicit run artifacts, raw tool exports, command logs, hashes,
 and analyst notes.
+
+
+
+# just reminder, ignore it
+- if you have time check churchofmal.. appliability

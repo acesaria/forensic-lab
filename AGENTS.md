@@ -42,9 +42,10 @@ PROJECT_CONTEXT.md first, then only the files the task needs.
 
 ## Test policy
 
-- At most one focused test per behavior change, in an existing test file
-  when one fits. No new fixtures, suites, or parametrized matrices unless
-  the task asks.
+- Do not add or modify tests by default. Scenario changes are validated with
+  syntax checks, existing relevant tests, and controlled VM smoke runs.
+- Add one focused regression test only when explicitly requested or when
+  fixing a concrete shared-runtime defect.
 - Never add tests to legacy code.
 
 ## Python commands

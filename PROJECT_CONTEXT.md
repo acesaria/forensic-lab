@@ -93,6 +93,19 @@ acquisition provenance in `dumps/acquisition.json`, and raw-tool provenance in
 `analysis/raw_extraction_status.json`. Detailed hashes, commands, versions, and
 failures live in the sidecars rather than being duplicated into the run manifest.
 
+## Testing policy
+
+Delivery speed and controlled VM validation take priority over expanding the automated test suite.
+
+* Do not add or modify tests by default.
+* For scenario-only changes, use syntax checks, compilation checks, existing tests when directly relevant, and one controlled VM smoke run.
+* Add at most one focused regression test only when changing shared runtime infrastructure such as SSH execution, the scenario engine, VM lifecycle, acquisition, or raw extraction.
+* Do not add source-shape tests, broad mocks, duplicated tests, or tests solely to increase coverage.
+* Do not create test-only abstractions or fixtures.
+* Add tests only when explicitly requested or when a concrete previously observed defect would otherwise be easy to reintroduce.
+* State clearly when no tests were added and why.
+
+
 ## Invariants
 
 - Memory acquisition requires the VM ON; disk acquisition requires the VM OFF.
