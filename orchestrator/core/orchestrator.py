@@ -204,7 +204,7 @@ class ForensicOrchestrator:
         guest: dict[str, Any] = {}
         manifest = {
             "schema": "forensic-lab.run_manifest",
-            "version": 2,
+            "version": 3,
             "run_id": run_id,
             "scenario_id": scenario_id,
             "platform": {
@@ -220,11 +220,11 @@ class ForensicOrchestrator:
                 )
             },
             "timestamps": {
-                "started_at": started_at,
-                "ended_at": None,
-                "full_run_ended_at": None,
+                "scenario_started_at": started_at,
             },
             "status": "running",
+            "scenario_status": "running",
+            "acquisition_requested": acquire,
             "artifacts": {
                 "command_log": command_log_path.name,
                 "terminal_transcript": transcript_path.name,
@@ -248,8 +248,12 @@ class ForensicOrchestrator:
                     run_id=run_id,
                 )
         except Exception:
+            ended_at = _utc_now()
             manifest["status"] = "failed"
-            manifest["timestamps"]["ended_at"] = _utc_now()
+            manifest["scenario_status"] = "failed"
+            manifest["failed_phase"] = "scenario"
+            manifest["timestamps"]["scenario_ended_at"] = ended_at
+            manifest["timestamps"]["run_ended_at"] = ended_at
             _write_run_manifest(manifest_path, manifest)
             raise
         finally:
@@ -261,12 +265,13 @@ class ForensicOrchestrator:
             kernel=guest.get("kernel"),
             timezone=guest.get("timezone"),
         )
-        manifest["status"] = "completed"
-        manifest["timestamps"]["ended_at"] = _utc_now()
+        manifest["scenario_status"] = "completed"
+        manifest["timestamps"]["scenario_ended_at"] = _utc_now()
         _write_run_manifest(manifest_path, manifest)
 
         if not acquire:
-            manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+            manifest["status"] = "completed"
+            manifest["timestamps"]["run_ended_at"] = _utc_now()
             _write_run_manifest(manifest_path, manifest)
             console.step_header("summary")
             console.ok("scenario status: completed")
@@ -279,21 +284,31 @@ class ForensicOrchestrator:
             console.section_end()
             return None
 
-        acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
-        manifest["artifacts"]["acquisition_manifest"] = str(
-            Path(acquisition_path).resolve().relative_to(run_root.resolve())
-        )
-        _write_run_manifest(manifest_path, manifest)
-        raw_status, raw_status_path = self._extract_raw_outputs(
-            run_id,
-            distro_id,
-            acquisition_path,
-            kernel_release=guest.get("kernel"),
-        )
-        manifest["artifacts"]["raw_extraction_status"] = str(
-            raw_status_path.resolve().relative_to(run_root.resolve())
-        )
-        manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+        failed_phase = "acquisition"
+        try:
+            acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
+            manifest["artifacts"]["acquisition_manifest"] = str(
+                Path(acquisition_path).resolve().relative_to(run_root.resolve())
+            )
+            _write_run_manifest(manifest_path, manifest)
+            failed_phase = "raw_extraction"
+            raw_status, raw_status_path = self._extract_raw_outputs(
+                run_id,
+                distro_id,
+                acquisition_path,
+                kernel_release=guest.get("kernel"),
+            )
+            manifest["artifacts"]["raw_extraction_status"] = str(
+                raw_status_path.resolve().relative_to(run_root.resolve())
+            )
+        except Exception:
+            manifest["status"] = "failed"
+            manifest["failed_phase"] = failed_phase
+            manifest["timestamps"]["run_ended_at"] = _utc_now()
+            _write_run_manifest(manifest_path, manifest)
+            raise
+        manifest["status"] = "completed"
+        manifest["timestamps"]["run_ended_at"] = _utc_now()
         _write_run_manifest(manifest_path, manifest)
         console.step_header("summary")
         console.ok("scenario status: completed")
@@ -354,7 +369,7 @@ class ForensicOrchestrator:
             guest: dict[str, Any] = {}
             manifest = {
                 "schema": "forensic-lab.run_manifest",
-                "version": 2,
+                "version": 3,
                 "run_id": run_id,
                 "scenario_id": scenario_id,
                 "platform": {
@@ -370,11 +385,11 @@ class ForensicOrchestrator:
                     )
                 },
                 "timestamps": {
-                    "started_at": _utc_now(),
-                    "ended_at": None,
-                    "full_run_ended_at": None,
+                    "scenario_started_at": _utc_now(),
                 },
                 "status": "running",
+                "scenario_status": "running",
+                "acquisition_requested": acquire,
                 "artifacts": {
                     "command_log": command_log_path.name,
                     "terminal_transcript": transcript_path.name,
@@ -400,9 +415,12 @@ class ForensicOrchestrator:
                         run_id=run_id,
                     )
             except Exception:
+                ended_at = _utc_now()
                 manifest["status"] = "failed"
-                manifest["timestamps"]["ended_at"] = _utc_now()
-                manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+                manifest["scenario_status"] = "failed"
+                manifest["failed_phase"] = "scenario"
+                manifest["timestamps"]["scenario_ended_at"] = ended_at
+                manifest["timestamps"]["run_ended_at"] = ended_at
                 _write_run_manifest(manifest_path, manifest)
                 raise
             finally:
@@ -415,14 +433,15 @@ class ForensicOrchestrator:
                 timezone=guest.get("timezone"),
             )
             manifest["scenario_facts"] = facts
-            manifest["status"] = "completed"
-            manifest["timestamps"]["ended_at"] = _utc_now()
+            manifest["scenario_status"] = "completed"
+            manifest["timestamps"]["scenario_ended_at"] = _utc_now()
             _write_run_manifest(manifest_path, manifest)
 
             if not acquire:
                 self.vm_manager.shutdown_vm(vm_name)
                 vm_off = True
-                manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+                manifest["status"] = "completed"
+                manifest["timestamps"]["run_ended_at"] = _utc_now()
                 _write_run_manifest(manifest_path, manifest)
                 console.step_header("summary")
                 console.ok("scenario status: completed")
@@ -435,22 +454,32 @@ class ForensicOrchestrator:
                 console.section_end()
                 return None
 
-            acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
-            vm_off = True
-            manifest["artifacts"]["acquisition_manifest"] = str(
-                Path(acquisition_path).resolve().relative_to(run_root.resolve())
-            )
-            _write_run_manifest(manifest_path, manifest)
-            raw_status, raw_status_path = self._extract_raw_outputs(
-                run_id,
-                distro_id,
-                acquisition_path,
-                kernel_release=guest.get("kernel"),
-            )
-            manifest["artifacts"]["raw_extraction_status"] = str(
-                raw_status_path.resolve().relative_to(run_root.resolve())
-            )
-            manifest["timestamps"]["full_run_ended_at"] = _utc_now()
+            failed_phase = "acquisition"
+            try:
+                acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
+                vm_off = True
+                manifest["artifacts"]["acquisition_manifest"] = str(
+                    Path(acquisition_path).resolve().relative_to(run_root.resolve())
+                )
+                _write_run_manifest(manifest_path, manifest)
+                failed_phase = "raw_extraction"
+                raw_status, raw_status_path = self._extract_raw_outputs(
+                    run_id,
+                    distro_id,
+                    acquisition_path,
+                    kernel_release=guest.get("kernel"),
+                )
+                manifest["artifacts"]["raw_extraction_status"] = str(
+                    raw_status_path.resolve().relative_to(run_root.resolve())
+                )
+            except Exception:
+                manifest["status"] = "failed"
+                manifest["failed_phase"] = failed_phase
+                manifest["timestamps"]["run_ended_at"] = _utc_now()
+                _write_run_manifest(manifest_path, manifest)
+                raise
+            manifest["status"] = "completed"
+            manifest["timestamps"]["run_ended_at"] = _utc_now()
             _write_run_manifest(manifest_path, manifest)
             console.step_header("summary")
             console.ok("scenario status: completed")

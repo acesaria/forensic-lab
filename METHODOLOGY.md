@@ -99,11 +99,13 @@ Every thesis run must retain:
   conclusions.
 
 The run-root manifest is a small index. It points to the append-only command
-log, `dumps/acquisition.json`, and `analysis/raw_extraction_status.json`; it does
-not embed scenario parameters, per-step records, expected observables, evidence
-hashes, or full tool records. The Father calibration includes one concise
-`scenario_facts` block for deployment, activation, PIDs, privilege, and
-execution validation.
+log and, when acquisition is requested, `dumps/acquisition.json` and
+`analysis/raw_extraction_status.json`; it does not embed scenario parameters,
+per-step records, expected observables, evidence hashes, or full tool records.
+Its root status covers the requested workflow. A completed `--no-acquire` run
+is explicitly scenario-only and is not an accepted forensic experiment. The
+Father calibration includes one concise `scenario_facts` block for deployment,
+activation, PIDs, privilege, and execution validation.
 
 Memory provenance includes the full-image SHA-256, byte size, acquisition
 timestamp and duration, exact `virsh dump --memory-only` command, and reported
@@ -117,7 +119,8 @@ Raw extraction retains separate TSK, Plaso, and Volatility outputs plus an
 adjacent status record containing their versions, invocations, exit status,
 output paths and hashes. A successful invocation with zero rows or events is
 recorded as `zero_results`; it is not interchangeable with a failed tool or
-plugin.
+plugin. Tool failures recorded in this sidecar do not change scenario status or
+prevent workflow completion once the status record is written.
 
 Raw evidence is immutable. If a tool is rerun, the new output is a separate
 derived artifact with its own provenance; the acquired disk and memory evidence

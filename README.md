@@ -86,7 +86,7 @@ current source tree.
 The CLI dispatches directly to `interactive_shell` or
 `userland_father_ldpreload`; the latter remains the thesis scenario key.
 
-Each generated experiment uses this provenance layout:
+An acquired experiment uses this provenance layout:
 
 ```text
 experiments/<run_id>/
@@ -99,7 +99,9 @@ experiments/<run_id>/
 The root manifest remains a small index. The Father calibration adds one concise
 operational `scenario_facts` block; acquisition hashes and commands remain in
 `acquisition.json`, while raw-tool versions, invocations, output hashes, zero
-results, and failures remain in `raw_extraction_status.json`.
+results, and failures remain in `raw_extraction_status.json`. Root status covers
+the requested workflow; a completed `--no-acquire` run is explicitly
+scenario-only and is not an accepted forensic experiment.
 
 ## Evidence Contract
 

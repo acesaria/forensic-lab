@@ -1,9 +1,69 @@
 import hashlib
+import json
+from contextlib import nullcontext
 from pathlib import Path
 
 import pytest
 
 from orchestrator.core.orchestrator import ForensicOrchestrator
+
+
+def test_acquisition_failure_marks_run_failed_after_completed_scenario(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    error = RuntimeError("acquisition failed")
+
+    class FakeVMManager:
+        def snapshot_created_at(self, *_args):
+            return "2026-07-21T00:00:00.000Z"
+
+        def open_ssh(self, *_args):
+            return nullcontext(object())
+
+        def internet_off(self, *_args, **_kwargs):
+            pass
+
+    class FakePaths:
+        experiments_dir = tmp_path
+
+    class FakeOrchestrator:
+        repo_root = tmp_path
+        _paths = FakePaths()
+        vm_manager = FakeVMManager()
+
+        def _reset_lab(self, _distro_id):
+            return "lab-ubuntu-22.04"
+
+        def _guest_facts(self, _ssh):
+            return {"distro": "Ubuntu", "kernel": "test", "timezone": "UTC"}
+
+        def _run_acquisition(self, *_args):
+            raise error
+
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.command_output", lambda *_args: "test-commit"
+    )
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.run_interactive_shell",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError) as raised:
+        ForensicOrchestrator._run_interactive_shell_experiment(
+            FakeOrchestrator(), "ubuntu-22.04", acquire=True
+        )
+
+    manifest_path = next(tmp_path.glob("*/manifest.json"))
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert raised.value is error
+    assert manifest["status"] == "failed"
+    assert manifest["scenario_status"] == "completed"
+    assert manifest["acquisition_requested"] is True
+    assert manifest["failed_phase"] == "acquisition"
+    assert manifest["timestamps"]["scenario_ended_at"]
+    assert manifest["timestamps"]["run_ended_at"]
+    assert "acquisition_manifest" not in manifest["artifacts"]
+    assert "raw_extraction_status" not in manifest["artifacts"]
 
 
 def test_raw_volatility_status_records_resolved_isf(
