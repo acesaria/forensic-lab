@@ -107,10 +107,10 @@ class SSHTerminal:
 
     def _receive(self) -> str:
         text = self._channel.recv(4096).decode(errors="replace")
-        self._transcript.append(text)
         return text
 
     def _display(self, text: str, *, prompt: bool = False) -> None:
+        self._transcript.append(text)
         if self._output is not None:
             self._output.write(console.format_terminal(text, prompt=prompt))
             self._output.flush()

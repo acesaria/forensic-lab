@@ -365,7 +365,6 @@ class ForensicOrchestrator:
             manifest_path = run_root / "manifest.json"
             command_log_path = run_root / "command_log.jsonl"
             transcript_path = run_root / "terminal_transcript.txt"
-            response_path = run_root / "father_backdoor_response.txt"
             command_log_path.touch()
             guest: dict[str, Any] = {}
             manifest = {
@@ -394,7 +393,6 @@ class ForensicOrchestrator:
                 "artifacts": {
                     "command_log": command_log_path.name,
                     "terminal_transcript": transcript_path.name,
-                    "father_backdoor_response": response_path.name,
                 },
                 "baseline": {
                     "vm_name": vm_name,
@@ -411,7 +409,6 @@ class ForensicOrchestrator:
                     facts = run_father(
                         ssh,
                         transcript_path,
-                        response_path,
                         command_log_path=command_log_path,
                         run_id=run_id,
                     )
