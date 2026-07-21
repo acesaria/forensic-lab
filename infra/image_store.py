@@ -8,6 +8,7 @@ VMs use qcow2 overlays so the base image is never written to directly
 
 import hashlib
 import os
+import shutil
 import tempfile
 from pathlib import Path
 import subprocess
@@ -140,15 +141,17 @@ def _stream_to_file(url: str, fh) -> None:
 def _lock_base_image(path: Path) -> None:
     # Cached base images are pinned setup-time inputs. Lock them after
     # checksum verification so experiment-time code cannot silently mutate them.
+    chown_bin = shutil.which("chown") or "/usr/bin/chown"
+    chmod_bin = shutil.which("chmod") or "/usr/bin/chmod"
     try:
         subprocess.run(
-            ["sudo", "/bin/chown", "root:root", str(path)],
+            ["sudo", chown_bin, "root:root", str(path)],
             check=True,
             capture_output=True,
             text=True,
         )
         subprocess.run(
-            ["sudo", "/bin/chmod", "0444", str(path)],
+            ["sudo", chmod_bin, "0444", str(path)],
             check=True,
             capture_output=True,
             text=True,
