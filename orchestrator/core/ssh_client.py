@@ -19,6 +19,8 @@ from typing import Optional, TextIO, Tuple
 
 import paramiko
 
+from orchestrator.core import console
+
 
 @dataclass(frozen=True)
 class TerminalCommandResult:
@@ -62,7 +64,7 @@ class SSHTerminal:
         if self._channel.closed:
             raise RuntimeError("interactive terminal is closed")
 
-        self._display(f"$ {command}\n")
+        self._display(f"$ {command}\n", prompt=True)
         self._send(command)
         raw, exit_code = self._read_until_prompt(timeout or self._timeout)
         normalized = self._CONTROL_RE.sub("", raw)
@@ -82,7 +84,6 @@ class SSHTerminal:
             self._display(f"{result.combined_output}\n")
         if result.exit_code != 0:
             self._display(f"[exit {result.exit_code}]\n")
-        self._display("\n")
         return result
 
     def close(self) -> None:
@@ -109,9 +110,9 @@ class SSHTerminal:
         self._transcript.append(text)
         return text
 
-    def _display(self, text: str) -> None:
+    def _display(self, text: str, *, prompt: bool = False) -> None:
         if self._output is not None:
-            self._output.write(text)
+            self._output.write(console.format_terminal(text, prompt=prompt))
             self._output.flush()
 
     def _read_until_idle(self, timeout: int, idle: float = 0.4) -> str:

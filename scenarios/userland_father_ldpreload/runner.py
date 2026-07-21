@@ -74,7 +74,7 @@ def run_father(
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
     transcript_path.touch()
     response_path.touch()
-    console.step_header(COMMAND_GROUPS[0][0])
+    console.scope("HOST", "stage Father source")
     source = _verify_source(command_log_path, run_id)
     _upload_archive(ssh, command_log_path, run_id)
 
@@ -83,9 +83,8 @@ def run_father(
     command_index = 0
     try:
         with terminal:
-            for group_index, (label, commands) in enumerate(COMMAND_GROUPS):
-                if group_index:
-                    console.step_header(label)
+            for label, commands in COMMAND_GROUPS:
+                console.scope("GUEST", label)
                 for command in commands:
                     command_index += 1
                     started_at = utc_now()
@@ -134,6 +133,7 @@ def run_father(
     ):
         raise RuntimeError("Father did not hide the controlled file as expected")
 
+    console.scope("HOST", "validate Father backdoor")
     identity = _validate_backdoor(
         ssh,
         response_path,

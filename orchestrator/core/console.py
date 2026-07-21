@@ -12,6 +12,7 @@ Convention
   [!]  warning                console.warn(msg)
   [-]  error                  console.err(msg)
   [d]  debug record           PrefixColorFormatter
+  [HOST] / [GUEST] phase      console.scope(kind, label)
   === title ===  section      console.section(title)
   --- label  ---  step header console.step_header(label)
 
@@ -19,7 +20,8 @@ Indentation
 -----------
 Depth is implicit. `section()` and `section_end()` reset depth to 0;
 `step_header()` prints its header at depth 0 then opens depth 1, so every
-subsequent emit inside the step is auto-indented. Callers do not pass
+subsequent emit inside the step is auto-indented. `scope()` does the same for
+HOST/GUEST phases. Callers do not pass
 `indent=True` -- a `with console.indented():` block is the explicit escape
 hatch for anything that needs to nest deeper than the structural defaults.
 
@@ -55,11 +57,14 @@ _COLORS = {
     "[!]": "\033[33m",  # yellow: warning
     "[-]": "\033[31m",  # red:    error
     "[d]": "\033[2m",   # dim:    debug
+    "[HOST]": "\033[35m",
+    "[GUEST]": "\033[36m",
 }
+_PROMPT_COLOR = "\033[32m"
 
 _INDENT_UNIT = "    "
 
-# Current indent depth. Mutated only by section/step_header/section_end and
+# Current indent depth. Mutated only by structural helpers and
 # by the indented() context manager. ContextVar (not a plain int) so a
 # future async or threaded caller can't corrupt the depth seen by another.
 _indent_level: ContextVar[int] = ContextVar("console_indent_level", default=0)
@@ -94,6 +99,14 @@ class PrefixColorFormatter(logging.Formatter):
 
 def _prefix() -> str:
     return _INDENT_UNIT * _indent_level.get()
+
+
+def format_terminal(text: str, *, prompt: bool = False) -> str:
+    """Indent terminal display text, coloring only a leading shell prompt."""
+    if prompt and _color_enabled():
+        text = f"{_PROMPT_COLOR}${_RESET}{text[1:]}"
+    prefix = _prefix()
+    return "".join(prefix + line for line in text.splitlines(keepends=True))
 
 
 # --- emitters --------------------------------------------------------------
@@ -140,6 +153,13 @@ def step_header(label: str) -> None:
     """
     _indent_level.set(0)
     _log.info("\n--- %s ---", label)
+    _indent_level.set(1)
+
+
+def scope(kind: str, label: str) -> None:
+    """Print a HOST/GUEST phase at depth 0 and indent its contents."""
+    _indent_level.set(0)
+    _log.info("\n[%s] %s", kind, label)
     _indent_level.set(1)
 
 
