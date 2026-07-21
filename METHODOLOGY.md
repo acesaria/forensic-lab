@@ -42,11 +42,12 @@ or automatic reconstruction metrics.
 One run is `(scenario, distro, profile)`.
 
 - **Deep-analysis platform:** Ubuntu 22.04.
-- **Targeted replication platforms:** Ubuntu 24.04 and Fedora.
+- **Targeted replication platforms:** Ubuntu 24.04 and Debian 13.
 - **Vanilla profile:** distro defaults.
 - **Hardened profile:** one fixed, documented native-control bundle.
 - **Ubuntu native control:** AppArmor.
-- **Fedora native control:** SELinux.
+- **Deferred optional extension:** Fedora/SELinux; it is not part of the current
+  committed matrix.
 - **hardened+telemetry:** the hardened bundle plus `auditd`; used only for the
   Father cleanup comparison.
 
@@ -200,9 +201,10 @@ raw evidence hashes, and profile definitions are provenance.
 - **ISO/IEC 27037-style handling:** acquired evidence is preserved immutably,
   hashes are retained, and later analysis is performed on acquired images or
   derived exports.
-- **Linux security controls:** Ubuntu hardening is AppArmor-based; Fedora
-  hardening is SELinux-based. `auditd` is an added telemetry condition only for
-  the Father cleanup comparison.
+- **Linux security controls:** Ubuntu hardening is AppArmor-based.
+  Fedora/SELinux is a deferred optional extension and is not part of the current
+  committed matrix. `auditd` is an added telemetry condition only for the
+  Father cleanup comparison.
 - **DFIR reproducibility:** command logs, manifests, hashes, tool command
   lines, tool failures, and negative findings are part of the evidence record.
 

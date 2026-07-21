@@ -51,7 +51,7 @@ Guardrails:
 1. Manual investigation report template for a named run.
 2. Ubuntu 22.04 deep-analysis Father no-cleanup and cleanup write-up.
 3. Father cleanup hardened+telemetry comparison with `auditd`.
-4. Targeted Ubuntu 24.04 and Fedora replication.
+4. Targeted Ubuntu 24.04 and Debian 13 replication.
 5. Thesis figures, limitations tables, and writing freeze.
 
 ## Explicit Deferrals
@@ -70,6 +70,7 @@ Defer these unless a later task explicitly reopens them:
 - Large test rewrite.
 - Broad architecture refactor.
 - New major dependencies or platforms.
+- Fedora/SELinux optional extension.
 
 ## Testing Warning
 
@@ -80,8 +81,3 @@ validity, or manual investigation quality.
 Use tests to catch regressions in code that remains active, then validate thesis
 claims against explicit run artifacts, raw tool exports, command logs, hashes,
 and analyst notes.
-
-
-
-# just reminder, ignore it
-- if you have time check churchofmal.. appliability

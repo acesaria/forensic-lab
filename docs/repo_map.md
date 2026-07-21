@@ -13,9 +13,11 @@ It does not replace `PROJECT_CONTEXT.md`, `AGENTS.md`, or `METHODOLOGY.md`.
 - Investigation remains manual; source-family correlation is analyst work.
 - Vanilla means distro defaults.
 - Hardened means one fixed documented native-control bundle.
-- Ubuntu uses AppArmor; Fedora uses SELinux.
+- Ubuntu uses AppArmor.
+- Fedora/SELinux is a postponed optional extension and is not part of the
+  current committed matrix.
 - Ubuntu 22.04 is the deep-analysis platform.
-- Ubuntu 24.04 and Fedora receive targeted replication.
+- Ubuntu 24.04 and Debian 13 receive targeted replication.
 - Automatic detector claims, canonical matching, precision/recall metrics,
   ruleset hashes, and automatic reconstruction are legacy, not current thesis
   requirements.

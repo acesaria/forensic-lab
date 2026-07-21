@@ -129,11 +129,12 @@ Power transitions stay in the orchestrator, not in tool wrappers.
 ## Profiles
 
 - Ubuntu 22.04 is the deep-analysis platform.
-- Ubuntu 24.04 and Fedora receive targeted replication.
+- Ubuntu 24.04 and Debian 13 receive targeted replication.
 - Vanilla means distro defaults.
 - Hardened means one fixed documented native-control bundle.
 - Ubuntu hardening uses AppArmor.
-- Fedora hardening uses SELinux.
+- Fedora/SELinux is a postponed optional extension and is not part of the
+  current committed matrix.
 - `hardened+telemetry` adds `auditd` and is used only for the Father cleanup
   comparison.
 
