@@ -14,6 +14,7 @@ from orchestrator.core.ssh_client import SSHClient, TerminalCommandResult
 from scenarios.command_log import append_record, log_command, utc_now
 
 SCENARIO_ID = "userland_father_ldpreload"
+CLEANUP_SCENARIO_ID = "userland_father_ldpreload_cleanup"
 ROOT = Path(__file__).resolve().parent
 ARCHIVE = ROOT / "files/father-upstream-4eb2712.tar"
 LOCK = ROOT / "father.lock.yml"
@@ -64,6 +65,16 @@ COMMAND_GROUPS = (
     ),
 )
 
+CLEANUP_COMMANDS = (
+    f'rm -f -- {UPLOAD_PATH} && rm -rf -- "$source"',
+    f'test ! -e {UPLOAD_PATH} && test ! -e "$source" '
+    f"&& test -e {PRELOAD_CONFIG} && test -e {INSTALLED_LIBRARY}",
+    "history -c",
+    'rm -f -- "${HISTFILE:-$HOME/.bash_history}"',
+    "unset HISTFILE",
+    'test ! -e "$HOME/.bash_history"',
+)
+
 
 def run_father(
     ssh: SSHClient,
@@ -71,75 +82,99 @@ def run_father(
     *,
     command_log_path: Path,
     run_id: str,
+    scenario_id: str,
 ) -> dict:
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
+    if scenario_id not in (SCENARIO_ID, CLEANUP_SCENARIO_ID):
+        raise ValueError(f"Unsupported Father scenario: {scenario_id}")
+
+    cleanup = scenario_id == CLEANUP_SCENARIO_ID
     transcript_path.touch()
     console.scope("HOST", "stage Father source")
-    source = _verify_source(command_log_path, run_id)
-    _upload_archive(ssh, command_log_path, run_id)
+    source = _verify_source(command_log_path, run_id, scenario_id)
+    _upload_archive(ssh, command_log_path, run_id, scenario_id)
 
     terminal = ssh.open_terminal()
     results: list[TerminalCommandResult] = []
     command_index = 0
+    identity: str | None = None
+
+    def run_command(command: str) -> None:
+        nonlocal command_index
+        command_index += 1
+        started_at = utc_now()
+        try:
+            result = terminal.run(command, timeout=180)
+        except Exception as exc:
+            log_command(
+                command_log_path,
+                run_id,
+                scenario_id,
+                command_index,
+                command,
+                started_at,
+                status="failure",
+                error=str(exc),
+            )
+            raise
+        results.append(result)
+        status = "success" if result.exit_code == 0 else "failure"
+        log_command(
+            command_log_path,
+            run_id,
+            scenario_id,
+            command_index,
+            command,
+            started_at,
+            status=status,
+            result=result,
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(f"Father command exited {result.exit_code}: {command}")
+
     try:
         with terminal:
             for label, commands in COMMAND_GROUPS:
                 console.scope("GUEST", label)
                 for command in commands:
-                    command_index += 1
-                    started_at = utc_now()
-                    try:
-                        result = terminal.run(command, timeout=180)
-                    except Exception as exc:
-                        log_command(
-                            command_log_path,
-                            run_id,
-                            SCENARIO_ID,
-                            command_index,
-                            command,
-                            started_at,
-                            status="failure",
-                            error=str(exc),
-                        )
-                        raise
-                    results.append(result)
-                    status = "success" if result.exit_code == 0 else "failure"
-                    log_command(
-                        command_log_path,
-                        run_id,
-                        SCENARIO_ID,
-                        command_index,
-                        command,
-                        started_at,
-                        status=status,
-                        result=result,
-                    )
-                    if result.exit_code != 0:
-                        raise RuntimeError(
-                            f"Father command exited {result.exit_code}: {command}"
-                        )
+                    run_command(command)
+
+            listings = [
+                result.combined_output
+                for result in results
+                if result.command == LIST_HIDDEN_DIR
+            ]
+            if (
+                len(listings) != 2
+                or HIDDEN_FILE_NAME not in listings[0]
+                or HIDDEN_FILE_NAME in listings[1]
+            ):
+                raise RuntimeError("Father did not hide the controlled file as expected")
+
+            if cleanup:
+                console.scope("HOST", "validate Father backdoor")
+                identity = _validate_backdoor(
+                    ssh,
+                    command_log_path=command_log_path,
+                    run_id=run_id,
+                    scenario_id=scenario_id,
+                )
+                console.scope("GUEST", "cleanup treatment")
+                for command in CLEANUP_COMMANDS:
+                    run_command(command)
     finally:
         transcript_path.write_text(terminal.transcript, encoding="utf-8")
 
-    listings = [
-        result.combined_output
-        for result in results
-        if result.command == LIST_HIDDEN_DIR
-    ]
-    if (
-        len(listings) != 2
-        or HIDDEN_FILE_NAME not in listings[0]
-        or HIDDEN_FILE_NAME in listings[1]
-    ):
-        raise RuntimeError("Father did not hide the controlled file as expected")
+    if identity is None:
+        console.scope("HOST", "validate Father backdoor")
+        identity = _validate_backdoor(
+            ssh,
+            command_log_path=command_log_path,
+            run_id=run_id,
+            scenario_id=scenario_id,
+        )
 
-    console.scope("HOST", "validate Father backdoor")
-    identity = _validate_backdoor(
-        ssh,
-        command_log_path=command_log_path,
-        run_id=run_id,
-    )
-    return {
+    facts = {
         "source": source,
         "installed_library_path": INSTALLED_LIBRARY,
         "preload_config_path": PRELOAD_CONFIG,
@@ -151,9 +186,19 @@ def run_father(
         "listener_service": "sshd",
         "listener_port": ssh.port,
     }
+    if cleanup:
+        facts["cleanup"] = {
+            "performed": True,
+            "archive_removed": True,
+            "source_tree_removed": True,
+            "history_file_removed": True,
+            "preload_config_preserved": True,
+            "installed_library_preserved": True,
+        }
+    return facts
 
 
-def _verify_source(command_log_path: Path, run_id: str) -> dict:
+def _verify_source(command_log_path: Path, run_id: str, scenario_id: str) -> dict:
     started_at = utc_now()
     try:
         lock = yaml.safe_load(LOCK.read_text(encoding="utf-8"))
@@ -169,7 +214,7 @@ def _verify_source(command_log_path: Path, run_id: str) -> dict:
             command_log_path,
             {
                 "run_id": run_id,
-                "scenario_id": SCENARIO_ID,
+                "scenario_id": scenario_id,
                 "step_id": "verify_father_source",
                 "type": "host_verification",
                 "status": "failure",
@@ -189,7 +234,7 @@ def _verify_source(command_log_path: Path, run_id: str) -> dict:
         command_log_path,
         {
             "run_id": run_id,
-            "scenario_id": SCENARIO_ID,
+            "scenario_id": scenario_id,
             "step_id": "verify_father_source",
             "type": "host_verification",
             "status": "success",
@@ -206,6 +251,7 @@ def _upload_archive(
     ssh: SSHClient,
     command_log_path: Path,
     run_id: str,
+    scenario_id: str,
 ) -> None:
     started_at = utc_now()
     console.step(f"Uploading {ARCHIVE.name} to {UPLOAD_PATH}...")
@@ -216,7 +262,7 @@ def _upload_archive(
             command_log_path,
             {
                 "run_id": run_id,
-                "scenario_id": SCENARIO_ID,
+                "scenario_id": scenario_id,
                 "step_id": "upload_father_source",
                 "type": "upload",
                 "source": str(ARCHIVE),
@@ -232,7 +278,7 @@ def _upload_archive(
         command_log_path,
         {
             "run_id": run_id,
-            "scenario_id": SCENARIO_ID,
+            "scenario_id": scenario_id,
             "step_id": "upload_father_source",
             "type": "upload",
             "source": str(ARCHIVE),
@@ -249,6 +295,7 @@ def _validate_backdoor(
     *,
     command_log_path: Path,
     run_id: str,
+    scenario_id: str,
 ) -> str:
     started_at = utc_now()
     response = bytearray()
@@ -321,7 +368,7 @@ def _validate_backdoor(
     except (OSError, RuntimeError) as exc:
         record = {
             "run_id": run_id,
-            "scenario_id": SCENARIO_ID,
+            "scenario_id": scenario_id,
             "step_id": "validate_father_backdoor",
             "type": "host_socket",
             "command": "id",
@@ -346,7 +393,7 @@ def _validate_backdoor(
         command_log_path,
         {
             "run_id": run_id,
-            "scenario_id": SCENARIO_ID,
+            "scenario_id": scenario_id,
             "step_id": "validate_father_backdoor",
             "type": "host_socket",
             "command": "id",

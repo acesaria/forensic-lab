@@ -1,10 +1,12 @@
 # userland_father_ldpreload
 
-This disposable-VM scenario builds the pinned Father source, activates its
-shared object system-wide through `/etc/ld.so.preload`, validates native file
-hiding and Father's native `accept()` backdoor, then preserves the resulting
-state for optional acquisition. These are treatment checks, not forensic
-findings.
+The `userland_father_ldpreload` calibration builds the pinned Father source,
+activates its shared object system-wide through `/etc/ld.so.preload`, validates
+native file hiding and Father's native `accept()` backdoor, then preserves the
+resulting state for optional acquisition. The
+`userland_father_ldpreload_cleanup` treatment performs the same validated
+deployment before applying a small, naive staging cleanup. These are treatment
+checks, not forensic findings.
 
 The active control flow is intentionally short:
 
@@ -26,8 +28,14 @@ The runner then:
   then lists the same directory and confirms that the file is hidden;
 - restarts `ssh.service` and validates Father's native root shell.
 
-Snapshot restoration is the cleanup mechanism. Successful-run state remains in
-the disposable guest for acquisition.
+For the cleanup treatment only, the same interactive `labuser` Bash session
+then removes the uploaded archive and extracted source/build tree, clears its
+in-memory history, removes `$HOME/.bash_history`, and disables history-file
+persistence for the rest of that shell. One exit-status check confirms that
+the staging paths are absent while `/etc/ld.so.preload` and
+`/lib/selinux.so.3` remain present. The probe directory and controlled hidden
+file also remain. The terminal transcript and append-only command log preserve
+the cleanup commands as experimental ground truth.
 
 ## Native backdoor validation
 
@@ -56,6 +64,13 @@ VM off:
 ```bash
 .venv/bin/python cli.py run --distro ubuntu-22.04 \
   --scenario userland_father_ldpreload --no-acquire
+```
+
+The cleanup treatment uses the same runner and lifecycle:
+
+```bash
+.venv/bin/python cli.py run --distro ubuntu-22.04 \
+  --scenario userland_father_ldpreload_cleanup --no-acquire
 ```
 
 Omit `--no-acquire` for the established memory-while-on and disk-while-off

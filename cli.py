@@ -16,9 +16,14 @@ from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
 from scenarios.interactive_shell.runner import SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO
 from scenarios.userland_father_ldpreload.runner import SCENARIO_ID as FATHER_SCENARIO
+from scenarios.userland_father_ldpreload.runner import (
+    CLEANUP_SCENARIO_ID as FATHER_CLEANUP_SCENARIO,
+)
 
 
-SCENARIO_CHOICES = tuple(sorted((INTERACTIVE_SHELL_SCENARIO, FATHER_SCENARIO)))
+SCENARIO_CHOICES = tuple(
+    sorted((INTERACTIVE_SHELL_SCENARIO, FATHER_SCENARIO, FATHER_CLEANUP_SCENARIO))
+)
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -63,6 +63,7 @@ from scenarios.interactive_shell.runner import (
     run_interactive_shell,
 )
 from scenarios.userland_father_ldpreload.runner import (
+    CLEANUP_SCENARIO_ID as FATHER_CLEANUP_SCENARIO,
     SCENARIO_ID as FATHER_SCENARIO,
     run_father,
 )
@@ -169,8 +170,8 @@ class ForensicOrchestrator:
         """Dispatch directly to one explicit scenario runner."""
         if scenario_id == INTERACTIVE_SHELL_SCENARIO:
             return self._run_interactive_shell_experiment(distro_id, acquire)
-        if scenario_id == FATHER_SCENARIO:
-            return self._run_father_experiment(distro_id, acquire)
+        if scenario_id in (FATHER_SCENARIO, FATHER_CLEANUP_SCENARIO):
+            return self._run_father_experiment(distro_id, acquire, scenario_id)
         raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
     def _run_interactive_shell_experiment(
@@ -339,8 +340,8 @@ class ForensicOrchestrator:
         self,
         distro_id: str,
         acquire: bool,
+        scenario_id: str,
     ) -> str | None:
-        scenario_id = FATHER_SCENARIO
         profile = "vanilla"
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
@@ -411,6 +412,7 @@ class ForensicOrchestrator:
                         transcript_path,
                         command_log_path=command_log_path,
                         run_id=run_id,
+                        scenario_id=scenario_id,
                     )
             except Exception:
                 ended_at = _utc_now()
@@ -443,6 +445,8 @@ class ForensicOrchestrator:
                 _write_run_manifest(manifest_path, manifest)
                 console.step_header("summary")
                 console.ok("scenario status: completed")
+                if scenario_id == FATHER_CLEANUP_SCENARIO:
+                    console.info(f"scenario: {scenario_id}")
                 console.info(f"distro/profile: {distro_id} / {profile}")
                 console.info("acquisition: intentionally skipped (--no-acquire)")
                 console.info("raw extraction: intentionally skipped (--no-acquire)")
@@ -481,6 +485,8 @@ class ForensicOrchestrator:
             _write_run_manifest(manifest_path, manifest)
             console.step_header("summary")
             console.ok("scenario status: completed")
+            if scenario_id == FATHER_CLEANUP_SCENARIO:
+                console.info(f"scenario: {scenario_id}")
             console.info(f"distro/profile: {distro_id} / {profile}")
             console.ok("acquisition status: completed")
             for label, key in (
