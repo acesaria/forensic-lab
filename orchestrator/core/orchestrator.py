@@ -275,6 +275,7 @@ class ForensicOrchestrator:
             _write_run_manifest(manifest_path, manifest)
             console.step_header("summary")
             console.ok("scenario status: completed")
+            console.ok(f"console transcript: {run_display / transcript_path.name}")
             console.info(f"distro/profile: {distro_id} / {profile}")
             console.info("acquisition: intentionally skipped (--no-acquire)")
             console.info("raw extraction: intentionally skipped (--no-acquire)")
