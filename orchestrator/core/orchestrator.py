@@ -175,14 +175,7 @@ class ForensicOrchestrator:
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
-        backdoor_socket = None
-
-        def close_backdoor_socket() -> None:
-            nonlocal backdoor_socket
-            if backdoor_socket is None:
-                return
-            backdoor_socket.close()
-            backdoor_socket = None
+        backdoor_cleanup: Callable[[], None] | None = None
 
         try:
             console.section(
@@ -246,7 +239,7 @@ class ForensicOrchestrator:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
                     if is_father:
-                        facts, backdoor_socket = run_father(
+                        facts, backdoor_cleanup = run_father(
                             ssh,
                             transcript_path,
                             command_log_path=command_log_path,
@@ -292,9 +285,7 @@ class ForensicOrchestrator:
                         vm_name,
                         run_id,
                         scenario_id,
-                        before_shutdown=(
-                            close_backdoor_socket if is_father else None
-                        ),
+                        before_shutdown=backdoor_cleanup,
                     )
                     vm_off = True
                     manifest["artifacts"]["acquisition_manifest"] = str(
@@ -319,7 +310,8 @@ class ForensicOrchestrator:
                     _write_run_manifest(manifest_path, manifest)
                     raise
             elif is_father:
-                close_backdoor_socket()
+                assert backdoor_cleanup is not None
+                backdoor_cleanup()
                 self.vm_manager.shutdown_vm(vm_name)
                 vm_off = True
 
@@ -334,7 +326,8 @@ class ForensicOrchestrator:
         finally:
             if is_father:
                 try:
-                    close_backdoor_socket()
+                    if backdoor_cleanup is not None:
+                        backdoor_cleanup()
                 finally:
                     if not vm_off:
                         self.vm_manager.shutdown_vm(vm_name)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+from collections.abc import Callable
 from pathlib import Path
 
 import yaml
@@ -60,7 +61,7 @@ def run_father(
     *,
     command_log_path: Path,
     scenario_id: str,
-) -> tuple[dict, socket.socket]:
+) -> tuple[dict, Callable[[], None]]:
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
     if scenario_id not in (SCENARIO_ID, CLEANUP_SCENARIO_ID):
         raise ValueError(f"Unsupported Father scenario: {scenario_id}")
@@ -166,7 +167,7 @@ def run_father(
         }
         facts.update(cleanup_facts)
         assert backdoor_socket is not None
-        return facts, backdoor_socket
+        return facts, close_backdoor_socket
     except BaseException:
         close_backdoor_socket()
         raise

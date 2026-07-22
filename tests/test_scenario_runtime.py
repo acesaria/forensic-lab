@@ -48,7 +48,8 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         closed = False
 
         def close(self):
-            assert not self.closed
+            if self.closed:
+                return
             events.append("backdoor close")
             self.closed = True
 
@@ -136,7 +137,7 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         if failure_phase == "scenario":
             raise error
         father_socket = FakeSocket()
-        return facts, father_socket
+        return facts, father_socket.close
 
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.command_output", lambda *_args: "test-commit"
