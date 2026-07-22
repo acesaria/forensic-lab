@@ -101,12 +101,13 @@ Every thesis run must retain:
 
 The run-root manifest is a small index. It points to the append-only command
 log and, when acquisition is requested, `dumps/acquisition.json` and
-`analysis/raw_extraction_status.json`; it does not embed scenario parameters,
-per-step records, expected observables, evidence hashes, or full tool records.
-Its root status covers the requested workflow. A completed `--no-acquire` run
-is explicitly scenario-only and is not an accepted forensic experiment. The
-Father calibration includes one concise `scenario_facts` block for deployment,
-activation, PIDs, privilege, and execution validation.
+`analysis/raw_extraction_status.json`; apart from the concise Father exception
+below, it does not embed scenario parameters, per-step records, expected
+observables, evidence hashes, or full tool records. Its root status covers the
+requested workflow. A completed `--no-acquire` run is explicitly scenario-only
+and is not an accepted forensic experiment. The Father calibration includes
+one concise `scenario_facts` block containing source provenance, deployment
+paths, treatment parameters, and validated scenario outcomes.
 
 Memory provenance includes the full-image SHA-256, byte size, acquisition
 timestamp and duration, exact `virsh dump --memory-only` command, and reported

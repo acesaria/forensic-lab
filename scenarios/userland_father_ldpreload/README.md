@@ -42,19 +42,19 @@ experimental ground truth.
 Father's `SOURCEPORT 54321` is the connecting client's source port; Father does
 not listen on destination port 54321. Its `accept()` hook must be loaded into a
 real listener. The runner therefore connects to the guest's sshd listener from
-host source port 54321, waits for Father's authentication prompt, sends the
-pinned password, requires the stable `Enjoy the shell!` marker, and executes
-`id` in the resulting shell.
+host source port 54321 and consumes the fixed authentication-prompt length only
+for synchronization; the prompt content is not separately validated. It then
+sends the pinned password, requires the stable `Enjoy the shell!` marker, and
+executes `id` in the resulting shell.
 
-The bounded check succeeds only when the authentication prompt and shell marker
-were observed and the parsed identity contains both `uid=0(root)` and
-`gid=1337`. The CLI displays only the shell marker and parsed identity, not
-Father's ASCII drawing. The successful `command_log.jsonl` record retains the
-endpoints and trigger source port, prompt and marker status, parsed identity,
-timestamps, and status. It does not retain the full response or an excerpt. On
-failure only, the same record may include a bounded decoded response tail for
-diagnosis; no separate response file is created. This socket check is treatment
-validation, not forensic evidence.
+The bounded check succeeds only when the shell marker is observed and `id`
+returns both `uid=0(root)` and `gid=1337`. The CLI displays only the shell marker
+and parsed identity, not Father's ASCII drawing. `command_log.jsonl` retains
+only a minimal `validate_backdoor` success or failure operation, with the
+exception message on failure. The parsed identity, trigger source port, and
+listener service and port live in `scenario_facts`. No raw response, response
+excerpt, response tail, or separate socket-response file is retained. This
+socket check is treatment validation, not forensic evidence.
 
 ## Run
 
