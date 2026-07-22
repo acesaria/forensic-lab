@@ -29,13 +29,13 @@ The runner then:
 - restarts `ssh.service` and validates Father's native root shell.
 
 For the cleanup treatment only, the same interactive `labuser` Bash session
-then removes the uploaded archive and extracted source/build tree, clears its
-in-memory history, removes `$HOME/.bash_history`, and disables history-file
-persistence for the rest of that shell. One exit-status check confirms that
-the staging paths are absent while `/etc/ld.so.preload` and
-`/lib/selinux.so.3` remain present. The probe directory and controlled hidden
-file also remain. The terminal transcript and append-only command log preserve
-the cleanup commands as experimental ground truth.
+then removes the uploaded archive and extracted source/build tree, runs the
+naive history commands, and confirms `$HOME/.bash_history` is absent. One
+exit-status check confirms that the staging paths are absent while
+`/etc/ld.so.preload` and `/lib/selinux.so.3` remain present. The cleanup does
+not target the probe directory or controlled hidden file. The terminal
+transcript and append-only command log preserve the cleanup commands as
+experimental ground truth.
 
 ## Native backdoor validation
 

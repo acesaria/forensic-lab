@@ -246,7 +246,6 @@ class ForensicOrchestrator:
                     ssh,
                     transcript_path,
                     command_log_path=command_log_path,
-                    run_id=run_id,
                 )
         except Exception:
             ended_at = _utc_now()
@@ -411,7 +410,6 @@ class ForensicOrchestrator:
                         ssh,
                         transcript_path,
                         command_log_path=command_log_path,
-                        run_id=run_id,
                         scenario_id=scenario_id,
                     )
             except Exception:

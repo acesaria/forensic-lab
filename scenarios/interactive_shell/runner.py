@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from orchestrator.core.ssh_client import SSHClient, TerminalCommandResult
-from scenarios.command_log import log_command, utc_now
+from scenarios.command_log import run_logged_command
 
 
 SCENARIO_ID = "interactive_shell"
@@ -28,50 +28,19 @@ def run_interactive_shell(
     transcript_path: Path,
     *,
     command_log_path: Path | None = None,
-    run_id: str | None = None,
 ) -> list[TerminalCommandResult]:
     results: list[TerminalCommandResult] = []
     terminal = ssh.open_terminal()
     try:
         with terminal:
-            for index, command in enumerate(COMMANDS, start=1):
-                started_at = utc_now()
-                try:
-                    result = terminal.run(command)
-                except Exception as exc:
-                    log_command(
-                        command_log_path,
-                        run_id,
-                        SCENARIO_ID,
-                        index,
-                        command,
-                        started_at,
-                        status="failure",
-                        error=str(exc),
-                    )
-                    raise
-
-                results.append(result)
-                expected_failure = command == EXPECTED_FAILURE
-                status = "success"
-                if expected_failure and result.exit_code != 0:
-                    status = "tolerated_failure"
-                elif result.exit_code != 0 or expected_failure:
-                    status = "failure"
-                log_command(
+            for command in COMMANDS:
+                result = run_logged_command(
+                    terminal,
                     command_log_path,
-                    run_id,
-                    SCENARIO_ID,
-                    index,
                     command,
-                    started_at,
-                    status=status,
-                    result=result,
+                    expect_failure=command == EXPECTED_FAILURE,
                 )
-                if status == "failure":
-                    raise RuntimeError(
-                        f"unexpected command result ({result.exit_code}): {command}"
-                    )
+                results.append(result)
     finally:
         transcript_path.parent.mkdir(parents=True, exist_ok=True)
         transcript_path.write_text(terminal.transcript, encoding="utf-8")
