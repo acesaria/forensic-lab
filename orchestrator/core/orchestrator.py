@@ -167,187 +167,16 @@ class ForensicOrchestrator:
         scenario_id: str,
         acquire: bool = True,
     ) -> str | None:
-        """Dispatch directly to one explicit scenario runner."""
-        if scenario_id == INTERACTIVE_SHELL_SCENARIO:
-            return self._run_interactive_shell_experiment(distro_id, acquire)
-        if scenario_id in (FATHER_SCENARIO, FATHER_CLEANUP_SCENARIO):
-            return self._run_father_experiment(distro_id, acquire, scenario_id)
-        raise RuntimeError(f"Unknown scenario: {scenario_id}")
+        """Run one explicit scenario through the full experiment lifecycle."""
+        is_father = scenario_id in (FATHER_SCENARIO, FATHER_CLEANUP_SCENARIO)
+        if scenario_id != INTERACTIVE_SHELL_SCENARIO and not is_father:
+            raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
-    def _run_interactive_shell_experiment(
-        self,
-        distro_id: str,
-        acquire: bool,
-    ) -> str | None:
-        scenario_id = INTERACTIVE_SHELL_SCENARIO
-        profile = "vanilla"
-        console.section(
-            f"experiment: {scenario_id} | distro: {distro_id} | profile: {profile}"
-        )
-        console.step_header("baseline restoration and readiness")
-        try:
-            vm_name = self._reset_lab(distro_id)
-            snapshot_created_at = self.vm_manager.snapshot_created_at(
-                vm_name, BASELINE_SNAPSHOT
-            )
-        finally:
-            console.section_end()
-
-        run_id = _make_run_id(distro_id, scenario_id)
-        run_root = self._paths.experiments_dir / run_id
-        run_root.mkdir(parents=True, exist_ok=True)
-        run_display = Path(os.path.relpath(run_root, self.repo_root))
-        manifest_path = run_root / "manifest.json"
-        command_log_path = run_root / "command_log.jsonl"
-        transcript_path = run_root / "terminal_transcript.txt"
-        command_log_path.touch()
-        started_at = _utc_now()
-        guest: dict[str, Any] = {}
-        manifest = {
-            "schema": "forensic-lab.run_manifest",
-            "version": 3,
-            "run_id": run_id,
-            "scenario_id": scenario_id,
-            "platform": {
-                "distro_id": distro_id,
-                "guest_os": None,
-                "kernel": None,
-                "timezone": "UTC",
-                "profile": profile,
-            },
-            "repository": {
-                "commit": command_output(
-                    ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
-                )
-            },
-            "timestamps": {
-                "scenario_started_at": started_at,
-            },
-            "status": "running",
-            "scenario_status": "running",
-            "acquisition_requested": acquire,
-            "artifacts": {
-                "command_log": command_log_path.name,
-                "terminal_transcript": transcript_path.name,
-            },
-            "baseline": {
-                "vm_name": vm_name,
-                "snapshot": BASELINE_SNAPSHOT,
-                "snapshot_created_at": snapshot_created_at,
-            },
-        }
-        _write_run_manifest(manifest_path, manifest)
-
-        console.step_header("scenario execution")
-        try:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                guest = self._guest_facts(ssh)
-                run_interactive_shell(
-                    ssh,
-                    transcript_path,
-                    command_log_path=command_log_path,
-                )
-        except Exception:
-            ended_at = _utc_now()
-            manifest["status"] = "failed"
-            manifest["scenario_status"] = "failed"
-            manifest["failed_phase"] = "scenario"
-            manifest["timestamps"]["scenario_ended_at"] = ended_at
-            manifest["timestamps"]["run_ended_at"] = ended_at
-            _write_run_manifest(manifest_path, manifest)
-            raise
-        finally:
-            self.vm_manager.internet_off(vm_name, quiet=True)
-            console.section_end()
-
-        manifest["platform"].update(
-            guest_os=guest.get("distro"),
-            kernel=guest.get("kernel"),
-            timezone=guest.get("timezone"),
-        )
-        manifest["scenario_status"] = "completed"
-        manifest["timestamps"]["scenario_ended_at"] = _utc_now()
-        _write_run_manifest(manifest_path, manifest)
-
-        if not acquire:
-            manifest["status"] = "completed"
-            manifest["timestamps"]["run_ended_at"] = _utc_now()
-            _write_run_manifest(manifest_path, manifest)
-            console.step_header("summary")
-            console.ok("scenario status: completed")
-            console.ok(f"console transcript: {run_display / transcript_path.name}")
-            console.info(f"distro/profile: {distro_id} / {profile}")
-            console.info("acquisition: intentionally skipped (--no-acquire)")
-            console.info("raw extraction: intentionally skipped (--no-acquire)")
-            console.info("final VM state: running")
-            console.info(f"run directory: {run_display}")
-            console.info(f"root manifest: {run_display / manifest_path.name}")
-            console.section_end()
-            return None
-
-        failed_phase = "acquisition"
-        try:
-            acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
-            manifest["artifacts"]["acquisition_manifest"] = str(
-                Path(acquisition_path).resolve().relative_to(run_root.resolve())
-            )
-            _write_run_manifest(manifest_path, manifest)
-            failed_phase = "raw_extraction"
-            raw_status, raw_status_path = self._extract_raw_outputs(
-                run_id,
-                distro_id,
-                acquisition_path,
-                kernel_release=guest.get("kernel"),
-            )
-            manifest["artifacts"]["raw_extraction_status"] = str(
-                raw_status_path.resolve().relative_to(run_root.resolve())
-            )
-        except Exception:
-            manifest["status"] = "failed"
-            manifest["failed_phase"] = failed_phase
-            manifest["timestamps"]["run_ended_at"] = _utc_now()
-            _write_run_manifest(manifest_path, manifest)
-            raise
-        manifest["status"] = "completed"
-        manifest["timestamps"]["run_ended_at"] = _utc_now()
-        _write_run_manifest(manifest_path, manifest)
-        console.step_header("summary")
-        console.ok("scenario status: completed")
-        console.info(f"distro/profile: {distro_id} / {profile}")
-        console.ok("acquisition status: completed")
-        for label, key in (
-            ("Volatility", "volatility"),
-            ("TSK", "tsk"),
-            ("Plaso", "plaso"),
-        ):
-            state = raw_status.get(key, {}).get("status", "unknown")
-            emit = console.ok if state == "completed" else console.warn
-            emit(f"{label}: {state}")
-        console.info("final VM state: off")
-        console.info(f"run directory: {run_display}")
-        console.info(f"root manifest: {run_display / manifest_path.name}")
-        console.info(
-            "raw extraction status: "
-            f"{run_display / raw_status_path.relative_to(run_root)}"
-        )
-        console.section_end()
-        return acquisition_path
-
-    # --- Father explicit experiment loop ---------------------------------
-
-    def _run_father_experiment(
-        self,
-        distro_id: str,
-        acquire: bool,
-        scenario_id: str,
-    ) -> str | None:
-        profile = "vanilla"
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
         try:
             console.section(
-                f"experiment: {scenario_id} | distro: {distro_id} | "
-                f"profile: {profile}"
+                f"experiment: {scenario_id} | distro: {distro_id} | profile: vanilla"
             )
             console.step_header("baseline restoration and readiness")
             try:
@@ -361,12 +190,14 @@ class ForensicOrchestrator:
             run_id = _make_run_id(distro_id, scenario_id)
             run_root = self._paths.experiments_dir / run_id
             run_root.mkdir(parents=True, exist_ok=True)
-            run_display = Path(os.path.relpath(run_root, self.repo_root))
             manifest_path = run_root / "manifest.json"
             command_log_path = run_root / "command_log.jsonl"
             transcript_path = run_root / "terminal_transcript.txt"
             command_log_path.touch()
-            guest: dict[str, Any] = {}
+
+            revision = command_output(
+                ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
+            )
             manifest = {
                 "schema": "forensic-lab.run_manifest",
                 "version": 3,
@@ -377,12 +208,10 @@ class ForensicOrchestrator:
                     "guest_os": None,
                     "kernel": None,
                     "timezone": "UTC",
-                    "profile": profile,
+                    "profile": "vanilla",
                 },
                 "repository": {
-                    "commit": command_output(
-                        ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
-                    )
+                    "commit": revision,
                 },
                 "timestamps": {
                     "scenario_started_at": _utc_now(),
@@ -406,19 +235,27 @@ class ForensicOrchestrator:
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
-                    facts = run_father(
-                        ssh,
-                        transcript_path,
-                        command_log_path=command_log_path,
-                        scenario_id=scenario_id,
-                    )
+                    if is_father:
+                        facts = run_father(
+                            ssh,
+                            transcript_path,
+                            command_log_path=command_log_path,
+                            scenario_id=scenario_id,
+                        )
+                    else:
+                        run_interactive_shell(
+                            ssh,
+                            transcript_path,
+                            command_log_path=command_log_path,
+                        )
             except Exception:
                 ended_at = _utc_now()
-                manifest["status"] = "failed"
-                manifest["scenario_status"] = "failed"
-                manifest["failed_phase"] = "scenario"
-                manifest["timestamps"]["scenario_ended_at"] = ended_at
-                manifest["timestamps"]["run_ended_at"] = ended_at
+                manifest.update(
+                    status="failed", scenario_status="failed", failed_phase="scenario"
+                )
+                manifest["timestamps"].update(
+                    scenario_ended_at=ended_at, run_ended_at=ended_at
+                )
                 _write_run_manifest(manifest_path, manifest)
                 raise
             finally:
@@ -430,82 +267,54 @@ class ForensicOrchestrator:
                 kernel=guest.get("kernel"),
                 timezone=guest.get("timezone"),
             )
-            manifest["scenario_facts"] = facts
+            if is_father:
+                manifest["scenario_facts"] = facts
             manifest["scenario_status"] = "completed"
             manifest["timestamps"]["scenario_ended_at"] = _utc_now()
             _write_run_manifest(manifest_path, manifest)
 
-            if not acquire:
+            acquisition_path = None
+            raw_outputs = None
+            if acquire:
+                failed_phase = "acquisition"
+                try:
+                    acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
+                    vm_off = True
+                    manifest["artifacts"]["acquisition_manifest"] = str(
+                        Path(acquisition_path).resolve().relative_to(run_root.resolve())
+                    )
+                    _write_run_manifest(manifest_path, manifest)
+
+                    failed_phase = "raw_extraction"
+                    raw_outputs = self._extract_raw_outputs(
+                        run_id,
+                        distro_id,
+                        acquisition_path,
+                        kernel_release=guest.get("kernel"),
+                    )
+                    raw_status_path = raw_outputs[1]
+                    manifest["artifacts"]["raw_extraction_status"] = str(
+                        raw_status_path.resolve().relative_to(run_root.resolve())
+                    )
+                except Exception:
+                    manifest.update(status="failed", failed_phase=failed_phase)
+                    manifest["timestamps"]["run_ended_at"] = _utc_now()
+                    _write_run_manifest(manifest_path, manifest)
+                    raise
+            elif is_father:
                 self.vm_manager.shutdown_vm(vm_name)
                 vm_off = True
-                manifest["status"] = "completed"
-                manifest["timestamps"]["run_ended_at"] = _utc_now()
-                _write_run_manifest(manifest_path, manifest)
-                console.step_header("summary")
-                console.ok("scenario status: completed")
-                if scenario_id == FATHER_CLEANUP_SCENARIO:
-                    console.info(f"scenario: {scenario_id}")
-                console.info(f"distro/profile: {distro_id} / {profile}")
-                console.info("acquisition: intentionally skipped (--no-acquire)")
-                console.info("raw extraction: intentionally skipped (--no-acquire)")
-                console.info("final VM state: off")
-                console.info(f"run directory: {run_display}")
-                console.info(f"root manifest: {run_display / manifest_path.name}")
-                console.section_end()
-                return None
 
-            failed_phase = "acquisition"
-            try:
-                acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
-                vm_off = True
-                manifest["artifacts"]["acquisition_manifest"] = str(
-                    Path(acquisition_path).resolve().relative_to(run_root.resolve())
-                )
-                _write_run_manifest(manifest_path, manifest)
-                failed_phase = "raw_extraction"
-                raw_status, raw_status_path = self._extract_raw_outputs(
-                    run_id,
-                    distro_id,
-                    acquisition_path,
-                    kernel_release=guest.get("kernel"),
-                )
-                manifest["artifacts"]["raw_extraction_status"] = str(
-                    raw_status_path.resolve().relative_to(run_root.resolve())
-                )
-            except Exception:
-                manifest["status"] = "failed"
-                manifest["failed_phase"] = failed_phase
-                manifest["timestamps"]["run_ended_at"] = _utc_now()
-                _write_run_manifest(manifest_path, manifest)
-                raise
             manifest["status"] = "completed"
             manifest["timestamps"]["run_ended_at"] = _utc_now()
             _write_run_manifest(manifest_path, manifest)
-            console.step_header("summary")
-            console.ok("scenario status: completed")
-            if scenario_id == FATHER_CLEANUP_SCENARIO:
-                console.info(f"scenario: {scenario_id}")
-            console.info(f"distro/profile: {distro_id} / {profile}")
-            console.ok("acquisition status: completed")
-            for label, key in (
-                ("Volatility", "volatility"),
-                ("TSK", "tsk"),
-                ("Plaso", "plaso"),
-            ):
-                state = raw_status.get(key, {}).get("status", "unknown")
-                emit = console.ok if state == "completed" else console.warn
-                emit(f"{label}: {state}")
-            console.info("final VM state: off")
-            console.info(f"run directory: {run_display}")
-            console.info(f"root manifest: {run_display / manifest_path.name}")
-            console.info(
-                "raw extraction status: "
-                f"{run_display / raw_status_path.relative_to(run_root)}"
+
+            _print_experiment_summary(
+                self.repo_root, run_root, manifest, vm_off, raw_outputs
             )
-            console.section_end()
             return acquisition_path
         finally:
-            if not vm_off:
+            if is_father and not vm_off:
                 self.vm_manager.shutdown_vm(vm_name)
 
     @staticmethod
@@ -896,6 +705,48 @@ class ForensicOrchestrator:
 
 
 # --- module helpers ------------------------------------------------------
+
+
+def _print_experiment_summary(
+    repo_root: Path,
+    run_root: Path,
+    manifest: dict[str, Any],
+    vm_off: bool,
+    raw_outputs: tuple[dict[str, Any], Path] | None,
+) -> None:
+    run_display = Path(os.path.relpath(run_root, repo_root))
+    scenario_id = manifest["scenario_id"]
+    platform = manifest["platform"]
+    artifacts = manifest["artifacts"]
+    console.step_header("summary")
+    console.ok("scenario status: completed")
+    if scenario_id == INTERACTIVE_SHELL_SCENARIO and raw_outputs is None:
+        console.ok(f"console transcript: {run_display / artifacts['terminal_transcript']}")
+    elif scenario_id == FATHER_CLEANUP_SCENARIO:
+        console.info(f"scenario: {scenario_id}")
+    console.info(f"distro/profile: {platform['distro_id']} / {platform['profile']}")
+
+    if raw_outputs is None:
+        console.info("acquisition: intentionally skipped (--no-acquire)")
+        console.info("raw extraction: intentionally skipped (--no-acquire)")
+    else:
+        raw_status, raw_status_path = raw_outputs
+        console.ok("acquisition status: completed")
+        for label, key in (
+            ("Volatility", "volatility"), ("TSK", "tsk"), ("Plaso", "plaso")
+        ):
+            state = raw_status.get(key, {}).get("status", "unknown")
+            emit = console.ok if state == "completed" else console.warn
+            emit(f"{label}: {state}")
+
+    console.info(f"final VM state: {'off' if vm_off else 'running'}")
+    console.info(f"run directory: {run_display}")
+    console.info(f"root manifest: {run_display / 'manifest.json'}")
+    if raw_outputs is not None:
+        console.info(
+            f"raw extraction status: {run_display / raw_status_path.relative_to(run_root)}"
+        )
+    console.section_end()
 
 
 def _utc_now() -> str:
