@@ -29,6 +29,7 @@ _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
 Father experiments end OFF, including when acquisition is skipped or a step fails
 """
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 import json
 import os
@@ -174,6 +175,15 @@ class ForensicOrchestrator:
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
+        backdoor_socket = None
+
+        def close_backdoor_socket() -> None:
+            nonlocal backdoor_socket
+            if backdoor_socket is None:
+                return
+            backdoor_socket.close()
+            backdoor_socket = None
+
         try:
             console.section(
                 f"experiment: {scenario_id} | distro: {distro_id} | profile: vanilla"
@@ -236,7 +246,7 @@ class ForensicOrchestrator:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
                     if is_father:
-                        facts = run_father(
+                        facts, backdoor_socket = run_father(
                             ssh,
                             transcript_path,
                             command_log_path=command_log_path,
@@ -278,7 +288,14 @@ class ForensicOrchestrator:
             if acquire:
                 failed_phase = "acquisition"
                 try:
-                    acquisition_path = self._run_acquisition(vm_name, run_id, scenario_id)
+                    acquisition_path = self._run_acquisition(
+                        vm_name,
+                        run_id,
+                        scenario_id,
+                        before_shutdown=(
+                            close_backdoor_socket if is_father else None
+                        ),
+                    )
                     vm_off = True
                     manifest["artifacts"]["acquisition_manifest"] = str(
                         Path(acquisition_path).resolve().relative_to(run_root.resolve())
@@ -302,6 +319,7 @@ class ForensicOrchestrator:
                     _write_run_manifest(manifest_path, manifest)
                     raise
             elif is_father:
+                close_backdoor_socket()
                 self.vm_manager.shutdown_vm(vm_name)
                 vm_off = True
 
@@ -314,8 +332,12 @@ class ForensicOrchestrator:
             )
             return acquisition_path
         finally:
-            if is_father and not vm_off:
-                self.vm_manager.shutdown_vm(vm_name)
+            if is_father:
+                try:
+                    close_backdoor_socket()
+                finally:
+                    if not vm_off:
+                        self.vm_manager.shutdown_vm(vm_name)
 
     @staticmethod
     def _guest_facts(ssh: SSHClient) -> dict[str, Any]:
@@ -676,10 +698,13 @@ class ForensicOrchestrator:
         vm_name: str,
         run_id: str,
         scenario_id: str,
+        *,
+        before_shutdown: Callable[[], None] | None = None,
     ) -> str:
         """
         Acquire memory (VM ON), then shut the guest down and acquire its disk
-        host-side from the released qcow2. Returns the manifest path.
+        host-side from the released qcow2. Run before_shutdown between memory
+        capture and shutdown when provided. Returns the manifest path.
         """
         vm_disk_path = self.vm_manager.get_disk_path(vm_name)
 
@@ -695,6 +720,8 @@ class ForensicOrchestrator:
             console.step(
                 f"shutting down '{vm_name}' for offline disk acquisition..."
             )
+            if before_shutdown is not None:
+                before_shutdown()
             self.vm_manager.shutdown_vm(vm_name)
             disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
             return self.dumper.write_manifest(

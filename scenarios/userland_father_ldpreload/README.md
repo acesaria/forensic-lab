@@ -3,7 +3,7 @@
 The `userland_father_ldpreload` calibration builds the pinned Father source,
 activates its shared object system-wide through `/etc/ld.so.preload`, validates
 native file hiding and Father's native `accept()` backdoor, then preserves the
-resulting state for optional acquisition. The
+active compromise for optional acquisition. The
 `userland_father_ldpreload_cleanup` treatment performs the same validated
 deployment before applying a small, naive staging cleanup. These are treatment
 checks, not forensic findings.
@@ -51,10 +51,20 @@ The bounded check succeeds only when the shell marker is observed and `id`
 returns both `uid=0(root)` and `gid=1337`. The CLI displays only the shell marker
 and parsed identity, not Father's ASCII drawing. `command_log.jsonl` retains
 only a minimal `validate_backdoor` success or failure operation, with the
-exception message on failure. The parsed identity, trigger source port, and
-listener service and port live in `scenario_facts`. No raw response, response
-excerpt, response tail, or separate socket-response file is retained. This
-socket check is treatment validation, not forensic evidence.
+exception message on failure. The parsed identity, trigger source port,
+listener service and port, and open connection at scenario completion live in
+`scenario_facts`. No raw response, response excerpt, response tail, or separate
+socket-response file is retained. This socket check is treatment validation,
+not a forensic conclusion.
+
+Both Father variants represent an active-compromise memory snapshot. The
+ordinary SSH orchestration shell exits before acquisition, while Father's
+native root `/bin/sh` and its TCP connection remain active during RAM capture.
+The client connects from source port 54321 to sshd's port 22, but Father's
+`accept()` hook intercepts it before SSH authentication, so it is not a second
+genuine SSH login. The host closes the native socket immediately after memory
+capture and before VM shutdown. A `--no-acquire` run instead closes it
+immediately before the mandatory Father shutdown.
 
 ## Run
 

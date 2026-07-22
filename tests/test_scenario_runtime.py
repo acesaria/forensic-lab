@@ -22,6 +22,8 @@ from orchestrator.core.orchestrator import ForensicOrchestrator
         ("interactive_shell", False, None, 0, False, "on"),
         ("userland_father_ldpreload", False, None, 1, True, "off"),
         ("userland_father_ldpreload", False, "scenario", 1, False, "off"),
+        ("userland_father_ldpreload", True, "acquisition", 1, True, "off"),
+        ("userland_father_ldpreload_cleanup", True, None, 0, True, "off"),
         ("interactive_shell", False, "scenario", 0, False, "on"),
         ("interactive_shell", True, None, 0, False, "off"),
         ("userland_father_ldpreload", True, "raw_extraction", 0, True, "off"),
@@ -39,6 +41,16 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
 ):
     error = RuntimeError(f"{failure_phase} failed")
     facts = {"validated": True}
+    events = []
+    father_socket = None
+
+    class FakeSocket:
+        closed = False
+
+        def close(self):
+            assert not self.closed
+            events.append("backdoor close")
+            self.closed = True
 
     class FakeVMManager:
         state = "off"
@@ -55,6 +67,9 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             pass
 
         def shutdown_vm(self, *_args):
+            if father_socket is not None:
+                assert father_socket.closed
+            events.append("shutdown")
             self.shutdowns += 1
             self.state = "off"
 
@@ -76,10 +91,20 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         def _guest_facts(self, _ssh):
             return {"distro": "Ubuntu", "kernel": "test", "timezone": "UTC"}
 
-        def _run_acquisition(self, _vm_name, run_id, _scenario_id):
+        def _run_acquisition(
+            self, _vm_name, run_id, _scenario_id, *, before_shutdown=None
+        ):
             assert fake_vm.state == "on"
+            if father_socket is not None:
+                assert not father_socket.closed
+            else:
+                assert before_shutdown is None
+            events.append("memory")
             if failure_phase == "acquisition":
                 raise error
+            if before_shutdown is not None:
+                before_shutdown()
+            events.append("shutdown")
             path = tmp_path / run_id / "dumps" / "acquisition.json"
             path.parent.mkdir(parents=True)
             path.write_text("{}\n", encoding="utf-8")
@@ -106,10 +131,12 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         return []
 
     def fake_father(*_args, **kwargs):
+        nonlocal father_socket
         assert kwargs["scenario_id"] == scenario_id
         if failure_phase == "scenario":
             raise error
-        return facts
+        father_socket = FakeSocket()
+        return facts, father_socket
 
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.command_output", lambda *_args: "test-commit"
@@ -179,6 +206,11 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             == "dumps/acquisition.json"
         )
         assert "raw_extraction_status" not in manifest["artifacts"]
+    if father_socket is not None:
+        assert father_socket.closed
+        assert events.index("backdoor close") < events.index("shutdown")
+        if acquire:
+            assert events.index("memory") < events.index("backdoor close")
     assert fake_vm.state == expected_vm_state
 
 

