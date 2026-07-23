@@ -21,8 +21,12 @@ paths:
 - '/usr/lib/systemd'
 - '/lib/systemd'
 - '/usr/local/(bin|sbin|lib|lib64)'
-- '/usr/(lib|lib64)/[^/]+[.]so([.][0-9]+)*'
-- '/(lib|lib64)/[^/]+[.]so([.][0-9]+)*'
+# Plaso splits each path on '/' before compiling per-segment regexes, so a
+# character class containing '/' (e.g. [^/]) breaks into invalid fragments
+# that dfVFS silently never matches. Segments cannot contain '/' anyway,
+# so '.+' is the exact per-segment equivalent of the intended [^/]+.
+- '/usr/(lib|lib64)/.+[.]so([.][0-9]+)*'
+- '/(lib|lib64)/.+[.]so([.][0-9]+)*'
 ---
 description: linux bulky low-value excludes
 type: exclude
