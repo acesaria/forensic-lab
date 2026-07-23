@@ -15,6 +15,7 @@ from orchestrator.forensics.vol_runner import VolatilityRunner
 DEFAULT_PLUGINS = (
     "linux.pslist",
     "linux.psscan",
+    "linux.psaux",
     "linux.bash",
     "linux.sockstat",
     "linux.malfind",

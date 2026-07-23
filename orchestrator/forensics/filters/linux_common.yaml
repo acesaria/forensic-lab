@@ -20,6 +20,9 @@ paths:
 - '/etc/systemd'
 - '/usr/lib/systemd'
 - '/lib/systemd'
+- '/usr/local/(bin|sbin|lib|lib64)'
+- '/usr/(lib|lib64)/[^/]+[.]so([.][0-9]+)*'
+- '/(lib|lib64)/[^/]+[.]so([.][0-9]+)*'
 ---
 description: linux bulky low-value excludes
 type: exclude
