@@ -24,13 +24,19 @@ project instructions.
 
 ## Immediate Next Task
 
-Create the manual investigation report template for a named run.
+Investigate the accepted Ubuntu 22.04 Father **cleanup** run, reusing the frozen
+method: the atomic-inventory/coverage rules in `docs/investigations/REPORT_GUIDE.md`,
+the report structure in `docs/investigations/father-ubuntu2204-vanilla-calibration.md`,
+and the shared `docs/investigations/COMPARATIVE_RESULTS.md` table. Freeze the
+cleanup inventory before mapping evidence, then add its filesystem/timeline/memory/union
+rows to the comparative table.
 
-Keep the next implementation pass focused on analyst-written reporting over
-manifest, command log, hashes, raw TSK/Plaso/Volatility exports, tool failures,
-and negative findings. Do not change scenario behavior, VM orchestration,
-evidence acquisition, raw extraction, distro profiles, tests, or dependencies
-unless the task explicitly asks.
+The vanilla report template and reusable reporting/metrics method are done. Keep
+the next pass focused on analyst-written reporting over manifest, command log,
+hashes, raw TSK/Plaso/Volatility exports, tool failures, and negative findings.
+Do not change scenario behavior, VM orchestration, evidence acquisition, raw
+extraction, distro profiles, tests, or dependencies unless the task explicitly
+asks.
 
 The immutable tag `automatic-reconstruction-v3-final` remains the reference for
 previous automatic reconstruction work.

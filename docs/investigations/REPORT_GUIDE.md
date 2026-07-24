@@ -78,3 +78,46 @@ counts), never overwriting another output. Describe it as
 ground-truth-guided manual triage, not blind detection. The report's
 timeline section states the complete event count, the view's interval,
 buffer and count, and that the complete outputs were preserved.
+
+## Coverage metrics
+
+Simple, professor-facing, descriptive. Never precision/recall/F1, weighted
+scores, or automatic expectation matching. The metric describes what manual
+post-mortem recovered — not detection accuracy.
+
+- **Freeze the inventory first.** Write the atomic target list *before*
+  mapping any evidence, and record that it was frozen. Each target is one
+  minimal, independent ground-truth fact derived only from scenario design,
+  manifest and command log — never from what a tool happened to return. Byte
+  equality, extra timestamps, multiple VMAs of one mapping and multiple FDs of
+  one socket are supporting evidence, not separate targets.
+- **Applicability per source.** Decide from experimental design and source
+  capability, not from tool success, which targets each source could
+  reasonably observe. Use `n/a` when a source cannot (e.g. a shell that exited
+  before capture, or a config file whose only memory trace is a separate
+  mapping target). Applicability sets each source's denominator.
+- **Found and partial.** Found = at least one accepted forensic locator
+  supports the target's central identity/occurrence. Scenario-validation and
+  command-log facts justify expectations but are never locators. A timeline
+  `filestat` that proves occurrence/modification but not file contents is
+  `partial` and may count as Found with a stated limitation and conservative
+  per-target QoR.
+- **DR = Found / Total applicable**, per source, labelled *manual
+  evidence-recovery coverage*. Compute **union coverage** once — unique targets
+  found in ≥1 source over unique targets expected in ≥1 source. Never average
+  or weight the per-source rates. High coverage is an observed result, not a
+  pass/acceptance condition; low coverage is a valid result.
+- **FP** is a count of candidates a candidate-generating tool/query surfaced as
+  suspicious and the investigation then rejected as unrelated (cite each one's
+  locator and rejection reason). Broad enumeration rows and targeted lookups
+  yield no FP; use `N/A`, not 0, for a source that generated no candidates.
+- **TTD** is prospective wall-clock from starting a source to its first
+  supported locator. If not recorded live, report `not measured`; never
+  reconstruct it from attack, acquisition, event or tool timestamps.
+- **QoR** is High/Medium/Low/N/A only, never numericised or averaged.
+
+Put one auditable target-by-source table (target, per-source status, accepted
+locators, partial limitations) and one summary row-set
+(`Source | Found / Total | Coverage (DR) | FP | TTD | QoR`) in the report's
+cross-source section, and append the summary rows to
+`COMPARATIVE_RESULTS.md`.

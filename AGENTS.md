@@ -19,6 +19,30 @@ PROJECT_CONTEXT.md first, then only the files the task needs.
 6. Legacy detector/matcher code remains GT-blind until deleted: it must not read
    ground truth, artifact expectations, scenario internals, or instance values.
 
+## Evidence reading discipline (token budget)
+
+Raw evidence (timelines, bodyfiles, findings/*.jsonl, exported logs under
+shared/) is large. Never load it whole into context.
+
+1. Size before reading: `wc -l` / `ls -lh` first. Never `cat`, `less`, or
+   open any file over 200 lines.
+2. Filter, then read: use `rg`, `jq`, `awk`, or a short Python one-liner to
+   reduce the file to the relevant slice (time window, source, event class,
+   path pattern). Reason only over the filtered output.
+3. Cap every command's output at 100 lines (`| head -n 100`). If the slice
+   is bigger, narrow the filter instead of reading more.
+4. Aggregate before inspecting: start from counts and histograms
+   (events per source, per hour, per path prefix), then drill into the one
+   or two buckets that matter.
+5. Do not re-read a file already summarized in this session; reuse the
+   summary.
+6. Persist findings: append conclusions and the exact filter commands used
+   to shared/results/<scenario>/investigation_notes.md so later sessions
+   start from the notes, not from raw evidence.
+7. Filters are scoped by time window and technique-level patterns
+   (e.g. ld.so.preload, module load events), never by planted instance
+   values from ground truth (see circularity rule above).
+
 ## Change rules
 
 - Make the smallest diff that satisfies the request. Prefer deleting code
