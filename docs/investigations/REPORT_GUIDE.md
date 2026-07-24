@@ -12,10 +12,12 @@ Three layers, strictly ordered:
 1. **Immutable outputs** (run directory): acquired images, raw TSK/Plaso/
    Volatility exports, manifests, command logs, provenance sidecars. Never
    edited after acquisition; everything else cites them.
-2. **Private worklogs** (investigation workspace, `shared/investigations/`):
-   command ledgers, retries, timing files, benchmark detail, derived working
-   copies, diagnostic outputs, dead ends. Anything an analyst needed while
-   working but a reader does not.
+2. **Analyst workspace** (`shared/investigations/`): may contain accepted
+   derived or reprocessed outputs with their own commands, versions, hashes,
+   statuses and provenance, alongside analyst worklogs, diagnostics and
+   retained historical attempts (command ledgers, retries, timing files,
+   benchmark detail, dead ends). Original experimental outputs remain
+   immutable.
 3. **The report** (`docs/investigations/`): what was found, what it means,
    what it does not mean, and where to verify it. If a detail does not change
    interpretation, it goes in the worklog, not the report.
@@ -24,10 +26,13 @@ Three layers, strictly ordered:
 
 Keep them separated and labelled. Scenario validation (manifest, command log)
 proves the controlled compromise executed as intended — it is ground truth,
-summarised in one small table. Forensic findings must be discoverable from
-the evidence alone; state the discovery path (e.g. "from `/etc/ld.so.preload`
-outward", "from an anomalous mapping") so the reader can see no ground truth
-leaked into it. No forensic conclusion may rest on validation facts alone.
+summarised in one small table. Ground truth may define the frozen atomic
+inventory, and disclosed ground-truth-guided manual triage is permitted; but
+every forensic observation must still be supported by an accepted evidence
+locator, and ground-truth-guided work must never be described as blind
+discovery. State the discovery path (e.g. "from `/etc/ld.so.preload`
+outward", "from an anomalous mapping"). No forensic conclusion may rest on
+validation facts alone.
 
 ## Negative observations
 
@@ -43,7 +48,9 @@ only by a demonstrated, measured, scenario-blind gap.
 ## Evidence locators
 
 One compact locator per finding, enough to re-find it without rerunning
-anything: inode + bodyfile row for filesystem, JSONL line number for
+anything. Each locator identifies the accepted output or reprocessing
+revision it points into, plus the row, line, PID, inode or object needed to
+find it: inode + bodyfile row for filesystem, JSONL line number for
 timeline, plugin + PID/object for memory. Full command records and hashes
 stay in the worklog and `SHA256SUMS`.
 
@@ -85,8 +92,11 @@ Simple, professor-facing, descriptive. Never precision/recall/F1, weighted
 scores, or automatic expectation matching. The metric describes what manual
 post-mortem recovered — not detection accuracy.
 
-- **Freeze the inventory first.** Write the atomic target list *before*
-  mapping any evidence, and record that it was frozen. Each target is one
+- **Freeze the inventory first.** Every run or variant freezes its own atomic
+  target list *before* mapping any evidence, and records that it was frozen.
+  Existing base targets may be reused only when still applicable; cleanup- and
+  prevention-specific targets must be added before mapping. Comparability is
+  never preserved by forcing an artificial denominator. Each target is one
   minimal, independent ground-truth fact derived only from scenario design,
   manifest and command log — never from what a tool happened to return. Byte
   equality, extra timestamps, multiple VMAs of one mapping and multiple FDs of
@@ -109,12 +119,15 @@ post-mortem recovered — not detection accuracy.
   pass/acceptance condition; low coverage is a valid result.
 - **FP** is a count of candidates a candidate-generating tool/query surfaced as
   suspicious and the investigation then rejected as unrelated (cite each one's
-  locator and rejection reason). Broad enumeration rows and targeted lookups
-  yield no FP; use `N/A`, not 0, for a source that generated no candidates.
+  locator and rejection reason). `0` means candidate generation was applied and
+  no rejected unrelated candidates remain; `N/A` means no candidate-generating
+  method was applied (broad enumeration rows and targeted lookups generate no
+  candidates).
 - **TTD** is prospective wall-clock from starting a source to its first
-  supported locator. If not recorded live, report `not measured`; never
-  reconstruct it from attack, acquisition, event or tool timestamps.
-- **QoR** is High/Medium/Low/N/A only, never numericised or averaged.
+  supported locator. If not recorded prospectively, report `not measured`;
+  never reconstruct it from attack, acquisition, event or tool timestamps.
+- **QoR** is `High`, `Medium`, `Low`, or `N/A` only, never numericised or
+  averaged; no aggregate union QoR is assigned (the union row is `N/A`).
 
 Put one auditable target-by-source table (target, per-source status, accepted
 locators, partial limitations) and one summary row-set
