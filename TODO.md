@@ -1,89 +1,43 @@
-# Active TODO - Manual Investigation Pivot
+# Thesis delivery queue
 
-## Status
+Updated 2026-08-03. This file contains mutable priorities only.
 
-- This file is the active execution plan for the thesis migration phase.
-- The repository now carries the manual multi-source investigation architecture
-  in current source and documentation.
-- Historical plans are archived under
-  `docs/archive/stale-planning-2026-07-08/`.
-- Do not use archived TODO/REFACTOR/AUDIT files as current instructions.
+## Immediate sequence
 
-## Current Source Of Truth
+1. Complete the final hybrid human/ChatGPT review of the Father-cleanup
+   disk-forensics phase. Treat this as an acceptance and correction pass, not a
+   second investigation: do not rerun tools or alter accepted evidence, raw
+   exports, worklogs, or comparative results. Limit edits to report corrections
+   approved by the human.
+2. Complete the Father-cleanup RAM analysis.
+3. Complete the Father-cleanup Plaso analysis.
+4. Finish the cross-source interpretation and thesis-ready Father-cleanup
+   conclusion only after the source phases are accepted.
 
-1. `PROJECT_CONTEXT.md` and `AGENTS.md`, when present and current.
-2. `METHODOLOGY.md` for manual investigation, provenance, profile comparison,
-   and explicit non-goals.
-3. `TODO.md` for the active execution order.
-4. `docs/repo_map.md` for repository orientation.
-5. Named run artifacts only as evidence for that run: manifest, command log,
-   raw TSK/Plaso/Volatility exports, hashes, and analyst notes.
+Existing draft reports and comparative material are review inputs, not standing
+instructions. Use `METHODOLOGY.md` for the current method and cite the exact
+immutable run in every evidence-facing task.
 
-Generated `shared/` artifacts are evidence for a named run, not standing
-project instructions.
+## Delivery milestones
 
-## Immediate Next Task
+- By `2026-08-19`: experimental work substantially complete.
+- By `2026-09-21`: final project, LaTeX integration, and slides complete.
 
-Investigate the accepted Ubuntu 22.04 Father **cleanup** run, reusing the frozen
-method: the atomic-inventory/coverage rules in `docs/investigations/REPORT_GUIDE.md` (deleted will be recostructed after the first successfull complete investigation. it was not producing the intended result. deferred.),
-the report structure in `docs/investigations/father-ubuntu2204-vanilla-calibration.md`,
-and the shared `docs/investigations/COMPARATIVE_RESULTS.md` table. Freeze the
-cleanup inventory before mapping evidence, then add its filesystem/timeline/memory/union
-rows to the comparative table.
+## After the minimum deliverable
 
-The vanilla report template and reusable reporting/metrics method are done. Keep
-the next pass focused on analyst-written reporting over manifest, command log,
-hashes, raw TSK/Plaso/Volatility exports, tool failures, and negative findings.
-Do not change scenario behavior, VM orchestration, evidence acquisition, raw
-extraction, distro profiles, tests, or dependencies unless the task explicitly
-asks.
+- Integrate accepted Father results into the thesis, figures, limitations, and
+  presentation material.
+- Perform only targeted Ubuntu 24.04 or Debian 13 replication that strengthens a
+  specific thesis claim without threatening the milestones.
+- Add another scenario or security-profile comparison only if the minimum
+  Ubuntu 22.04 deliverables are already secure.
 
-The immutable tag `automatic-reconstruction-v3-final` remains the reference for
-previous automatic reconstruction work.
+## Deferred unless explicitly reopened
 
-Guardrails:
-
-- Preserve deterministic scenario execution.
-- Preserve minimal run manifests and append-only command logs.
-- Preserve memory-ON and disk-OFF acquisition contracts.
-- Preserve hashes, provenance, raw evidence immutability, and explicit tool
-  failure reporting.
-- Keep investigation manual.
-- Keep automatic acquisition and raw TSK/Plaso/Volatility extraction in scope.
-- Keep changes small and tests minimal.
-
-## Next Phases
-
-1. Manual investigation report template for a named run.
-2. Ubuntu 22.04 deep-analysis Father no-cleanup and cleanup write-up.
-3. Father cleanup hardened+telemetry comparison with `auditd`.
-4. Targeted Ubuntu 24.04 and Debian 13 replication.
-5. Thesis figures, limitations tables, and writing freeze.
-
-## Explicit Deferrals
-
-Defer these unless a later task explicitly reopens them:
-
-- Timesketch integration.
-- Velociraptor integration.
-- AIDE/NSRL integration.
-- Graph database or CASE/UCO full ontology.
-- Broad Sigma/YARA corpus.
-- Automatic detector/rule expansion.
-- Automatic reconstruction or scoring.
-- Precision/recall/F1 metric design.
-- Ruleset hashes as experimental results.
-- Large test rewrite.
-- Broad architecture refactor.
-- New major dependencies or platforms.
-- Fedora/SELinux optional extension.
-
-## Testing Warning
-
-The current tests are useful smoke and source-shape guards for migration. They
-do not prove forensic correctness, live acquisition reliability, thesis
-validity, or manual investigation quality.
-
-Use tests to catch regressions in code that remains active, then validate thesis
-claims against explicit run artifacts, raw tool exports, command logs, hashes,
-and analyst notes.
+- automatic detection, matching, scoring, or reconstruction;
+- Fedora/SELinux and broad platform expansion;
+- Timesketch, Velociraptor, AIDE/NSRL, graph/ontology, or broad Sigma/YARA work;
+- a large test rewrite, architecture refactor, new framework, or major
+  dependency; and
+- optional scenarios that do not directly protect a thesis research question or
+  delivery milestone.

@@ -1,5 +1,4 @@
-# forensic-lab Copilot Instructions
+# Linux Multi-Source DFIR Lab
 
-Read `PROJECT_CONTEXT.md` (facts) and `AGENTS.md` (rules) first. Keep
-changes small and inspect the relevant code before editing. Do not
-duplicate their content here; if repo-wide truth changes, update them.
+Read `AGENTS.md` first and follow its progressive reading order. Do not
+duplicate repository guidance here.

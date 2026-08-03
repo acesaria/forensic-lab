@@ -1,228 +1,133 @@
-# METHODOLOGY.md
+# Methodology
 
-Normative methodology for forensic-lab. The current thesis is a reproducible
-manual multi-source Linux post-mortem investigation study. Behavioral rules for
-contributors stay in `AGENTS.md`; repo facts stay in `PROJECT_CONTEXT.md`.
+This document defines the thesis and manual Linux DFIR investigation method for
+**Linux Multi-Source DFIR Lab**. Verify mutable implementation details from the
+current source and use `TODO.md` for current priorities.
 
-## 1. Thesis contribution
+## Thesis boundary
 
-The project contribution is not an automatic detector or scoring system. The
-current contribution is to:
+The thesis studies reproducible post-mortem examination of controlled Linux
+compromises. Its contribution is the experimental infrastructure, acquisition
+and provenance, source-aware manual investigation, cross-source interpretation,
+and explicit treatment of tool limitations.
 
-- reproducibly execute controlled Linux compromise scenarios;
-- acquire disk and memory evidence safely;
-- automatically produce raw TSK, Plaso, and Volatility exports;
-- manually investigate and correlate filesystem, timeline, and memory evidence;
-- compare vanilla and hardened Linux profiles;
-- document tool limitations, including negative findings;
-- preserve provenance and reproducibility without automatic scoring.
+The method asks:
 
-The previous automatic reconstruction/evaluation pipeline is preserved by the
-immutable tag `automatic-reconstruction-v3-final`. It may be discussed as
-previous work or future work, but it is not the current thesis deliverable.
+- whether a controlled scenario and evidence acquisition can be reproduced;
+- what filesystem, Plaso timeline, and memory sources reveal independently;
+- what becomes supportable only through cross-source interpretation; and
+- where tools or available evidence produce ambiguity, failure, or valid
+  negative observations.
 
-## 2. Research questions
+It does not use an automatic detector, matcher, score, or reconstruction engine
+to answer those questions.
 
-- **RQ1 - Reproducibility and acquisition.** Can controlled Linux compromise
-  scenarios be executed repeatedly while preserving enough command, manifest,
-  hash, and tool provenance to support later forensic review?
-- **RQ2 - Multi-source investigation.** What does manual correlation across
-  filesystem state, timeline events, and memory state reveal for each scenario?
-- **RQ3 - Profile comparison.** How do vanilla and hardened Linux profiles
-  change scenario execution, residual evidence, denial traces, and analyst
-  interpretation?
-- **RQ4 - Tool limitations.** Where do TSK, Plaso, Volatility, and the lab
-  workflow produce incomplete, ambiguous, empty, failed, or negative evidence?
+## Experimental scope
 
-No RQ is answered by precision, recall, F1, canonical matching, ruleset hashes,
-or automatic reconstruction metrics.
+Controlled scenarios execute only in isolated, disposable, authorized VMs.
+Ubuntu 22.04 is the current deep-analysis platform. Additional distributions,
+security profiles, scenarios, and tool integrations are optional only after the
+minimum thesis evidence and writing are secure.
 
-## 3. Experimental matrix
+Passwordless sudo in the guest is a documented mechanism for deploying a
+controlled treatment that requires root. It is not evidence of an initial
+privilege escalation. Record the execution identity and distinguish laboratory
+preconditions from scenario actions.
 
-One run is `(scenario, distro, profile)`.
+## Evidence and provenance
 
-- **Deep-analysis platform:** Ubuntu 22.04.
-- **Targeted replication platforms:** Ubuntu 24.04 and Debian 13.
-- **Vanilla profile:** distro defaults.
-- **Hardened profile:** one fixed, documented native-control bundle.
-- **Ubuntu native control:** AppArmor.
-- **Deferred optional extension:** Fedora/SELinux; it is not part of the current
-  committed matrix.
-- **hardened+telemetry:** the hardened bundle plus `auditd`; used only for the
-  Father cleanup comparison.
+An accepted run retains a stable identity and enough provenance to reproduce and
+review its acquisition and examination:
 
-Hardened profile runs do not need to let the scenario complete. If a native
-control blocks the scenario, the run is recorded as **prevented**. Remaining
-evidence, command output, policy denials, audit traces where enabled, memory
-state when available, disk state, and raw tool outputs are still acquired and
-analysed.
+- repository revision, scenario, distro, timestamps, baseline identity, and
+  workflow status;
+- append-only command and terminal records;
+- disk and memory acquisition commands, hashes, verification, and status;
+- raw-tool versions, commands, output paths, hashes, zero results, and failures;
+  and
+- analyst records that cite exact run-relative evidence locations.
 
-Passwordless sudo is a laboratory precondition for deploying techniques that
-require root inside controlled scenarios. It is not an emulation of initial
-compromise and must not be interpreted as an attack finding.
+The run-root manifest is the lifecycle index. `dumps/acquisition.json` is the
+acquisition authority, and `analysis/raw_extraction_status.json` is the raw-tool
+authority. Do not duplicate their full contents into narrative reports.
 
-## 4. Workflow
+Accepted disk and memory images and raw exports are immutable. Examination may
+create a separate analyst workspace and derived views, each tied back to the
+source run and command. The report is another layer: it cites evidence and
+derived results but does not replace them.
 
-The target workflow is:
+## Epistemic separation
 
-`scenario execution -> manifest/command log -> acquisition -> raw extraction -> manual investigation -> profile comparison -> thesis reporting`
+Keep three claims distinct:
 
-Required phases:
+1. **Scenario validation** uses execution records to establish whether the
+   intended treatment occurred.
+2. **Forensic observation** states what a named source and method exposed.
+3. **Analyst interpretation** explains what the observations support, with
+   uncertainty and alternatives.
 
-1. Execute a deterministic controlled scenario.
-2. Write a minimal run manifest and append-only command log.
-3. Acquire memory while the VM is ON.
-4. Acquire disk while the VM is OFF.
-5. Hash acquired evidence and retain provenance.
-6. Produce raw TSK, Plaso, and Volatility exports automatically.
-7. Manually inspect and correlate raw filesystem, timeline, and memory evidence.
-8. Record positive findings, negative findings, tool failures, and limitations.
-9. Compare vanilla and hardened profiles without pooling them into a single
-   automatic score.
+Scenario facts are not forensic discoveries. A planted value may validate a
+candidate after technique-led examination, but it must not silently select the
+candidate or become reusable detection logic. Label ground-truth-guided checks
+and causal inferences explicitly.
 
-Automatic acquisition and raw extraction are in scope. Manual investigation is
-the analysis method. Automatic detection, canonical matching, and scoring are
-out of scope for the current deliverable.
+## Practical investigation workflow
 
-## 5. Evidence and provenance contract
+1. Fix the case boundary: run ID, source revision, evidence paths, hashes,
+   acquisition status, raw-tool status, and any known limitations.
+2. State the forensic question, relevant source families, selection rationale,
+   and stopping condition before broad examination.
+3. Examine filesystem, timeline, and memory sources separately using
+   technique-level and operating-system structure first.
+4. Record the exact command and immutable-run locator for each material result,
+   including rejected candidates and bounded negative searches.
+5. Use disclosed scenario information only after candidate selection for
+   clearly labelled validation or coverage review.
+6. Correlate sources without flattening their different semantics, time bases,
+   or failure modes.
+7. Report observations, interpretations, contradictions, negative results, tool
+   failures, limitations, and unresolved questions.
 
-Every thesis run must retain:
+For large artifacts, measure size, aggregate, and filter before reading. Keep
+complete raw timelines and exports unchanged; store reduced views separately
+with the producing command and source reference. Stop when the stated question
+and stopping condition are satisfied rather than searching until a desired fact
+appears.
 
-- run identifier, scenario identifier, distro, profile, and timestamp;
-- scenario source revision or equivalent source provenance;
-- minimal run manifest;
-- append-only command log;
-- memory image path, disk image path, and cryptographic hashes;
-- raw TSK, Plaso, and Volatility export paths;
-- tool names, versions where available, command lines, exit statuses, and error
-  output;
-- analyst notes that cite raw evidence locations rather than undocumented
-  conclusions.
+## Source-aware reporting
 
-The run-root manifest is a small index. It points to the append-only command
-log and, when acquisition is requested, `dumps/acquisition.json` and
-`analysis/raw_extraction_status.json`; apart from the concise Father exception
-below, it does not embed scenario parameters, per-step records, expected
-observables, evidence hashes, or full tool records. Its root status covers the
-requested workflow. A completed `--no-acquire` run is explicitly scenario-only
-and is not an accepted forensic experiment. The Father calibration includes
-one concise `scenario_facts` block containing source provenance, deployment
-paths, treatment parameters, and validated scenario outcomes.
+Use source-scoped language:
 
-Memory provenance includes the full-image SHA-256, byte size, acquisition
-timestamp and duration, exact `virsh dump --memory-only` command, and reported
-virsh version. Disk provenance includes the logical media size and the SHA-256
-calculated by `ewfverify -d sha256`, plus the path, byte size, and SHA-256 of
-every EWF segment. The verification command, output, exit status, calculated
-digest, and pass/fail state are retained; failed verification or a missing
-calculated SHA-256 fails acquisition.
+- **observed** or **partially observed** when cited evidence supports the claim;
+- **not observed** only for the stated source, tool, query, and bounds;
+- **tool failed** when examination did not produce a valid result;
+- **not applicable** when the source cannot answer the question; and
+- **prevented** only for scenario execution blocked by a control, not as an
+  evidence status.
 
-Raw extraction retains separate TSK, Plaso, and Volatility outputs plus an
-adjacent status record containing their versions, invocations, exit status,
-output paths and hashes. A successful invocation with zero rows or events is
-recorded as `zero_results`; it is not interchangeable with a failed tool or
-plugin. Tool failures recorded in this sidecar do not change scenario status or
-prevent workflow completion once the status record is written.
+A useful report is concise and auditable. It identifies the case and acquisition,
+separates scenario validation from findings, presents findings by source, gives
+cross-source interpretation, and closes with limitations and conclusions. Every
+material conclusion cites a path, row/line, inode/block, timestamp, PID/mapping,
+or other durable locator appropriate to the source.
 
-Raw evidence is immutable. If a tool is rerun, the new output is a separate
-derived artifact with its own provenance; the acquired disk and memory evidence
-are not modified.
+Do not turn manual coverage descriptions, candidate counts, or timing notes into
+automatic pass conditions or a general scoring architecture. If a named study
+uses such descriptors, define its inventory and procedure prospectively and
+keep the result bound to that study.
 
-Tool failures are first-class results. A failed plugin, empty output file,
-unsupported kernel profile, parser limitation, missing timestamp, or absent
-artifact must be recorded explicitly instead of hidden behind a summary.
+## Standards alignment
 
-## 6. Source-family analysis
+The workflow follows the useful separation in NIST SP 800-86: acquisition,
+examination, analysis, and reporting are different activities. Evidence
+immutability, hashes, provenance, and separate derived outputs also support
+ISO/IEC 27037-style handling. These alignments guide the method; they do not
+substitute for documented commands and case-specific evidence.
 
-Filesystem, timeline, and memory evidence are separate source families.
+## Historical boundary
 
-- **TSK/filesystem:** file and directory state, inode metadata, deletion flags,
-  allocation state, mode, size, and filesystem timestamps.
-- **Plaso/timeline:** event ordering and timestamped activity reconstructed from
-  disk evidence.
-- **Volatility/memory:** point-in-time process, module, mapping, socket, and
-  kernel state from RAM.
-
-Manual correlation may compare these families, but the methodology does not
-flatten them into a universal automatic finding stream. A filesystem object, a
-timeline event, and a memory observation may support the same interpretation
-while retaining different provenance and failure modes.
-
-Negative findings are meaningful only with source-family context. For example,
-"not visible in Volatility process output" is a memory-tool observation, not
-proof that no process ever existed.
-
-## 7. Manual investigation record
-
-Investigation remains manual. Notes should be written so another analyst can
-reproduce the reasoning from raw exports and command logs.
-
-Each scenario/profile report should include:
-
-- case setup and profile description;
-- acquisition summary and hashes;
-- raw extraction summary for TSK, Plaso, and Volatility;
-- tool failures and negative findings;
-- filesystem observations;
-- timeline observations;
-- memory observations;
-- cross-source correlations;
-- vanilla vs hardened comparison where applicable;
-- limitations and unresolved ambiguities.
-
-The report may describe whether a scenario was completed, partially completed,
-or prevented. It must not convert those descriptions into automatic precision,
-recall, F1, or reconstruction scores.
-
-## 8. Explicitly non-normative legacy concepts
-
-The following are no longer normative requirements for the thesis:
-
-- `ToolFinding`;
-- `DetectionClaim`;
-- canonical matching;
-- automatic expectation matching;
-- precision, recall, F1, or automatic evaluation metrics;
-- automatic reconstruction as a current deliverable;
-- ruleset hashes as an experimental result.
-
-Historical documentation and generated artifacts may still contain these terms.
-Treat them as legacy automatic-pipeline residue. Do not reintroduce them into
-runtime source, do not add tests for them, and do not use them to define
-current thesis claims.
-
-Ruleset hashes are not a result. Tool versions, command lines, source revisions,
-raw evidence hashes, and profile definitions are provenance.
-
-## 9. Standards alignment
-
-- **NIST SP 800-86:** collection maps to acquisition; examination maps to raw
-  extraction; analysis maps to manual source-family investigation; reporting
-  maps to analyst-written findings, limitations, and profile comparisons.
-- **ISO/IEC 27037-style handling:** acquired evidence is preserved immutably,
-  hashes are retained, and later analysis is performed on acquired images or
-  derived exports.
-- **Linux security controls:** Ubuntu hardening is AppArmor-based.
-  Fedora/SELinux is a deferred optional extension and is not part of the current
-  committed matrix. `auditd` is an added telemetry condition only for the
-  Father cleanup comparison.
-- **DFIR reproducibility:** command logs, manifests, hashes, tool command
-  lines, tool failures, and negative findings are part of the evidence record.
-
-## 10. Migration guardrails
-
-This repository is between architectures. Documentation now describes the
-target manual-investigation method, and current runtime source no longer
-contains the old automatic detector/matcher pipeline.
-
-During the remaining cleanup:
-
-- do not modify Python, YAML scenarios, tests, or dependencies to revive legacy
-  automatic evaluation;
-- do not present legacy detector or matcher output as a current thesis result;
-- do not add new detector rules, matcher aliases, evaluation schemas, or metric
-  fields;
-- keep VM power-state and acquisition-safety contracts unchanged;
-- keep changes small and tests minimal;
-- prefer deletion of remaining historical residue over extension when a later
-  cleanup task explicitly reopens it.
+Earlier automatic `ToolFinding`, `DetectionClaim`, canonical matching,
+precision/recall, and reconstruction-metrics work is preserved only by the
+immutable `automatic-reconstruction-v3-final` tag. It may be discussed as
+history, but it is not the current thesis architecture or a future-work
+requirement.

@@ -1,167 +1,109 @@
-# forensic-lab
+# Linux Multi-Source DFIR Lab
 
-forensic-lab is a defensive Linux post-mortem forensic investigation lab for
-controlled VM scenarios. It executes a scenario in an isolated lab VM, acquires
-disk and memory evidence, produces raw TSK/Plaso/Volatility exports, and
-supports manual correlation across filesystem, timeline, and memory evidence.
+[Canonical repository](https://github.com/acesaria/linux-multisource-dfir-lab)
 
-This is thesis research tooling, not a production SIEM, EDR, malware sandbox,
-automatic detector, automatic reconstruction system, or live incident-response
-platform.
+Linux Multi-Source DFIR Lab supports a Master's thesis on reproducible Linux
+post-mortem DFIR experiments. It runs controlled compromise scenarios in
+isolated VMs, acquires disk and memory evidence, produces raw Sleuth Kit, Plaso,
+and Volatility 3 exports, and supports manual investigation across filesystem,
+timeline, and memory sources.
 
-## Migration State
+The project is research infrastructure, not a production SIEM, EDR, malware
+sandbox, live-response platform, automatic detector, or automatic
+reconstruction system.
 
-The project has pivoted from automatic detection/evaluation to reproducible
-manual multi-source investigation. The old automatic detector, canonical
-matching, and metrics source pipeline has been removed from current runtime
-code and supporting configuration.
+## Current repository surface
 
-Previous automatic reconstruction work is preserved by the immutable tag
-`automatic-reconstruction-v3-final`.
+The CLI exposes `init`, `setup`, `run`, and `destroy`. `run` dispatches directly
+to one of three scenario keys:
 
-## Target Workflow
+- `interactive_shell`;
+- `userland_father_ldpreload`;
+- `userland_father_ldpreload_cleanup`.
 
-The thesis workflow is intentionally layered:
+A full run restores the prepared baseline, executes and validates the selected
+scenario, acquires memory while the VM is on, shuts the VM down, acquires disk,
+and produces raw filesystem, timeline, and memory exports. The implementation
+then stops: investigation, cross-source interpretation, and conclusions are
+human work.
 
-1. provision a clean VM from a pinned distro image;
-2. snapshot the pristine baseline;
-3. run a controlled scenario through its explicit Python runner;
-4. write a minimal run manifest and append-only command log;
-5. acquire memory while the VM is ON;
-6. acquire disk while the VM is OFF;
-7. hash acquired evidence and retain provenance;
-8. extract raw filesystem evidence with TSK;
-9. extract raw timeline evidence with Plaso;
-10. extract raw memory evidence with Volatility;
-11. manually investigate and correlate the raw evidence;
-12. compare vanilla and hardened profiles;
-13. report findings, negative findings, tool failures, and limitations.
+Current runs use manifest schema v3 and are recorded as `vanilla`. There is no
+runtime selector for a hardened security profile. Distro definitions exist for
+Ubuntu 22.04, Ubuntu 24.04, and Debian 13, but Ubuntu 22.04 is the current
+deep-analysis platform. Broader replication and optional scenarios must not
+delay the minimum thesis deliverables.
 
-Automatic acquisition and raw extraction remain in scope. Investigation remains
-manual. Precision, recall, canonical matching, ruleset hashes, and automatic
-reconstruction scores are not current thesis outputs.
+## Evidence and run records
 
-## Repository Layout
+Each run is rooted under `shared/experiments/<run_id>/`. An acquired run keeps:
 
 ```text
-forensic-lab/
-├── cli.py                         # command entry point
-├── scenarios/
-│   ├── interactive_shell/         # explicit calibration runner
-│   └── userland_father_ldpreload/ # explicit Father runner + pinned source
-├── infra/                         # libvirt/QEMU, Ansible, distro profiles
-├── orchestrator/
-│   ├── core/                      # lifecycle, VM state, paths, provenance
-│   └── forensics/                 # acquisition and raw tool runners
-├── docs/                          # methodology and orientation
-└── shared/                        # generated experiment outputs
+manifest.json                         run identity, lifecycle status, revision, sidecar index
+command_log.jsonl                     append-only scenario operations and commands
+terminal_transcript.txt               human-readable scenario terminal record
+dumps/acquisition.json                acquisition commands, hashes, verification, image metadata
+analysis/raw_extraction_status.json   raw-tool versions, commands, outputs, hashes, failures
 ```
 
-Generated outputs under `shared/` are disposable artifacts or evidence for a
-named run, not source.
+Raw outputs include the TSK bodyfile, Plaso storage/timeline exports, and
+Volatility output. The root manifest is a small lifecycle index; the acquisition
+and raw-extraction sidecars are the authorities for their respective provenance.
+A successful `--no-acquire` run keeps the root records but no acquisition or
+raw-extraction sidecars; it validates only the scenario and is not a complete
+forensic experiment.
 
-## Typical Workflow
+Accepted evidence and raw exports are immutable. Other generated caches may be
+recreated, but accepted run material must not be overwritten. Tool failures,
+zero-result tools, and source-scoped negative observations remain distinct.
 
-```bash
-# One-time host setup: sudoers, system dirs, libvirt network and storage pool
-python cli.py init
-
-# Prepare a distro: download image, create VM, build ISF, take baseline snapshot
-python cli.py setup --distro ubuntu-22.04
-
-# Run the registered thesis scenario, then acquire and extract evidence
-python cli.py run --distro ubuntu-22.04 --scenario userland_father_ldpreload
-
-# Destroy a lab VM when finished with a distro
-python cli.py destroy --distro ubuntu-22.04
-```
-
-Full runs now stop after scenario execution, acquisition, and raw
-TSK/Plaso/Volatility extraction. Current thesis use is the scenario log, run
-manifest, acquired evidence, raw exports, hashes, tool failures, and manual
-investigation notes. The historical automatic reconstruction implementation is
-kept in the immutable `automatic-reconstruction-v3-final` tag, not in the
-current source tree.
-
-The CLI dispatches directly to `interactive_shell` or
-`userland_father_ldpreload`; the latter remains the thesis scenario key.
-
-An acquired experiment uses this provenance layout:
+## Repository layout
 
 ```text
-experiments/<run_id>/
-├── manifest.json
-├── command_log.jsonl
-├── dumps/acquisition.json
-└── analysis/raw_extraction_status.json
+cli.py                    command entry point
+infra/                    libvirt/QEMU, Ansible, images, distro definitions
+orchestrator/core/        lifecycle, VM state, configuration, run paths
+orchestrator/forensics/   acquisition and raw TSK/Plaso/Volatility runners
+scenarios/                explicit scenario runners and command logging
+docs/investigations/      analyst reports, worklogs, and comparative material
+shared/                   generated run evidence, exports, and local analysis
 ```
 
-The root manifest remains a small index. The Father calibration adds one concise
-operational `scenario_facts` block; acquisition hashes and commands remain in
-`acquisition.json`, while raw-tool versions, invocations, output hashes, zero
-results, and failures remain in `raw_extraction_status.json`. Root status covers
-the requested workflow; a completed `--no-acquire` run is explicitly
-scenario-only and is not an accepted forensic experiment.
+Operational identifiers such as the `forensic-lab` CLI name, schema names, guest
+paths, and evidence artifacts are retained when they are part of the working
+system or a recorded run.
 
-## Evidence Contract
+## Basic use
 
-- Minimal run manifest and append-only command log are required.
-- Memory acquisition requires the lab VM to be running.
-- Disk acquisition requires the lab VM to be powered off.
-- Disk and memory images retain hashes and provenance.
-- Raw TSK, Plaso, and Volatility exports are preserved as raw evidence.
-- Tool failures and negative findings are recorded explicitly.
-- Raw evidence is immutable; reruns create separate derived artifacts.
-- Filesystem, timeline, and memory source families stay distinguishable during
-  manual correlation.
-
-## VM Contract
-
-The lab uses two VM roles:
-
-| Role | Network | Purpose | Lifecycle |
-|---|---|---|---|
-| `lab` | `forensics-isolated` | Runs controlled scenarios | Persistent, snapshots |
-| `build-isf` | `default` | Builds Volatility3 ISF symbols | Ephemeral |
-
-Power transitions stay in the orchestrator, not in tool wrappers.
-
-## Profiles
-
-- Ubuntu 22.04 is the deep-analysis platform.
-- Ubuntu 24.04 and Debian 13 receive targeted replication.
-- Vanilla means distro defaults.
-- Hardened means one fixed documented native-control bundle.
-- Ubuntu hardening uses AppArmor.
-- Fedora/SELinux is a postponed optional extension and is not part of the
-  current committed matrix.
-- `hardened+telemetry` adds `auditd` and is used only for the Father cleanup
-  comparison.
-
-If a hardened profile blocks a scenario, the run is recorded as prevented.
-Remaining evidence and denial traces are still acquired and analysed.
-
-## Configuration
-
-Copy `config.yaml.example` to `config.yaml` and adjust paths for your machine.
-`config.yaml` is local and gitignored.
-
-The raw extraction binaries are also host-local settings: `vol_bin`,
-`mmls_bin`, `fls_bin`, `fsstat_bin`, `log2timeline_bin`, and `psort_bin`. Each
-accepts either a command on `PATH` or an absolute path.
-
-Python setup:
+Create the local configuration and virtual environment first:
 
 ```bash
+cp config.yaml.example config.yaml
 ./setup-venv.sh
-source .venv/bin/activate
 ```
 
-Host prerequisites include KVM/QEMU with libvirt, `cloud-localds`,
-`ewfacquire`, and an SSH key for the lab VM. Passwordless sudo inside the lab is
-a controlled laboratory precondition for deploying scenario steps that require
-root; it is not an emulation of initial compromise.
+Then use the repository interpreter:
 
-The thesis scenarios are controlled by this framework and produce reproducible
-execution records, acquired evidence, raw forensic exports, and material for
-manual investigation.
+```bash
+.venv/bin/python cli.py init
+.venv/bin/python cli.py setup --distro ubuntu-22.04
+.venv/bin/python cli.py run --distro ubuntu-22.04 \
+  --scenario userland_father_ldpreload
+```
+
+Host prerequisites include KVM/QEMU with libvirt, `cloud-localds`, `ewfacquire`,
+the configured forensic tools, and an SSH key for the lab VM. Passwordless sudo
+inside the disposable guest is a documented deployment precondition, not an
+emulation of initial compromise.
+
+## Documentation
+
+- `AGENTS.md` is the only repository-agent entry point.
+- `METHODOLOGY.md` defines the thesis and investigation method.
+- `TODO.md` contains mutable priorities and delivery milestones.
+- Scenario-specific documentation explains controlled treatment behavior.
+- Named investigation documents apply only to their cited immutable runs.
+
+Previous automatic detection, matching, scoring, and reconstruction work is
+historical. Its final checkpoint is preserved by the immutable
+`automatic-reconstruction-v3-final` tag and must not be treated as the current
+architecture.

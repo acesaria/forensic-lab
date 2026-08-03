@@ -1,5 +1,2 @@
-Read AGENTS.md and PROJECT_CONTEXT.md first.
-Inspect only files relevant to the task.
-For documentation and report audits, do not execute scenarios,
-modify scenario code, or inspect vendored scenario source unless
-explicitly requested.
+Read `AGENTS.md` first and follow its progressive reading order.
+Claude support is optional; do not assume a Claude-specific workflow.
