@@ -57,6 +57,7 @@ shared/investigations/**
 
 # Track only scripts specifically named recovery.sh
 !shared/investigations/**/recovery.sh
+!shared/investigations/**/investigation.sh
 
 
 *.bak
@@ -69,3 +70,4 @@ audit/
 dfir-tools/
 ideas.txt
 shared/known_hashes/*
+.codex/*
