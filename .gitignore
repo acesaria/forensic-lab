@@ -50,7 +50,16 @@ forensics_report.json
 
 shared/experiments/*
 shared/baselines/
+
+# Exclude the entire investigations folder
 shared/investigations/
+
+# Whitelist the specific folder so Git can look inside it
+!shared/investigations/ubuntu-22.04_userland_father_ldpreload_cleanup_20260724-162708/
+
+# Whitelist all .sh files anywhere inside the investigations folder
+!shared/investigations/**/*.sh
+
 
 *.bak
 !scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar
@@ -61,3 +70,4 @@ audit/
 # Vendored third-party binary, fetched locally, not tracked
 dfir-tools/
 ideas.txt
+shared/known_hashes/*
