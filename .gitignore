@@ -51,14 +51,12 @@ forensics_report.json
 shared/experiments/*
 shared/baselines/
 
-# Exclude the entire investigations folder
-shared/investigations/
+# Ignore generated investigation material, but retain directory traversal
+shared/investigations/**
+!shared/investigations/**/
 
-# Whitelist the specific folder so Git can look inside it
-!shared/investigations/ubuntu-22.04_userland_father_ldpreload_cleanup_20260724-162708/
-
-# Whitelist all .sh files anywhere inside the investigations folder
-!shared/investigations/**/*.sh
+# Track only scripts specifically named recovery.sh
+!shared/investigations/**/recovery.sh
 
 
 *.bak
