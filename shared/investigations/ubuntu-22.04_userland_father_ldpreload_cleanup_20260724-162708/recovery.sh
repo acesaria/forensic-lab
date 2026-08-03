@@ -13,10 +13,15 @@ ENTRY_DIR="$OUT_DIR/deleted-entries"
 EXT4_DIR="$OUT_DIR/ext4magic"
 UNALLOC_DIR="$OUT_DIR/unallocated"
 PHOTOREC_DIR="$OUT_DIR/photorec"
+GROUND_TRUTH_DIR="$OUT_DIR/ground-truth"
 ROOT_IMAGE="$OUT_DIR/root-partition.ext4"
 UNALLOCATED="$UNALLOC_DIR/unallocated.blkls"
-EXPECTED_CONFIG="$OUT_DIR/ground-truth/expected-modified-config.h"
+EXPECTED_CONFIG="$GROUND_TRUTH_DIR/expected-modified-config.h"
 RECOVERED_CONFIG="$UNALLOC_DIR/recovered-config.h"
+CONFIG_PATTERN='#define STRING "__malicious_"'
+
+mkdir -p \
+  "$ENTRY_DIR" "$EXT4_DIR" "$UNALLOC_DIR" "$PHOTOREC_DIR" "$GROUND_TRUTH_DIR"
 
 printf '[R-01] Deleted entries in the three relevant parent directories\n'
 
@@ -63,8 +68,6 @@ chmod a-w "$ROOT_IMAGE"
 sha256sum "$ROOT_IMAGE" | tee "$ROOT_IMAGE.sha256"
 stat -c 'root derivative: %n %s bytes' "$ROOT_IMAGE"
 
-mkdir -p "$EXT4_DIR"
-
 printf '%s\n' \
   '"tmp/father-upstream-4eb2712.tar"' \
   '"tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h"' \
@@ -89,49 +92,73 @@ fi
 
 printf '\n[R-03] Recover the selected config.h from unallocated blocks\n'
 
+printf '\n[R-03.1] Prepare the disclosed validation reference\n'
+
 tar -xOf \
   scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar \
   Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h |
-  sed 's|^#define STRING .*|#define STRING "__malicious_"|' \
+  sed "s|^#define STRING .*|$CONFIG_PATTERN|" \
     >"$EXPECTED_CONFIG"
+
+EXPECTED_CONFIG_SIZE="$(stat -c %s "$EXPECTED_CONFIG")"
+REFERENCE_PATTERN_OFFSET="$(
+  LC_ALL=C grep -aobF -- "$CONFIG_PATTERN" "$EXPECTED_CONFIG" |
+    cut -d: -f1
+)"
+printf 'reference=%s\nsize=%s bytes\nmarker_offset=%s\n' \
+  "$EXPECTED_CONFIG" "$EXPECTED_CONFIG_SIZE" "$REFERENCE_PATTERN_OFFSET"
+
+printf '\n[R-03.2] Search the blkls unallocated-block stream\n'
 
 blkls -i ewf -o "$OFFSET" "$DISK_IMAGE" \
   >"$UNALLOCATED" 2>"$UNALLOC_DIR/blkls.stderr"
 sha256sum "$UNALLOCATED" >"$UNALLOCATED.sha256"
 stat -c 'unallocated blocks: %n %s bytes' "$UNALLOCATED"
 
-grep -aobF '#define STRING "__malicious_"' "$UNALLOCATED" \
-  >"$UNALLOC_DIR/config-pattern-hits.txt"
-sed -n '1p' "$UNALLOC_DIR/config-pattern-hits.txt"
+LC_ALL=C grep -aobF -- "$CONFIG_PATTERN" "$UNALLOCATED" \
+  >"$UNALLOC_DIR/config-pattern-hits.txt" || true
+HIT_COUNT="$(wc -l <"$UNALLOC_DIR/config-pattern-hits.txt")"
+printf 'marker_hits=%s\n' "$HIT_COUNT"
+
+if [[ "$HIT_COUNT" -ne 1 ]]; then
+  printf 'error: expected exactly one config marker hit, found %s\n' \
+    "$HIT_COUNT" >&2
+  exit 1
+fi
 
 HIT_OFFSET="$(
   cut -d: -f1 "$UNALLOC_DIR/config-pattern-hits.txt"
 )"
+printf 'marker_offset_in_blkls=%s\n' "$HIT_OFFSET"
+
+printf '\n[R-03.3] Map the hit to the original ext4 block\n'
+
 PACKED_BLOCK=$((HIT_OFFSET / BLOCK_SIZE))
-BLOCK_OFFSET=$((HIT_OFFSET % BLOCK_SIZE))
+HIT_OFFSET_IN_BLOCK=$((HIT_OFFSET % BLOCK_SIZE))
 FILESYSTEM_BLOCK="$(
   blkcalc -i ewf -o "$OFFSET" -u "$PACKED_BLOCK" "$DISK_IMAGE"
 )"
+CONFIG_START_IN_BLOCK=$((HIT_OFFSET_IN_BLOCK - REFERENCE_PATTERN_OFFSET))
 printf \
-  'blkls_byte_offset=%s\nblkls_block=%s\nfilesystem_block=%s\nblock_byte_offset=%s\n' \
-  "$HIT_OFFSET" "$PACKED_BLOCK" "$FILESYSTEM_BLOCK" "$BLOCK_OFFSET" \
-  >"$UNALLOC_DIR/config-block-map.txt"
+  'blkls_byte_offset=%s\nblkls_block=%s\nfilesystem_block=%s\nmarker_offset_in_block=%s\nmarker_offset_in_reference=%s\nextraction_start_in_block=%s - %s = %s\n' \
+  "$HIT_OFFSET" "$PACKED_BLOCK" "$FILESYSTEM_BLOCK" \
+  "$HIT_OFFSET_IN_BLOCK" "$REFERENCE_PATTERN_OFFSET" \
+  "$HIT_OFFSET_IN_BLOCK" "$REFERENCE_PATTERN_OFFSET" "$CONFIG_START_IN_BLOCK" \
+  | tee "$UNALLOC_DIR/config-block-map.txt"
+
+printf '\n[R-03.4] Extract and validate the content\n'
 
 BLOCK_FILE="$UNALLOC_DIR/config-source-block-$FILESYSTEM_BLOCK.bin"
 blkcat -i ewf -o "$OFFSET" \
   "$DISK_IMAGE" "$FILESYSTEM_BLOCK" >"$BLOCK_FILE"
 
-PATTERN_OFFSET="$(
-  grep -aboF -m 1 '#define STRING "__malicious_"' "$EXPECTED_CONFIG" |
-    cut -d: -f1
-)"
-CONFIG_START=$((BLOCK_OFFSET - PATTERN_OFFSET))
 dd if="$BLOCK_FILE" of="$RECOVERED_CONFIG" \
-  bs=1 skip="$CONFIG_START" count=740 status=none
+  bs=1 skip="$CONFIG_START_IN_BLOCK" count="$EXPECTED_CONFIG_SIZE" status=none
 
 stat -c '%n %s bytes' "$RECOVERED_CONFIG"
 sha256sum "$RECOVERED_CONFIG" "$EXPECTED_CONFIG"
 cmp "$RECOVERED_CONFIG" "$EXPECTED_CONFIG"
+printf 'Recovered config matches the disclosed validation reference.\n'
 file "$RECOVERED_CONFIG"
 sha256sum "$RECOVERED_CONFIG" "$BLOCK_FILE" \
   >"$UNALLOC_DIR/recovered-config.sha256"

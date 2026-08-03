@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# Case-specific record for setup and allocated-filesystem examination.
+# recovery.sh covers deleted-entry and unallocated-space recovery.
+
 set -euo pipefail
 
 RUN_ID='ubuntu-22.04_userland_father_ldpreload_cleanup_20260724-162708'
