@@ -231,14 +231,22 @@ ELF 64-bit LSB shared object, x86-64, version 1 (SYSV), dynamically linked, Buil
 The recovered file is an ELF shared object, which is consistent with its use
 through `ld.so.preload`. This still does not prove that it is a rootkit:
 attribution depends on the disclosed controlled-scenario context.
-Its internal structure and functionality must be examined separately through
-RAM forensics and timeline analysis.
+Further static ELF inspection can characterise its structure and possible
+functionality. RAM and timeline evidence instead corroborate mapping/runtime
+state and timing.
 
 ## D-02 - Scope of deleted-artifact recovery
 
 This is a disclosed ground-truth-guided recovery check, separate from the
 allocated persistence examination. The target paths come from the scenario
 implementation and are not discoveries from the disk.
+
+| Recovery method terminology | Use in this worklog |
+| --- | --- |
+| deleted directory-entry examination | TSK `fls -d` examination of the three relevant parent directories |
+| journal-assisted recovery attempt | Bounded `ext4magic` attempt for four disclosed file targets |
+| ground-truth-guided targeted content recovery from unallocated filesystem blocks | Marker-led `blkls`, `blkcalc`, and `blkcat` recovery of the disclosed `config.h` content |
+| signature-based file carving from unallocated space | TAR-only PhotoRec attempt over ext4 free space |
 
 | Recovery target | Disclosed pre-cleanup location |
 | --- | --- |
@@ -276,9 +284,10 @@ In ext4, a directory entry associates a filename with an inode. Deletion removes
 that association and makes the inode and data blocks available for reuse.
 Residual directory-entry or inode information may sometimes remain recoverable,
 but this is not guaranteed. In this case, `fls -d` found no interpretable
-deleted entry in the three examined parent directories, so there was no inode
-locator available for `istat` or `icat`. This is a bounded negative result, not
-proof that the artifacts never existed.
+deleted entry in the three examined parent directories. The deleted target
+entries were not recovered by this method, so there was no inode locator
+available for `istat` or `icat`. This bounded negative does not establish
+absence.
 
 ## D-04 (R-02) - Can ext4magic recover any bounded file target?
 
@@ -312,51 +321,117 @@ ext4magic : EXIT_SUCCESS
 No artifact was recovered for the four bounded file targets.
 ```
 
-The tool completed but recovered no entry or content for any bounded target.
-This is a negative method result, not a tool failure and not proof that no
-historical journal data ever existed.
+`ext4magic` rendered the selected epoch interval in host local time:
+`16:26:08–16:28:10 CEST` equals `14:26:08–14:28:10 UTC`.
+
+The four bounded targets were not recovered by this method. This is a negative
+method result, not a tool failure, and it does not establish absence of
+historical journal data.
 
 ## D-05 - Is the modified config.h present in unallocated blocks?
 
-The disclosed source archive supplied a validation reference. TSK then
-extracted and mapped the one observed hit in unallocated blocks.
+The disclosed source archive supplied a validation reference. This is
+ground-truth-guided validation, not technique-led discovery.
+
+This is not slack-space recovery: `blkls` was used without `-s`, so the stream
+contains unallocated filesystem blocks rather than file slack.
+
+### Reference preparation
 
 ```bash
+CONFIG_PATTERN='#define STRING "__malicious_"'
+EXPECTED_CONFIG="$OUT_DIR/ground-truth/expected-modified-config.h"
+
 tar -xOf scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar \
   Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h |
-  sed 's|^#define STRING .*|#define STRING "__malicious_"|' \
-  >"$OUT_DIR/ground-truth/expected-modified-config.h"
-blkls -i ewf -o "$OFFSET" "$DISK_IMAGE" \
-  >"$OUT_DIR/unallocated/unallocated.blkls"
-grep -aobF '#define STRING "__malicious_"' \
-  "$OUT_DIR/unallocated/unallocated.blkls"
-blkcalc -i ewf -o "$OFFSET" -u 132164 "$DISK_IMAGE"
-blkcat -i ewf -o "$OFFSET" "$DISK_IMAGE" 589851 \
-  >"$OUT_DIR/unallocated/config-source-block-589851.bin"
-dd if="$OUT_DIR/unallocated/config-source-block-589851.bin" \
-  of="$OUT_DIR/unallocated/recovered-config.h" \
-  bs=1 count=740 status=none
-sha256sum "$OUT_DIR/unallocated/recovered-config.h" \
-  "$OUT_DIR/ground-truth/expected-modified-config.h"
-cmp "$OUT_DIR/unallocated/recovered-config.h" \
-  "$OUT_DIR/ground-truth/expected-modified-config.h"
-file "$OUT_DIR/unallocated/recovered-config.h"
+  sed "s|^#define STRING .*|$CONFIG_PATTERN|" >"$EXPECTED_CONFIG"
+
+EXPECTED_CONFIG_SIZE="$(stat -c %s "$EXPECTED_CONFIG")"
+REFERENCE_PATTERN_OFFSET="$(
+  LC_ALL=C grep -aobF -- "$CONFIG_PATTERN" "$EXPECTED_CONFIG" |
+    cut -d: -f1
+)"
+printf 'size=%s bytes\nmarker_offset=%s\n' \
+  "$EXPECTED_CONFIG_SIZE" "$REFERENCE_PATTERN_OFFSET"
 ```
 
 ```text
+size=740 bytes
+marker_offset=368
+```
+
+### Marker location
+
+```bash
+UNALLOCATED="$OUT_DIR/unallocated/unallocated.blkls"
+blkls -i ewf -o "$OFFSET" "$DISK_IMAGE" \
+  >"$UNALLOCATED"
+LC_ALL=C grep -aobF -- "$CONFIG_PATTERN" "$UNALLOCATED" \
+  >"$OUT_DIR/unallocated/config-pattern-hits.txt" || true
+wc -l <"$OUT_DIR/unallocated/config-pattern-hits.txt"
+sed -n '1p' "$OUT_DIR/unallocated/config-pattern-hits.txt"
+```
+
+```text
+1
 541344112:#define STRING "__malicious_"
-589851
+```
+
+Exactly one marker hit was present, satisfying the script's precondition for
+offset arithmetic.
+
+### blkls-to-filesystem block mapping
+
+```bash
+HIT_OFFSET=541344112
+BLOCK_SIZE=4096
+PACKED_BLOCK=$((HIT_OFFSET / BLOCK_SIZE))
+HIT_OFFSET_IN_BLOCK=$((HIT_OFFSET % BLOCK_SIZE))
+FILESYSTEM_BLOCK="$(
+  blkcalc -i ewf -o "$OFFSET" -u "$PACKED_BLOCK" "$DISK_IMAGE"
+)"
+printf '%s / %s = packed block %s, remainder %s\n' \
+  "$HIT_OFFSET" "$BLOCK_SIZE" "$PACKED_BLOCK" "$HIT_OFFSET_IN_BLOCK"
+printf 'blkcalc maps packed block %s to ext4 block %s\n' \
+  "$PACKED_BLOCK" "$FILESYSTEM_BLOCK"
+```
+
+```text
+541344112 / 4096 = packed block 132164, remainder 368
+blkcalc maps packed block 132164 to ext4 block 589851
+```
+
+### Extraction and validation
+
+```bash
+CONFIG_START_IN_BLOCK=$((HIT_OFFSET_IN_BLOCK - REFERENCE_PATTERN_OFFSET))
+printf 'marker offset in reference = %s\n' "$REFERENCE_PATTERN_OFFSET"
+printf 'extraction start = %s - %s = %s\n' \
+  "$HIT_OFFSET_IN_BLOCK" "$REFERENCE_PATTERN_OFFSET" "$CONFIG_START_IN_BLOCK"
+
+BLOCK_FILE="$OUT_DIR/unallocated/config-source-block-$FILESYSTEM_BLOCK.bin"
+RECOVERED_CONFIG="$OUT_DIR/unallocated/recovered-config.h"
+blkcat -i ewf -o "$OFFSET" "$DISK_IMAGE" "$FILESYSTEM_BLOCK" >"$BLOCK_FILE"
+dd if="$BLOCK_FILE" of="$RECOVERED_CONFIG" \
+  bs=1 skip="$CONFIG_START_IN_BLOCK" count="$EXPECTED_CONFIG_SIZE" status=none
+sha256sum "$RECOVERED_CONFIG" "$EXPECTED_CONFIG"
+cmp "$RECOVERED_CONFIG" "$EXPECTED_CONFIG"
+printf 'cmp exit status: %s\n' "$?"
+file "$RECOVERED_CONFIG"
+```
+
+```text
+marker offset in reference = 368
+extraction start = 368 - 368 = 0
 d14ebf96f7a5d2c10622f415fe1a1ecddeda2756387ba5ae8f52886d64120ad4  recovered-config.h
 d14ebf96f7a5d2c10622f415fe1a1ecddeda2756387ba5ae8f52886d64120ad4  expected-modified-config.h
 cmp exit status: 0
 file: C source, ASCII text
 ```
 
-The hit at byte `541344112` maps from packed `blkls` block `132164` to ext4
-block `589851`. The recovered 740 bytes are byte-identical to the disclosed
-reference, so this target is full content, with ground-truth-guided identity.
-
-One scenario-specific marker was found in the ext4 unallocated-block stream and mapped by TSK to filesystem block 589851. The recovered 740-byte slice was byte-identical to the disclosed modified config.h, establishing complete content recovery. No filename, inode, timestamps, or directory association were recovered; identification as src/config.h is therefore ground-truth guided
+Result: complete file-content recovery with ground-truth-guided identification.
+The 740-byte recovered content is byte-identical to the disclosed reference.
+Filename, inode, timestamps and directory association were not recovered.
 
 ## D-06 - Can the uploaded TAR be recovered by file carving?
 
@@ -378,7 +453,7 @@ PhotoRec exited normally.
 ```
 
 PhotoRec succeeded but returned no file, so there was no TAR candidate to
-validate. The uploaded archive was not recovered by this bounded method.
+validate. The uploaded archive was not recovered by this method.
 
 ## D-07 - Target-by-target recovery synthesis
 
@@ -387,11 +462,11 @@ No target had an entry-only, partial-content, or tool-failure result. No generic
 
 | Target | Result | Validation | Limitation |
 | --- | --- | --- | --- |
-| Uploaded TAR | Not recovered | Empty `fls` and ext4magic results; PhotoRec found 0 files | No recovered TAR candidate for structural or hash validation |
-| Deleted Father directory | Not recovered | Parent inode `258151`; `fls -d` returned no entry | No directory inode for `istat` or child examination |
-| Modified `src/config.h` | Full content at ext4 block `589851` | 740 bytes; SHA-256 `d14ebf96...120ad4`; `cmp` matched | Selection and attribution are ground-truth-guided |
-| Built `rk.so` | Not recovered | Empty ext4magic result and no inode candidate | No complete candidate was recovered for comparison |
-| `.bash_history` | Not recovered | Parent inode `258049`; empty `fls` and ext4magic results | Does not establish whether persistent history once existed |
+| Uploaded TAR | Not recovered by this method | Empty `fls` and ext4magic results; PhotoRec found 0 files | No recovered TAR candidate for structural or hash validation |
+| Deleted Father directory | Not recovered by this method | Parent inode `258151`; `fls -d` returned no entry | No directory inode for `istat` or child examination |
+| Modified `src/config.h` | Complete file-content recovery with ground-truth-guided identification | 740 bytes; SHA-256 `d14ebf96...120ad4`; `cmp` matched | Filename, inode, timestamps and directory association were not recovered |
+| Built `rk.so` | Not recovered by this method | Empty ext4magic result and no inode candidate | No complete candidate was recovered for comparison |
+| `.bash_history` | Not recovered by this method | Parent inode `258049`; empty `fls` and ext4magic results | Does not establish whether persistent history once existed |
 
-These zero results describe only the bounded techniques used here; they do not
-prove that the TAR, directory, `rk.so`, or `.bash_history` never existed.
+These zero results describe only the bounded techniques used here and do not
+establish absence of the TAR, directory, `rk.so`, or `.bash_history`.
