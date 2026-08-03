@@ -25,7 +25,7 @@ project instructions.
 ## Immediate Next Task
 
 Investigate the accepted Ubuntu 22.04 Father **cleanup** run, reusing the frozen
-method: the atomic-inventory/coverage rules in `docs/investigations/REPORT_GUIDE.md`,
+method: the atomic-inventory/coverage rules in `docs/investigations/REPORT_GUIDE.md` (deleted will be recostructed after the first successfull complete investigation. it was not producing the intended result. deferred.),
 the report structure in `docs/investigations/father-ubuntu2204-vanilla-calibration.md`,
 and the shared `docs/investigations/COMPARATIVE_RESULTS.md` table. Freeze the
 cleanup inventory before mapping evidence, then add its filesystem/timeline/memory/union
