@@ -77,13 +77,13 @@ printf '%s\n' \
 RECOVER_DIR="$EXT4_DIR/recovered-R"
 INVENTORY="$EXT4_DIR/recovered-R-inventory.txt"
 
-sudo ext4magic "$ROOT_IMAGE" \
+ext4magic "$ROOT_IMAGE" \
   -a 1784903168 -b 1784903290 \
   -i "$EXT4_DIR/targets.txt" \
   -R -d "$RECOVER_DIR" \
   2>&1 | tee "$EXT4_DIR/ext4magic-R.txt"
 
-sudo find "$RECOVER_DIR" -mindepth 1 \
+find "$RECOVER_DIR" -mindepth 1 \
   -printf '%y %s bytes %p\n' | tee "$INVENTORY"
 
 if [[ ! -s "$INVENTORY" ]]; then
