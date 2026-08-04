@@ -60,7 +60,7 @@ if [[ ! -s "$ENTRY_DIR/tmp-deleted.txt" &&
   printf 'No deleted entries were returned; no target inode was available for istat/icat.\n'
 fi
 
-printf '\n[R-02] Journal-assisted recovery of four file targets\n'
+printf '\n[R-02] Bounded recursive journal-assisted recovery\n'
 
 ewfexport -q -u -f raw -o 116391936 -B 4178558464 -t - \
   "$DISK_IMAGE" >"$ROOT_IMAGE"
@@ -68,27 +68,37 @@ chmod a-w "$ROOT_IMAGE"
 sha256sum "$ROOT_IMAGE" | tee "$ROOT_IMAGE.sha256"
 stat -c 'root derivative: %n %s bytes' "$ROOT_IMAGE"
 
-printf '%s\n' \
-  '"tmp/father-upstream-4eb2712.tar"' \
-  '"tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h"' \
-  '"tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/rk.so"' \
-  '"home/labuser/.bash_history"' >"$EXT4_DIR/targets.txt"
-
 RECOVER_DIR="$EXT4_DIR/recovered-R"
 INVENTORY="$EXT4_DIR/recovered-R-inventory.txt"
+TARGET_RESULTS="$EXT4_DIR/disclosed-target-results.txt"
+
+mkdir -p "$RECOVER_DIR"
 
 ext4magic "$ROOT_IMAGE" \
   -a 1784903168 -b 1784903290 \
-  -i "$EXT4_DIR/targets.txt" \
   -R -d "$RECOVER_DIR" \
   2>&1 | tee "$EXT4_DIR/ext4magic-R.txt"
 
 find "$RECOVER_DIR" -mindepth 1 \
-  -printf '%y %s bytes %p\n' | tee "$INVENTORY"
+  -printf '%y %s bytes %p\n' | sort | tee "$INVENTORY"
 
 if [[ ! -s "$INVENTORY" ]]; then
-  printf 'No artifact was recovered for the four bounded file targets.\n'
+  printf 'ext4magic completed successfully with zero recovered entries.\n'
+else
+  printf 'ext4magic completed successfully; recovered_entries=%s\n' \
+    "$(wc -l <"$INVENTORY")"
 fi
+
+for target in \
+  'tmp/father-upstream-4eb2712.tar' \
+  'tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h' \
+  'tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/rk.so' \
+  'home/labuser/.bash_history'; do
+  printf 'target=%s matches=%s\n' "$target" \
+    "$(find "$RECOVER_DIR" -type f -path "*/$target" -printf . | wc -c)"
+  find "$RECOVER_DIR" -type f -path "*/$target" \
+    -printf '%s bytes %p\n' -exec sha256sum {} \;
+done | tee "$TARGET_RESULTS"
 
 printf '\n[R-03] Recover the selected config.h from unallocated blocks\n'
 

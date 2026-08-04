@@ -18,7 +18,8 @@ The case-specific order of examination is:
 1. record the case parameters and filesystem geometry used during examination;
 2. examine the allocated filesystem namespace and surviving persistence;
 3. inspect known cleanup locations for deleted entries and metadata;
-4. attempt targeted ext4 recovery only where justified;
+4. run one time-bounded recursive ext4 recovery completeness experiment,
+   inventory all results, and only then check disclosed target paths;
 5. consider bounded unallocated-space recovery only if a specific unresolved
    target remains;
 6. summarize findings, negative observations, and limitations.
@@ -237,14 +238,16 @@ state and timing.
 
 ## D-02 - Scope of deleted-artifact recovery
 
-This is a disclosed ground-truth-guided recovery check, separate from the
-allocated persistence examination. The target paths come from the scenario
-implementation and are not discoveries from the disk.
+This is separate from the allocated persistence examination. The recursive
+ext4 recovery pass is a bounded completeness experiment and does not use a
+target list. The target paths come from the scenario implementation and are
+used only afterward for disclosed-ground-truth validation; they are not
+discoveries from the disk.
 
 | Recovery method terminology | Use in this worklog |
 | --- | --- |
 | deleted directory-entry examination | TSK `fls -d` examination of the three relevant parent directories |
-| journal-assisted recovery attempt | Bounded `ext4magic` attempt for four disclosed file targets |
+| journal-assisted recovery attempt | Time-bounded recursive `ext4magic -R` completeness experiment, followed by a full inventory and disclosed-target validation |
 | ground-truth-guided targeted content recovery from unallocated filesystem blocks | Marker-led `blkls`, `blkcalc`, and `blkcat` recovery of the disclosed `config.h` content |
 | signature-based file carving from unallocated space | TAR-only PhotoRec attempt over ext4 free space |
 
@@ -289,44 +292,65 @@ entries were not recovered by this method, so there was no inode locator
 available for `istat` or `icat`. This bounded negative does not establish
 absence.
 
-## D-04 (R-02) - Can ext4magic recover any bounded file target?
+## D-04 (R-02) - Can bounded recursive ext4magic recover any entry?
 
-`ext4magic` required an offset-free ext4 derivative and effective root
-privileges. The final bounded attempt used the four disclosed file paths, the
-scenario interval plus 60 seconds on each side, and the permissive `-R` mode.
+`ext4magic` required an offset-free ext4 derivative. The bounded completeness
+experiment started at the filesystem root and used the scenario interval plus
+60 seconds on each side with the permissive recursive `-R` mode. This can
+consider both deleted and allocated matching inodes, so all recovered entries
+are inventoried before the disclosed target paths are checked.
 
 ```bash
 ewfexport -q -u -f raw -o 116391936 -B 4178558464 -t - \
   "$DISK_IMAGE" >"$OUT_DIR/root-partition.ext4"
 chmod a-w "$OUT_DIR/root-partition.ext4"
-sha256sum "$OUT_DIR/root-partition.ext4"
+sha256sum "$OUT_DIR/root-partition.ext4" |
+  tee "$OUT_DIR/root-partition.ext4.sha256"
 
-sudo ext4magic "$OUT_DIR/root-partition.ext4" \
+RECOVER_DIR="$OUT_DIR/ext4magic/recovered-R"
+INVENTORY="$OUT_DIR/ext4magic/recovered-R-inventory.txt"
+TARGET_RESULTS="$OUT_DIR/ext4magic/disclosed-target-results.txt"
+mkdir -p "$RECOVER_DIR"
+
+ext4magic "$OUT_DIR/root-partition.ext4" \
   -a 1784903168 -b 1784903290 \
-  -i "$OUT_DIR/ext4magic/targets.txt" \
-  -R -d "$OUT_DIR/ext4magic/recovered-R"
+  -R -d "$OUT_DIR/ext4magic/recovered-R" \
+  2>&1 | tee "$OUT_DIR/ext4magic/ext4magic-R.txt"
 
-sudo find "$OUT_DIR/ext4magic/recovered-R" -mindepth 1 \
-  -printf '%y %s bytes %p\n'
+find "$RECOVER_DIR" -mindepth 1 \
+  -printf '%y %s bytes %p\n' | sort | tee "$INVENTORY"
+
+for target in \
+  'tmp/father-upstream-4eb2712.tar' \
+  'tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h' \
+  'tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/rk.so' \
+  'home/labuser/.bash_history'; do
+  printf 'target=%s matches=%s\n' "$target" \
+    "$(find "$RECOVER_DIR" -type f -path "*/$target" -printf . | wc -c)"
+  find "$RECOVER_DIR" -type f -path "*/$target" \
+    -printf '%s bytes %p\n' -exec sha256sum {} \;
+done | tee "$TARGET_RESULTS"
 ```
 
 ```text
 f54f171672e057fdb364f90383dd741a2e15d752d7267a63e8e1682305ed2cd5  root-partition.ext4
-targets.txt accept for inputfile
-recovered-R accept for recoverdir
-Using internal Journal at Inode 8
-Activ Time after  : Fri Jul 24 16:26:08 2026
-Activ Time before : Fri Jul 24 16:28:10 2026
 ext4magic : EXIT_SUCCESS
-No artifact was recovered for the four bounded file targets.
+ext4magic completed successfully with zero recovered entries.
+target=tmp/father-upstream-4eb2712.tar matches=0
+target=tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/src/config.h matches=0
+target=tmp/forensic-lab/father_ldpreload/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332/rk.so matches=0
+target=home/labuser/.bash_history matches=0
 ```
 
-`ext4magic` rendered the selected epoch interval in host local time:
-`16:26:08–16:28:10 CEST` equals `14:26:08–14:28:10 UTC`.
+The recursive inventory was empty. `ext4magic` completed successfully, so this
+is a successful zero-result recovery experiment rather than a tool failure.
+The four zero-match checks occurred only after the complete inventory and are
+ground-truth-guided validation.
 
-The four bounded targets were not recovered by this method. This is a negative
-method result, not a tool failure, and it does not establish absence of
-historical journal data.
+The recursive scope is broader than the previous four-target input-list pass,
+but remains bounded by the 122-second interval, ext4magic's journal semantics,
+and the journal data available in this image. It recovered no entry and does
+not establish that historical data never existed.
 
 ## D-05 - Is the modified config.h present in unallocated blocks?
 
@@ -462,11 +486,11 @@ No target had an entry-only, partial-content, or tool-failure result. No generic
 
 | Target | Result | Validation | Limitation |
 | --- | --- | --- | --- |
-| Uploaded TAR | Not recovered by this method | Empty `fls` and ext4magic results; PhotoRec found 0 files | No recovered TAR candidate for structural or hash validation |
+| Uploaded TAR | Not recovered by this method | Empty `fls` and recursive ext4magic results; PhotoRec found 0 files | No recovered TAR candidate for structural or hash validation |
 | Deleted Father directory | Not recovered by this method | Parent inode `258151`; `fls -d` returned no entry | No directory inode for `istat` or child examination |
 | Modified `src/config.h` | Complete file-content recovery with ground-truth-guided identification | 740 bytes; SHA-256 `d14ebf96...120ad4`; `cmp` matched | Filename, inode, timestamps and directory association were not recovered |
-| Built `rk.so` | Not recovered by this method | Empty ext4magic result and no inode candidate | No complete candidate was recovered for comparison |
-| `.bash_history` | Not recovered by this method | Parent inode `258049`; empty `fls` and ext4magic results | Does not establish whether persistent history once existed |
+| Built `rk.so` | Not recovered by this method | Empty recursive ext4magic result and no inode candidate | No complete candidate was recovered for comparison |
+| `.bash_history` | Not recovered by this method | Parent inode `258049`; empty `fls` and recursive ext4magic results | Does not establish whether persistent history once existed |
 
 These zero results describe only the bounded techniques used here and do not
 establish absence of the TAR, directory, `rk.so`, or `.bash_history`.
