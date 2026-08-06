@@ -157,10 +157,10 @@ scenario's ground-truth records, each mapped only to accepted forensic
 locators. This is **manual evidence-recovery coverage** — a descriptive
 post-mortem measure of what each source recovered, not automatic detection
 accuracy. This first inventory was formalised after the investigation but
-derived from ground truth independently of the evidence mapping; future
-inventories are frozen before mapping (see `REPORT_GUIDE.md`). Applicability is
-fixed by source capability: filesystem M01–M08, timeline M01–M08 and M11,
-memory M05/M09/M10.
+derived from ground truth independently of the evidence mapping; later
+inventories are frozen before mapping under the metric contract in
+`COMPARATIVE_RESULTS.md`. Applicability is fixed by source capability:
+filesystem M01–M08, timeline M01–M08 and M11, memory M05/M09/M10.
 
 | Target — expected fact | FS | TL | Mem | Accepted locators / limitation |
 |---|---|---|---|---|

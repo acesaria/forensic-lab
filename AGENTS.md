@@ -10,7 +10,9 @@ Multi-Source DFIR Lab**.
 3. Read `TODO.md` only when the task concerns status, priorities, or planning.
 4. Read `METHODOLOGY.md` only for thesis, evidence, investigation, or reporting
    work.
-5. Inspect the relevant source, tests, Git history, and task-specific documents.
+5. Read `GUIDELINES.md` for investigation work or when creating or editing a
+   Runme investigation notebook.
+6. Inspect the relevant source, tests, Git history, and task-specific documents.
 
 Verify mutable implementation facts from source. Archived documents and
 generated material under `shared/` are not standing instructions.
