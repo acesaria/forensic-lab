@@ -27,6 +27,11 @@ from orchestrator.core.orchestrator import ForensicOrchestrator
         ("interactive_shell", False, "scenario", 0, False, "on"),
         ("interactive_shell", True, None, 0, False, "off"),
         ("userland_father_ldpreload", True, "raw_extraction", 0, True, "off"),
+        ("ptrace_fa", False, None, 1, True, "off"),
+        ("ptrace_fa", False, "scenario", 1, False, "off"),
+        ("ptrace_fa", True, None, 0, True, "off"),
+        ("ptrace_fa", True, "acquisition", 1, True, "off"),
+        ("ptrace_fa", True, "raw_extraction", 0, True, "off"),
     ],
 )
 def test_explicit_scenarios_preserve_lifecycle_differences(
@@ -42,7 +47,7 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     error = RuntimeError(f"{failure_phase} failed")
     facts = {"validated": True}
     events = []
-    father_socket = None
+    cleanup_socket = None
 
     class FakeSocket:
         closed = False
@@ -68,8 +73,8 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             pass
 
         def shutdown_vm(self, *_args):
-            if father_socket is not None:
-                assert father_socket.closed
+            if cleanup_socket is not None:
+                assert cleanup_socket.closed
             events.append("shutdown")
             self.shutdowns += 1
             self.state = "off"
@@ -96,8 +101,8 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             self, _vm_name, run_id, _scenario_id, *, before_shutdown=None
         ):
             assert fake_vm.state == "on"
-            if father_socket is not None:
-                assert not father_socket.closed
+            if cleanup_socket is not None:
+                assert not cleanup_socket.closed
             else:
                 assert before_shutdown is None
             events.append("memory")
@@ -132,12 +137,19 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         return []
 
     def fake_father(*_args, **kwargs):
-        nonlocal father_socket
+        nonlocal cleanup_socket
         assert kwargs["scenario_id"] == scenario_id
         if failure_phase == "scenario":
             raise error
-        father_socket = FakeSocket()
-        return facts, father_socket.close
+        cleanup_socket = FakeSocket()
+        return facts, cleanup_socket.close
+
+    def fake_ptrace_fa(*_args, **_kwargs):
+        nonlocal cleanup_socket
+        if failure_phase == "scenario":
+            raise error
+        cleanup_socket = FakeSocket()
+        return facts, cleanup_socket.close
 
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.command_output", lambda *_args: "test-commit"
@@ -146,6 +158,7 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         "orchestrator.core.orchestrator.run_interactive_shell", fake_interactive
     )
     monkeypatch.setattr("orchestrator.core.orchestrator.run_father", fake_father)
+    monkeypatch.setattr("orchestrator.core.orchestrator.run_ptrace_fa", fake_ptrace_fa)
 
     orchestrator = FakeOrchestrator()
     if failure_phase:
@@ -207,8 +220,8 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             == "dumps/acquisition.json"
         )
         assert "raw_extraction_status" not in manifest["artifacts"]
-    if father_socket is not None:
-        assert father_socket.closed
+    if cleanup_socket is not None:
+        assert cleanup_socket.closed
         assert events.index("backdoor close") < events.index("shutdown")
         if acquire:
             assert events.index("memory") < events.index("backdoor close")

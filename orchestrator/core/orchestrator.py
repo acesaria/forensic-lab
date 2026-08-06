@@ -26,7 +26,8 @@ prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM destroyed)
 _reset_lab         ends ON + SSH ready
 _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
-Father experiments end OFF, including when acquisition is skipped or a step fails
+Father and ptrace_fa experiments end OFF, including when acquisition is skipped
+or a step fails
 """
 
 from collections.abc import Callable
@@ -62,6 +63,10 @@ from orchestrator.forensics.pipeline_config import reported_version
 from scenarios.interactive_shell.runner import (
     SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO,
     run_interactive_shell,
+)
+from scenarios.ptrace_fa.runner import (
+    SCENARIO_ID as PTRACE_FA_SCENARIO,
+    run_ptrace_fa,
 )
 from scenarios.userland_father_ldpreload.runner import (
     CLEANUP_SCENARIO_ID as FATHER_CLEANUP_SCENARIO,
@@ -170,7 +175,12 @@ class ForensicOrchestrator:
     ) -> str | None:
         """Run one explicit scenario through the full experiment lifecycle."""
         is_father = scenario_id in (FATHER_SCENARIO, FATHER_CLEANUP_SCENARIO)
-        if scenario_id != INTERACTIVE_SHELL_SCENARIO and not is_father:
+        is_ptrace_fa = scenario_id == PTRACE_FA_SCENARIO
+        # Both scenarios return live facts plus a cleanup callback that keeps
+        # their backdoor/reverse-shell connection open until just before the
+        # guest shuts down for disk acquisition.
+        has_scenario_cleanup = is_father or is_ptrace_fa
+        if scenario_id != INTERACTIVE_SHELL_SCENARIO and not has_scenario_cleanup:
             raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
@@ -245,6 +255,12 @@ class ForensicOrchestrator:
                             command_log_path=command_log_path,
                             scenario_id=scenario_id,
                         )
+                    elif is_ptrace_fa:
+                        facts, backdoor_cleanup = run_ptrace_fa(
+                            ssh,
+                            transcript_path,
+                            command_log_path=command_log_path,
+                        )
                     else:
                         run_interactive_shell(
                             ssh,
@@ -270,7 +286,7 @@ class ForensicOrchestrator:
                 kernel=guest.get("kernel"),
                 timezone=guest.get("timezone"),
             )
-            if is_father:
+            if has_scenario_cleanup:
                 manifest["scenario_facts"] = facts
             manifest["scenario_status"] = "completed"
             manifest["timestamps"]["scenario_ended_at"] = _utc_now()
@@ -309,7 +325,7 @@ class ForensicOrchestrator:
                     manifest["timestamps"]["run_ended_at"] = _utc_now()
                     _write_run_manifest(manifest_path, manifest)
                     raise
-            elif is_father:
+            elif has_scenario_cleanup:
                 assert backdoor_cleanup is not None
                 backdoor_cleanup()
                 self.vm_manager.shutdown_vm(vm_name)
@@ -324,7 +340,7 @@ class ForensicOrchestrator:
             )
             return acquisition_path
         finally:
-            if is_father:
+            if has_scenario_cleanup:
                 try:
                     if backdoor_cleanup is not None:
                         backdoor_cleanup()

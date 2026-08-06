@@ -15,9 +15,10 @@ reconstruction system.
 ## Current repository surface
 
 The CLI exposes `init`, `setup`, `run`, and `destroy`. `run` dispatches directly
-to one of three scenario keys:
+to one of four scenario keys:
 
 - `interactive_shell`;
+- `ptrace_fa`;
 - `userland_father_ldpreload`;
 - `userland_father_ldpreload_cleanup`.
 
@@ -64,7 +65,7 @@ infra/                    libvirt/QEMU, Ansible, images, distro definitions
 orchestrator/core/        lifecycle, VM state, configuration, run paths
 orchestrator/forensics/   acquisition and raw TSK/Plaso/Volatility runners
 scenarios/                explicit scenario runners and command logging
-docs/investigations/      analyst reports, worklogs, and comparative material
+docs/investigations/      scenario/run notebooks, accepted reports, comparative material
 shared/                   generated run evidence, exports, and local analysis
 ```
 
