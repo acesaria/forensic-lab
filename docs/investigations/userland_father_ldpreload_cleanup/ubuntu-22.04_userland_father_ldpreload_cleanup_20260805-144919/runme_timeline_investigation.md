@@ -9,6 +9,10 @@ __Run:__ `ubuntu-22.04_userland_father_ldpreload_cleanup_20260805-144919`
 
 **Scope:** a small, source-scoped examination of the accepted Plaso storage.
 
+Case-level per-artifact and aggregate metrics are recorded in
+[runme_case_summary.md](./runme_case_summary.md); this notebook retains the
+timeline observations and limitations that support them.
+
 > [!IMPORTANT]
 > Run cells in order from the repository root and in one Runme terminal. The
 > accepted Plaso storage and its existing JSONL exports are immutable. This

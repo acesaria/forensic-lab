@@ -1,6 +1,11 @@
 # Father calibration — Ubuntu 22.04 vanilla
 
-Status: reviewed — filesystem, memory and timeline sources closed out.
+> **Historical draft:** this older calibration report is not an accepted
+> authoritative investigation under the current `METHODOLOGY.md` reporting
+> contract and is excluded from `COMPARATIVE_RESULTS.md`. Its legacy DR/FP/TTD/
+> QoR table must not be used for thesis comparison.
+
+Status: historical draft — retained for provenance, not current comparison.
 
 | Item | Value |
 |---|---|
