@@ -116,13 +116,112 @@ automatic pass conditions or a general scoring architecture. If a named study
 uses such descriptors, define its inventory and procedure prospectively and
 keep the result bound to that study.
 
+## Fixed result-reporting contract
+
+Each accepted `(scenario, distribution, profile)` case has one
+`runme_case_summary.md` with exactly two summary tables. Source notebooks may
+contain their own examination-output tables, but they do not duplicate the
+case metrics.
+
+The first table is the **artifact evidence matrix**, with one row per atomic
+target fixed before the measured investigation:
+
+```text
+ID | Phase/category | Expected artifact or fact | Filesystem | Timeline |
+Memory | Contribution | Principal method(s) | Accepted locator or limitation
+```
+
+The second table is the **source metric summary**:
+
+```text
+Source | O | P | N | TF | Found / A | Coverage | U / C / S |
+X | Union gain | Rejected candidates | TTF | Principal methods
+```
+
+`COMPARATIVE_RESULTS.md` is the only cross-case metric table. It contains
+exactly one row per accepted authoritative run, not one row per source family:
+
+```text
+Run | Case | Layer/technique | Filesystem | Timeline | Memory | Union |
+Cross-source | Rejected candidates | TTF | Principal methods
+```
+
+Each source cell uses the compact form `O/P/N/TF; Found/A (Coverage)`. The
+cross-source cell reports `U/C/S`, `X`, and union gain; rejected candidates and
+TTF remain source-labelled inside their cells. Draft and superseded runs are
+excluded.
+
+The status and metric rules are fixed as follows:
+
+- `O` is observed, `P` is partially observed, `N` is not observed within the
+  stated source and bounds, `TF` is tool failed, and `--` is not applicable.
+- Applicability is fixed from the declared target and source scope. A tool
+  failure remains applicable and therefore remains in the denominator.
+- `A = O + P + N + TF`, `Found = O + P`, and
+  `Coverage = 100 * Found / A`. `P` remains visible and is not assigned an
+  arbitrary fractional weight. Coverage rows with different applicability
+  sets are descriptive and must not be used to rank the source families.
+- `TF` is the target status when an applicable method produced no valid result
+  because it failed. If another accepted method still supports `O`, `P`, or
+  `N`, retain that target status and disclose the secondary tool failure in the
+  matrix limitation rather than hiding it.
+- A union target is `O` if any applicable source observed it, otherwise `P` if
+  any source partially observed it, otherwise `TF` if an applicable method
+  failed, and otherwise `N`. Each target is counted once in the union.
+- `U` (unique) means a target applicable to at least two source families was
+  found by exactly one; `C` (corroborated) means it was found by at least two
+  independent source families; and `S` (specialized) means it was found by its
+  only applicable source family. These three classes partition the found union
+  targets. `X` separately counts targets with materially contradictory accepted
+  observations and may overlap those classes.
+- `Union gain = union Found - max(single-source Found)`. It is an absolute count
+  of additional targets exposed by combining sources, not a percentage-point
+  comparison between unlike denominators.
+- `Rejected candidates` counts candidates selected as suspicious and then
+  excluded from the case interpretation. It is `0` only when a declared
+  candidate-generating method produced no rejected candidate, and `N/A` when
+  no such method was used. It is not a false-positive count and is not used to
+  calculate precision.
+- `TTF` is the prospective wall-clock time from the recorded start of a
+  source-specific examination to its first accepted forensic locator. It is
+  `not measured` if either timestamp was not recorded prospectively or if the
+  session was interrupted. It is descriptive analyst-workflow context, not
+  evidence that multi-source analysis reduced total investigation time.
+- `Principal methods` names the actual forensic tool and relevant command or
+  plugin. A case matrix also cites a durable evidence locator and an explicit
+  limitation for every partial, negative, or failed result.
+
+No qualitative quality-of-result score is used. The observed/partial
+distinction, source contribution, locator, and limitation carry that
+information without an uncalibrated `High`/`Medium`/`Low` judgement. Precision,
+recall, F1, and claims of reduced investigation time require a separate,
+prospectively controlled evaluation and are outside these descriptive case
+metrics.
+
+This format supports the thesis questions at three different levels: the
+artifact matrix exposes which userland or kernel artifacts each source and
+method recovered; source coverage, tool failures, and named plugins describe
+bounded tool capability; and corroboration, specialization, contradiction, and
+union gain describe the value added by combining sources. It does not evaluate
+a tool that was not run.
+
 ## Standards alignment
 
-The workflow follows the useful separation in NIST SP 800-86: acquisition,
-examination, analysis, and reporting are different activities. Evidence
-immutability, hashes, provenance, and separate derived outputs also support
-ISO/IEC 27037-style handling. These alignments guide the method; they do not
-substitute for documented commands and case-specific evidence.
+The workflow follows the useful separation in
+[NIST SP 800-86](https://doi.org/10.6028/NIST.SP.800-86): acquisition,
+examination, analysis, and reporting are different activities. The
+[SWGDE report-writing requirements](https://www.swgde.org/documents/published-complete-listing/18-q-002-swgde-requirements-for-report-writing-in-digital-and-multimedia-forensics/)
+likewise require clear results, supporting data, methods, and limitations while
+leaving the report format to the examiner. The detailed-matrix plus compact
+summary structure follows the reporting pattern used in recent Linux-rootkit
+evaluations, including the target/technique/plugin matrix in
+[Nagy (2025)](https://doi.org/10.1016/j.fsidi.2025.301928) and the
+tool-to-rootkit capability tables in
+[Stuehn, Hilgert, and Lambertz (2024)](https://doi.org/10.1145/3688808).
+
+Evidence immutability, hashes, provenance, and separate derived outputs also
+support ISO/IEC 27037-style handling. These alignments guide the method; they do
+not substitute for documented commands and case-specific evidence.
 
 ## Historical boundary
 

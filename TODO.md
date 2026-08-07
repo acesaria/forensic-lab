@@ -1,6 +1,6 @@
 # Thesis delivery queue
 
-Updated 2026-08-06. This file contains mutable priorities only.
+Updated 2026-08-07. This file contains mutable priorities only.
 
 ## Immediate sequence
 
@@ -69,6 +69,10 @@ immutable run in every evidence-facing task.
 
 - Integrate accepted Father results into the thesis, figures, limitations, and
   presentation material.
+- Consider one authoritative Father no-cleanup investigation as a paired control
+  for the cleanup case. Use it to measure the effect of cleanup, not to replace
+  or improve the accepted cleanup metrics; do not schedule it before the
+  ptrace/LKM/ftrace minimum is secure.
 - Perform only targeted Ubuntu 24.04 or Debian 13 replication that strengthens a
   specific thesis claim without threatening the milestones.
 - Add another scenario or security-profile comparison only if the minimum

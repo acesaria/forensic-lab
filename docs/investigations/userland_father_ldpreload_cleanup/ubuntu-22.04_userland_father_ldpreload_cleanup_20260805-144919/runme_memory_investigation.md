@@ -9,6 +9,10 @@ __Run:__ `ubuntu-22.04_userland_father_ldpreload_cleanup_20260805-144919`
 
 **Scope:** manual post-mortem examination of the acquired RAM image.
 
+Case-level per-artifact and aggregate metrics are recorded in
+[runme_case_summary.md](./runme_case_summary.md); this notebook retains the RAM
+observations and limitations that support them.
+
 > [!IMPORTANT]
 > Run cells in order from the repository root and in one Runme terminal. The
 > RAM image, ISF, raw `vol3.json`, acquisition record and raw-extraction record

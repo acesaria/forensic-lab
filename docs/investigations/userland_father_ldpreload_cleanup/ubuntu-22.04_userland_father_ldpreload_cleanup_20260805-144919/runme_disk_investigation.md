@@ -10,18 +10,15 @@ __Run:__ `ubuntu-22.04_userland_father_ldpreload_cleanup_20260805-144919`
 **Scope:** post-mortem examination of the acquired disk and its ext4 root
 filesystem.
 
+Case-level per-artifact and aggregate metrics are recorded in
+[runme_case_summary.md](./runme_case_summary.md); this notebook retains the
+filesystem observations and limitations that support them.
+
 > [!IMPORTANT]
 > Run the cells in order from the repository root and in the same Runme terminal
 > session. The acquired EWF image is read-only evidence; notebook output is
 > written beneath the case-specific `shared/investigations/.../derived/`
 > directory.
-
-> [!NOTE]
-> The notebook was executed successfully on 2026-08-05. The Runme-generated
-> execution preview is retained as
-> `runme_disk_investigation-01KZ92P6V3F6K1RVYFWTYE8319.md`; exact locators and
-> conclusions below were reconciled with the new run's metadata and derived
-> records. The preview is an execution record, not the reusable notebook.
 
 ## Method
 
