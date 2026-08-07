@@ -12,11 +12,24 @@ No precision, recall, F1, qualitative quality score, source weighting, or
 average of per-source rates is used. Source cells use
 `O/P/N/TF; Found/A (Coverage)`. `TTF` appears only when measured prospectively.
 
-| Run | Case | Layer / technique | Filesystem | Timeline | Memory | Union | Cross-source | Rejected candidates | TTF | Principal methods |
+Coverage denominators are source-specific and case-specific. Each coverage
+figure is descriptive within its own declared applicability set and must not be
+used to rank the source families, nor to compare cases whose target inventories
+differ. `Union gain` names the contributing target IDs, because a gain drawn
+from targets outside the comparator source's applicability is a weaker claim
+than one drawn from a target an applicable source missed. Where a case derives
+its timeline from the same acquired disk image as its filesystem examination,
+those two families are separate for counting but are not separate acquisitions;
+the case summary states per target whether a corroboration rests on different
+artifact classes or on parser-level replication.
+
+| Run | Case | Layer / technique | Filesystem `O/P/N/TF; Found/A (Cov)` | Timeline `O/P/N/TF; Found/A (Cov)` | Memory `O/P/N/TF; Found/A (Cov)` | Union `O/P/N/TF; Found/A (Cov)` | Cross-source | Rejected candidates | TTF | Principal methods |
 |---|---|---|---|---|---|---|---|---|---|---|
-| ubuntu-22.04_userland_father_ldpreload_cleanup_20260805-144919 | userland_father_ldpreload_cleanup (vanilla) | Userland / system-wide `LD_PRELOAD` | `4/1/6/0`; `5/11` (45.5%) | `5/1/6/0`; `6/12` (50.0%) | `3/0/0/0`; `3/3` (100%) | `8/1/5/0`; `9/14` (64.3%) | `U/C/S: 2/4/3`; `X: 0`; gain `+3` targets | FS `0`; TL `N/A`; Mem `2`; union `2` | Not measured for any source | FS: TSK, ext4magic 0.3.2, PhotoRec; TL: Plaso 20260512 `psort`; Mem: Volatility 3 2.28.0 |
+| ubuntu-22.04_userland_father_ldpreload_cleanup_20260805-144919 | userland_father_ldpreload_cleanup (vanilla) | Userland / system-wide `LD_PRELOAD` | `4/1/6/0`; `5/11` (45.5%) | `5/1/6/0`; `6/12` (50.0%) | `3/0/0/0`; `3/3` (100.0%) | `8/1/5/0`; `9/14` (64.3%) | `U/C/S: 2/4/3`; `X: 0`; gain `+3` (M03, M09, M10) | FS `0`; TL `N/A`; Mem `2`; union `2` | Not measured for any source | FS: TSK, ext4magic 0.3.2, PhotoRec; TL: Plaso 20260512 `psort`; Mem: Volatility 3 2.28.0 |
 
 For this case, persistence/activation and runtime are well exposed while
 staging/build recovery and direct cleanup-event evidence remain incomplete.
 That asymmetry is a result of the cleanup treatment and bounded methods, not an
-acceptance failure.
+acceptance failure. M03 rests on ground-truth-guided recovery; discounting it
+gives filesystem `4/11` (36.4%), union `8/14` (57.1%), and union gain `+2`. The
+case summary carries the full sensitivity and the observed-only lower bound.
