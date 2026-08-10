@@ -67,11 +67,13 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
 
     img_cfg = profile["image"]
     url: str = img_cfg["url"]
-    checksum_url: str = img_cfg["checksum_url"]
     algo: str = img_cfg["checksum_algo"]
     filename: str = img_cfg.get("filename") or _filename_from_url(url)
     dest = images_dir / filename
-    expected = _expected_checksum(checksum_url, filename, algo)
+    expected = str(
+        img_cfg.get("checksum")
+        or _expected_checksum(img_cfg["checksum_url"], _filename_from_url(url), algo)
+    ).lower()
 
     if dest.exists():
         console.info(f"image already present: {dest}")

@@ -3,6 +3,6 @@ os_variant: ubuntu24.04        # noble 24.04 GA
 
 image:
   url: https://cloud-images.ubuntu.com/releases/noble/release-20240523.1/ubuntu-24.04-server-cloudimg-amd64.img
-  filename: ubuntu-24.04-server-cloudimg-amd64.img
-  checksum_url: https://cloud-images.ubuntu.com/releases/noble/release-20240523.1/SHA256SUMS
+  filename: ubuntu-24.04-20240523.1-server-cloudimg-amd64.img
   checksum_algo: sha256
+  checksum: b60205f4cc48a24b999ad0bd61ceb9fe28abfe4ac3701acb7bb5d6b0b5fdc624

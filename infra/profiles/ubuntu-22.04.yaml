@@ -2,6 +2,7 @@
 distro_id: ubuntu-22.04
 os_variant: ubuntu22.04
 image:
-  url: https://cloud-images.ubuntu.com/releases/jammy/release-20260320/ubuntu-22.04-server-cloudimg-amd64-disk-kvm.img
-  checksum_url: https://cloud-images.ubuntu.com/releases/jammy/release-20260320/SHA256SUMS
+  url: https://cloud-images.ubuntu.com/releases/jammy/release-20260515/ubuntu-22.04-server-cloudimg-amd64.img
+  filename: ubuntu-22.04-20260515-server-cloudimg-amd64.img
   checksum_algo: sha256
+  checksum: f6729b53d930d7f0c6691eb553cfa6be7109de9412125bf1bf2dc6747de8a44d
