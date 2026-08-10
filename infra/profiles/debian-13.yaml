@@ -2,6 +2,6 @@
 distro_id: debian-13
 os_variant: debian13
 image:
-  url: https://cloud.debian.org/images/cloud/trixie/20260413-2447/debian-13-genericcloud-amd64-20260413-2447.qcow2
-  checksum_url: https://cloud.debian.org/images/cloud/trixie/20260413-2447/SHA512SUMS
+  url: https://cloud.debian.org/images/cloud/trixie/20260810-2566/debian-13-generic-amd64-20260810-2566.qcow2
   checksum_algo: sha512
+  checksum: f6978100d8031c266d55d7815ceea7fcdeacf28e1e5834fdb9c94ac96880a054a6e6f8681c2d3b0584e0057eaf3ef7353856b85212d04134744faa9b3bb1f24f

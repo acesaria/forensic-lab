@@ -1,19 +1,8 @@
-- name: Add Debian debug repository
-  ansible.builtin.copy:
-    dest: /etc/apt/sources.list.d/debian-debug.list
-    content: |
-      deb http://deb.debian.org/debian-debug/ {{ ansible_distribution_release }}-debug main
-    mode: "0644"
-
-- name: Update APT cache
-  ansible.builtin.apt:
-    update_cache: yes
-
 - name: Install kernel debug symbols
   ansible.builtin.apt:
-    name: "linux-image-{{ ansible_kernel }}-dbg"
+    name: "linux-image-{{ kernel_version }}-dbg"
     state: present
 
 - name: Set vmlinux path
   ansible.builtin.set_fact:
-    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ ansible_kernel }}"
+    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"

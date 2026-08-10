@@ -19,7 +19,7 @@
 # Try the standard signed package first
 - name: Install kernel debug symbols
   ansible.builtin.apt:
-    name: "linux-image-{{ ansible_kernel }}-dbgsym"
+    name: "linux-image-{{ kernel_version }}-dbgsym"
     state: present
   ignore_errors: yes
   register: apt_dbgsym
@@ -27,10 +27,10 @@
 # Fallback to unsigned if the signed one doesn't exist (common on Ubuntu)
 - name: Install unsigned kernel debug symbols (fallback)
   ansible.builtin.apt:
-    name: "linux-image-unsigned-{{ ansible_kernel }}-dbgsym"
+    name: "linux-image-unsigned-{{ kernel_version }}-dbgsym"
     state: present
   when: apt_dbgsym.failed
 
 - name: Set vmlinux path
   ansible.builtin.set_fact:
-    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ ansible_kernel }}"
+    debug_vmlinux_path: "/usr/lib/debug/boot/vmlinux-{{ kernel_version }}"
