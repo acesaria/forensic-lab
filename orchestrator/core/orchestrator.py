@@ -23,7 +23,7 @@ Public methods accept distro_id. Private helpers use vm_name after resolution.
 VM power-state contract
 -----------------------
 prepare_lab        ends OFF (snapshot taken, pipeline probe done)
-build_isf          ends OFF (lab parked, build VM destroyed)
+build_isf          ends OFF (lab parked, build VM retained)
 _reset_lab         ends ON + SSH ready
 _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
 Father and ptrace_fa experiments end OFF, including when acquisition is skipped
@@ -35,6 +35,8 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 from typing import Any
 
 from orchestrator.core.config import (
@@ -128,10 +130,9 @@ class ForensicOrchestrator:
         """
         Ensure a Volatility ISF symbol file exists for the lab VM's kernel.
         Starts the lab VM briefly to detect the kernel, then shuts it down.
-        Creates an ephemeral build VM if the ISF is not cached.
+        Reuses a stopped build VM if the ISF is not cached.
         VM ends OFF. Returns the ISF path.
         """
-        profile = load_profile(self.repo_root, distro_id)
         lab_vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
 
         kernel_release = self._detect_kernel_release(lab_vm_name)
@@ -145,14 +146,8 @@ class ForensicOrchestrator:
             console.info(f"symbol file already present: {display_path}")
             return isf_path
 
-        role_cfg = self._role_defaults.get("build-isf")
-        if not isinstance(role_cfg, dict):
-            raise RuntimeError("Missing 'role_defaults.build-isf' in config")
-
         self._build_isf_with_ephemeral_vm(
             distro_id=distro_id,
-            profile=profile,
-            role_cfg=role_cfg,
             kernel_release=kernel_release,
             isf_name=isf_name,
         )
@@ -163,6 +158,43 @@ class ForensicOrchestrator:
         display_path = os.path.relpath(isf_path, self.repo_root)
         console.ok(f"ISF exported: {display_path}")
         return isf_path
+
+    def install_builder_packages(self, distro_id: str, packages: list[str]) -> None:
+        if not packages:
+            return
+        package_args = " ".join(shlex.quote(package) for package in packages)
+        code, _, stderr = self.run_builder_command(
+            distro_id,
+            f"sudo apt-get update && sudo apt-get install -y -- {package_args}",
+            "/",
+        )
+        if code != 0:
+            raise RuntimeError(f"builder package install failed (exit {code}): {stderr.strip()}")
+
+    def run_builder_command(
+        self, distro_id: str, command: str, working_directory: str
+    ) -> tuple[int, str, str]:
+        vm_name = self._ensure_builder_vm(distro_id)
+        try:
+            with self.vm_manager.open_ssh(vm_name) as ssh:
+                return ssh.run(f"cd {shlex.quote(working_directory)} && {command}")
+        finally:
+            self.vm_manager.shutdown_vm(vm_name)
+
+    def fetch_builder_file(
+        self, distro_id: str, remote_path: str, local_path: Path
+    ) -> None:
+        if local_path.exists():
+            return
+        temporary = local_path.with_name(f".{local_path.name}.tmp")
+        vm_name = self._ensure_builder_vm(distro_id)
+        try:
+            with self.vm_manager.open_ssh(vm_name) as ssh:
+                ssh.get(remote_path, temporary)
+            temporary.replace(local_path)
+        finally:
+            temporary.unlink(missing_ok=True)
+            self.vm_manager.shutdown_vm(vm_name)
 
     def lab_exists(self, distro_id: str) -> bool:
         return self.vm_manager.vm_exists(f"{LAB_VM_PREFIX}-{distro_id}")
@@ -605,6 +637,38 @@ class ForensicOrchestrator:
 
     # --- private: setup helpers ------------------------------------------
 
+    def _ensure_builder_vm(self, distro_id: str) -> str:
+        profile = load_profile(self.repo_root, distro_id)
+        role_cfg = self._role_defaults.get("build-isf")
+        if not isinstance(role_cfg, dict):
+            raise RuntimeError("Missing 'role_defaults.build-isf' in config")
+        vm_name = f"{BUILD_VM_PREFIX}-{distro_id}"
+        exists = self.vm_manager.vm_exists(vm_name)
+        required = 8 * 1024**3 + (0 if exists else int(str(role_cfg["disk_size"]).upper().removesuffix("G")) * 1024**3)
+        available = shutil.disk_usage(self._paths.pool_dir).free
+        if available < required:
+            raise RuntimeError(f"builder host free: {available // 1024**3} GiB; required: {required // 1024**3} GiB")
+        if not exists:
+            base_image = self.vm_manager.ensure_base_image(profile)
+            self.vm_manager.create_vm(
+                role="build-isf",
+                distro_id=distro_id,
+                profile=profile,
+                role_cfg=role_cfg,
+                base_image=base_image,
+            )
+        self.vm_manager.start_vm(vm_name)
+        try:
+            self.vm_manager.wait_ssh_ready(vm_name, reason="builder access")
+            with self.vm_manager.open_ssh(vm_name) as ssh:
+                available = int(ssh.run_checked("df --output=avail -B1 / | tail -n 1"))
+            if available < 8 * 1024**3:
+                raise RuntimeError(f"builder guest storage is low: {available // 1024**3} GiB free, 8 GiB required")
+        except BaseException:
+            self.vm_manager.shutdown_vm(vm_name)
+            raise
+        return vm_name
+
     def _detect_kernel_release(self, lab_vm_name: str) -> str:
         console.step(f"detecting kernel on {lab_vm_name}...")
         self.vm_manager.start_vm(lab_vm_name)
@@ -618,26 +682,15 @@ class ForensicOrchestrator:
     def _build_isf_with_ephemeral_vm(
         self,
         distro_id: str,
-        profile: dict[str, Any],
-        role_cfg: dict[str, Any],
         kernel_release: str,
         isf_name: str,
     ) -> None:
         """
-        Create a temporary build VM, run the ISF build playbook, destroy it.
+        Create or reuse the build VM, run the ISF build playbook, then stop it.
         Lab VM is not touched here.
         """
-        build_vm_name = f"{BUILD_VM_PREFIX}-{distro_id}"
-        base_image = self.vm_manager.ensure_base_image(profile)
-        self.vm_manager.create_vm(
-            role="build-isf",
-            distro_id=distro_id,
-            profile=profile,
-            role_cfg=role_cfg,
-            base_image=base_image,
-        )
+        build_vm_name = self._ensure_builder_vm(distro_id)
         try:
-            self.vm_manager.start_vm(build_vm_name)
             console.step(
                 f"provisioning {distro_id} (kernel {kernel_release}) "
                 "(may take up to 20 minutes)..."
@@ -662,7 +715,7 @@ class ForensicOrchestrator:
                     f"Original error: {exc}"
                 ) from exc
         finally:
-            self.vm_manager.destroy_vm(build_vm_name)
+            self.vm_manager.shutdown_vm(build_vm_name)
 
     def verify_pipeline(self, distro_id: str) -> None:
         """
