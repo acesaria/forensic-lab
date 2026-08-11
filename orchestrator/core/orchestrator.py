@@ -10,6 +10,7 @@ setup_infra()              one-time: libvirt network + pool
 prepare_lab(distro_id)     one-time: image + VM + baseline snapshot + pipeline verify
 build_isf(distro_id)       one-time: Volatility symbol file
 build_father(distro_id)    build + publish Father's rk.so to the host cache
+build_ptrace_fa(distro_id) build + publish ptrace_fa binaries to the host cache
 run_experiment(...)        explicit scenario dispatch + experiment loop
 destroy_lab(distro_id)     teardown
 lab_exists(distro_id)      predicate
@@ -68,10 +69,8 @@ from scenarios.interactive_shell.runner import (
     SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO,
     run_interactive_shell,
 )
-from scenarios.ptrace_fa.runner import (
-    SCENARIO_ID as PTRACE_FA_SCENARIO,
-    run_ptrace_fa,
-)
+from scenarios.ptrace_fa import runner as ptrace
+from scenarios.ptrace_fa import shellcode as ptrace_shellcode
 from scenarios.userland_father_ldpreload import runner as father
 
 
@@ -163,12 +162,14 @@ class ForensicOrchestrator:
         record under shared/prebuilt/. Never overwrites. Builder ends OFF.
         """
         source = father.verify_source()
-        published = self._resolve_father_input(distro_id)
+        published = self._resolve_prebuilt_input(
+            distro_id, father.SCENARIO_ID, (father.ARTIFACT_NAME,)
+        )
         if published is not None:
-            console.info(f"already published: {self._display(published[0])}")
-            return published[0]
+            artifacts, _record = published
+            console.info(f"already published: {self._display(artifacts[0])}")
+            return artifacts[0]
 
-        profile = load_profile(self.repo_root, distro_id)
         vm_name = self._ensure_builder_vm(distro_id)
         with tempfile.TemporaryDirectory() as staging:
             artifact = Path(staging) / father.ARTIFACT_NAME
@@ -200,34 +201,23 @@ class ForensicOrchestrator:
                 raise RuntimeError(
                     f"builder reported no {', '.join(missing)}; build not published"
                 )
-            record = {
-                "schema": "forensic-lab.build_manifest.v1",
-                "scenario": father.SCENARIO_ID,
-                "built_at": _utc_now(),
-                "artifact": {
-                    "filename": father.ARTIFACT_NAME,
-                    "sha256": file_sha256(artifact),
-                },
-                "target": {
-                    "distro_id": distro_id,
-                    "image_checksum": profile["image"]["checksum"],
-                    "arch": facts["arch"].strip(),
-                },
-                "source": {
+            record = self._build_record(
+                distro_id,
+                father.SCENARIO_ID,
+                (artifact,),
+                {
                     "repository": source["repository"],
                     "commit": source["commit"],
                     "archive_sha256": source["archive_sha256"],
                 },
-                "recipe": {
+                {
                     "sha256": file_sha256(father.BUILD_SCRIPT),
                     "hidden_prefix": father.HIDDEN_PREFIX,
                 },
-                "packages": dict(
-                    entry.split("=", 1) for entry in facts["packages"].split()
-                ),
-            }
+                facts,
+            )
 
-            cache_dir = self._father_cache_dir(distro_id)
+            cache_dir = self._prebuilt_cache_dir(distro_id, father.SCENARIO_ID)
             new_dir = cache_dir.with_name(f".{cache_dir.name}.new")
             shutil.rmtree(new_dir, ignore_errors=True)
             new_dir.mkdir(parents=True)
@@ -240,32 +230,154 @@ class ForensicOrchestrator:
         console.ok(f"published: {self._display(cache_dir)}")
         return cache_dir / father.ARTIFACT_NAME
 
-    def _father_cache_dir(self, distro_id: str) -> Path:
-        return self._paths.shared_dir / "prebuilt" / distro_id / father.SCENARIO_ID
+    def build_ptrace_fa(self, distro_id: str) -> Path:
+        """Build and publish the two ptrace_fa binaries. Builder ends OFF."""
+        published = self._resolve_prebuilt_input(
+            distro_id, ptrace.SCENARIO_ID, ptrace.ARTIFACT_NAMES
+        )
+        if published is not None:
+            artifacts, _record = published
+            console.info(f"already published: {self._display(artifacts[0])}")
+            return artifacts[0]
 
-    def _resolve_father_input(self, distro_id: str) -> tuple[Path, dict] | None:
+        target_hex = ptrace_shellcode.target_hex(
+            ptrace.LISTENER_HOST, ptrace.LISTENER_PORT
+        )
+        vm_name = self._ensure_builder_vm(distro_id)
+        with tempfile.TemporaryDirectory() as staging:
+            artifacts = tuple(Path(staging) / name for name in ptrace.ARTIFACT_NAMES)
+            try:
+                with self.vm_manager.open_ssh(vm_name) as ssh:
+                    ssh.run_checked(
+                        f"rm -rf {ptrace.REMOTE_SOURCE_ROOT} && "
+                        f"mkdir -p {ptrace.REMOTE_SOURCE_ROOT}/src "
+                        f"{ptrace.REMOTE_SOURCE_ROOT}/common"
+                    )
+                    for name in ptrace.SOURCE_FILES:
+                        ssh.put(
+                            ptrace.FILES_DIR / name,
+                            f"{ptrace.REMOTE_SOURCE_ROOT}/{name}",
+                        )
+                    ssh.put(ptrace.BUILD_SCRIPT, ptrace.REMOTE_BUILD_SCRIPT)
+                    console.step(f"building ptrace_fa on {vm_name}...")
+                    stdout = ssh.run_checked(
+                        f"bash {ptrace.REMOTE_BUILD_SCRIPT} "
+                        f"{ptrace.REMOTE_SOURCE_ROOT} {ptrace.REMOTE_BUILD_ROOT} "
+                        f"{target_hex}",
+                        timeout=1800,
+                    )
+                    for name, artifact in zip(
+                        ptrace.ARTIFACT_NAMES, artifacts, strict=True
+                    ):
+                        ssh.get(f"{ptrace.REMOTE_BUILD_ROOT}/{name}", artifact)
+            finally:
+                self.vm_manager.shutdown_vm(vm_name)
+
+            facts = dict(
+                line.removeprefix("FACT ").split("=", 1)
+                for line in stdout.splitlines()
+                if line.startswith("FACT ") and "=" in line
+            )
+            missing = [k for k in ("arch", "packages") if not facts.get(k, "").strip()]
+            if missing:
+                raise RuntimeError(
+                    f"builder reported no {', '.join(missing)}; build not published"
+                )
+            record = self._build_record(
+                distro_id,
+                ptrace.SCENARIO_ID,
+                artifacts,
+                {
+                    "files": {
+                        name: file_sha256(ptrace.FILES_DIR / name)
+                        for name in ptrace.SOURCE_FILES
+                    }
+                },
+                {
+                    "sha256": file_sha256(ptrace.BUILD_SCRIPT),
+                    "target_hex": target_hex,
+                },
+                facts,
+            )
+
+            cache_dir = self._prebuilt_cache_dir(distro_id, ptrace.SCENARIO_ID)
+            new_dir = cache_dir.with_name(f".{cache_dir.name}.new")
+            shutil.rmtree(new_dir, ignore_errors=True)
+            new_dir.mkdir(parents=True)
+            for artifact in artifacts:
+                shutil.copy2(artifact, new_dir / artifact.name)
+            (new_dir / "build.json").write_text(
+                json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            os.rename(new_dir, cache_dir)
+
+        console.ok(f"published: {self._display(cache_dir)}")
+        return cache_dir / ptrace.ARTIFACT_NAMES[0]
+
+    def _build_record(
+        self,
+        distro_id: str,
+        scenario_id: str,
+        artifacts: tuple[Path, ...],
+        source: dict,
+        recipe: dict,
+        facts: dict[str, str],
+    ) -> dict:
+        profile = load_profile(self.repo_root, distro_id)
+        return {
+            "schema": "forensic-lab.build_manifest.v1",
+            "scenario": scenario_id,
+            "built_at": _utc_now(),
+            "artifacts": [
+                {"filename": path.name, "sha256": file_sha256(path)}
+                for path in artifacts
+            ],
+            "target": {
+                "distro_id": distro_id,
+                "image_checksum": profile["image"]["checksum"],
+                "arch": facts["arch"].strip(),
+            },
+            "source": source,
+            "recipe": recipe,
+            "packages": dict(
+                entry.split("=", 1) for entry in facts["packages"].split()
+            ),
+        }
+
+    def _prebuilt_cache_dir(self, distro_id: str, scenario_id: str) -> Path:
+        return self._paths.shared_dir / "prebuilt" / distro_id / scenario_id
+
+    def _resolve_prebuilt_input(
+        self, distro_id: str, scenario_id: str, filenames: tuple[str, ...]
+    ) -> tuple[tuple[Path, ...], dict] | None:
         """
-        Return (artifact, record) when a published build matches this distro's
+        Return (artifacts, record) when a published build matches this distro's
         pinned image, None when nothing is published, raise when it exists but
         cannot be trusted.
         """
-        cache_dir = self._father_cache_dir(distro_id)
+        cache_dir = self._prebuilt_cache_dir(distro_id, scenario_id)
         if not cache_dir.exists():
             return None
-        artifact = cache_dir / father.ARTIFACT_NAME
+        artifacts = tuple(cache_dir / filename for filename in filenames)
         fix = (
             f"remove {self._display(cache_dir)} and rerun: .venv/bin/python "
-            f"cli.py build --distro {distro_id} --scenario {father.SCENARIO_ID}"
+            f"cli.py build --distro {distro_id} --scenario {scenario_id}"
         )
         try:
             record = json.loads((cache_dir / "build.json").read_text(encoding="utf-8"))
             target = record["target"]
-            expected_sha = record["artifact"]["sha256"]
+            expected = tuple(
+                (item["filename"], item["sha256"])
+                for item in record["artifacts"]
+            )
         except (OSError, ValueError, LookupError, TypeError) as exc:
             raise RuntimeError(f"unreadable build record ({exc}); {fix}") from exc
 
-        if not artifact.is_file() or file_sha256(artifact) != expected_sha:
-            raise RuntimeError(f"published artifact missing or altered; {fix}")
+        if tuple(name for name, _sha in expected) != filenames or any(
+            not artifact.is_file() or file_sha256(artifact) != expected_sha
+            for artifact, (_name, expected_sha) in zip(artifacts, expected, strict=True)
+        ):
+            raise RuntimeError(f"published artifacts missing or altered; {fix}")
         # A missing checksum on either side is a mismatch, never a pass.
         image = load_profile(self.repo_root, distro_id)["image"]
         wanted = (distro_id, image.get("checksum"))
@@ -274,7 +386,7 @@ class ForensicOrchestrator:
             target.get("image_checksum"),
         ):
             raise RuntimeError(f"published build targets another image; {fix}")
-        return artifact, record
+        return artifacts, record
 
     def _display(self, path: Path) -> str:
         return os.path.relpath(path, self.repo_root)
@@ -290,7 +402,7 @@ class ForensicOrchestrator:
     ) -> str | None:
         """Run one explicit scenario through the full experiment lifecycle."""
         is_father = scenario_id in (father.SCENARIO_ID, father.CLEANUP_SCENARIO_ID)
-        is_ptrace_fa = scenario_id == PTRACE_FA_SCENARIO
+        is_ptrace_fa = scenario_id == ptrace.SCENARIO_ID
         # Both scenarios return live facts plus a cleanup callback that keeps
         # their backdoor/reverse-shell connection open until just before the
         # guest shuts down for disk acquisition.
@@ -298,11 +410,24 @@ class ForensicOrchestrator:
         if scenario_id != INTERACTIVE_SHELL_SCENARIO and not has_scenario_cleanup:
             raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
-        father_input = self._resolve_father_input(distro_id) if is_father else None
-        if is_father and father_input is None:
+        if is_father:
+            build_scenario = father.SCENARIO_ID
+            artifact_names = (father.ARTIFACT_NAME,)
+        elif is_ptrace_fa:
+            build_scenario = ptrace.SCENARIO_ID
+            artifact_names = ptrace.ARTIFACT_NAMES
+        else:
+            build_scenario = None
+            artifact_names = ()
+        prepared_input = (
+            self._resolve_prebuilt_input(distro_id, build_scenario, artifact_names)
+            if build_scenario
+            else None
+        )
+        if build_scenario and prepared_input is None:
             raise RuntimeError(
-                "Father build missing; run: .venv/bin/python cli.py build "
-                f"--distro {distro_id} --scenario {father.SCENARIO_ID}"
+                f"{build_scenario} build missing; run: .venv/bin/python cli.py build "
+                f"--distro {distro_id} --scenario {build_scenario}"
             )
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
@@ -331,12 +456,14 @@ class ForensicOrchestrator:
             command_log_path.touch()
 
             input_record = None
-            if father_input is not None:
+            if prepared_input is not None:
                 input_record = self._stage_run_inputs(
-                    run_root, scenario_id, father_input[0]
+                    run_root, scenario_id, prepared_input[0]
                 )
-                if input_record["artifact"]["sha256"] != father_input[1]["artifact"]["sha256"]:
-                    raise RuntimeError("staged Father artifact differs from verified build")
+                if [item["sha256"] for item in input_record["artifacts"]] != [
+                    item["sha256"] for item in prepared_input[1]["artifacts"]
+                ]:
+                    raise RuntimeError("staged artifacts differ from verified build")
 
             revision = command_output(
                 ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
@@ -381,20 +508,28 @@ class ForensicOrchestrator:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
                     if is_father:
-                        assert father_input is not None and input_record is not None
+                        assert prepared_input is not None and input_record is not None
                         facts, backdoor_cleanup = father.run_father(
                             ssh,
                             transcript_path,
                             command_log_path=command_log_path,
                             scenario_id=scenario_id,
-                            artifact_path=run_root / input_record["artifact"]["path"],
-                            build_meta=father_input[1],
+                            artifact_path=(
+                                run_root / input_record["artifacts"][0]["path"]
+                            ),
+                            build_meta=prepared_input[1],
                         )
                     elif is_ptrace_fa:
-                        facts, backdoor_cleanup = run_ptrace_fa(
+                        assert prepared_input is not None and input_record is not None
+                        facts, backdoor_cleanup = ptrace.run_ptrace_fa(
                             ssh,
                             transcript_path,
                             command_log_path=command_log_path,
+                            artifact_paths=tuple(
+                                run_root / item["path"]
+                                for item in input_record["artifacts"]
+                            ),
+                            build_meta=prepared_input[1],
                         )
                     else:
                         run_interactive_shell(
@@ -484,20 +619,26 @@ class ForensicOrchestrator:
                         self.vm_manager.shutdown_vm(vm_name)
 
     def _stage_run_inputs(
-        self, run_root: Path, scenario_id: str, artifact: Path
+        self, run_root: Path, scenario_id: str, artifacts: tuple[Path, ...]
     ) -> dict[str, Any]:
         inputs_dir = run_root / "inputs" / scenario_id
         inputs_dir.mkdir(parents=True)
-        staged_artifact = inputs_dir / artifact.name
         staged_build = inputs_dir / "build.json"
-        shutil.copy2(artifact, staged_artifact)
-        shutil.copy2(artifact.parent / "build.json", staged_build)
+        staged_artifacts = []
+        for artifact in artifacts:
+            staged_artifact = inputs_dir / artifact.name
+            shutil.copy2(artifact, staged_artifact)
+            staged_artifacts.append(staged_artifact)
+        shutil.copy2(artifacts[0].parent / "build.json", staged_build)
         return {
             "scenario": scenario_id,
-            "artifact": {
-                "path": str(staged_artifact.relative_to(run_root)),
-                "sha256": file_sha256(staged_artifact),
-            },
+            "artifacts": [
+                {
+                    "path": str(artifact.relative_to(run_root)),
+                    "sha256": file_sha256(artifact),
+                }
+                for artifact in staged_artifacts
+            ],
             "build_json": {
                 "path": str(staged_build.relative_to(run_root)),
                 "sha256": file_sha256(staged_build),

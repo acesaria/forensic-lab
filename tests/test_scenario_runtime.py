@@ -9,23 +9,36 @@ from orchestrator.core.orchestrator import ForensicOrchestrator
 
 
 @pytest.fixture
-def father_cache(tmp_path: Path) -> tuple[Path, Path]:
-    cache = tmp_path / "prebuilt/ubuntu-22.04/userland_father_ldpreload"
-    cache.mkdir(parents=True)
-    artifact = cache / "rk.so"
-    artifact.write_bytes(b"test artifact")
-    build_meta = {
-        "artifact": {
-            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()
-        },
-        "target": {
-            "distro_id": "ubuntu-22.04",
-            "image_checksum": "test-image",
-        },
-        "source": {},
-    }
-    (cache / "build.json").write_text(json.dumps(build_meta), encoding="utf-8")
-    return cache, artifact
+def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
+    caches = {}
+    for scenario_id, filenames in (
+        ("userland_father_ldpreload", ("rk.so",)),
+        ("ptrace_fa", ("shellcode_inject_fa", "victim")),
+    ):
+        cache = tmp_path / "prebuilt/ubuntu-22.04" / scenario_id
+        cache.mkdir(parents=True)
+        artifacts = []
+        for filename in filenames:
+            artifact = cache / filename
+            artifact.write_bytes(f"test {filename}".encode())
+            artifacts.append(artifact)
+        build_meta = {
+            "artifacts": [
+                {
+                    "filename": artifact.name,
+                    "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),
+                }
+                for artifact in artifacts
+            ],
+            "target": {
+                "distro_id": "ubuntu-22.04",
+                "image_checksum": "test-image",
+            },
+            "source": {},
+        }
+        (cache / "build.json").write_text(json.dumps(build_meta), encoding="utf-8")
+        caches[scenario_id] = cache, artifacts
+    return caches
 
 
 @pytest.mark.parametrize(
@@ -56,7 +69,7 @@ def father_cache(tmp_path: Path) -> tuple[Path, Path]:
 )
 def test_explicit_scenarios_preserve_lifecycle_differences(
     tmp_path: Path,
-    father_cache: tuple[Path, Path],
+    prebuilt_caches: dict[str, tuple[Path, list[Path]]],
     monkeypatch: pytest.MonkeyPatch,
     scenario_id: str,
     acquire: bool,
@@ -69,7 +82,12 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     facts = {"validated": True}
     events = []
     cleanup_socket = None
-    cache, artifact = father_cache
+    build_scenario = (
+        "userland_father_ldpreload"
+        if scenario_id.startswith("userland_father")
+        else scenario_id
+    )
+    cache, artifacts = prebuilt_caches.get(build_scenario, (None, []))
 
     class FakeSocket:
         closed = False
@@ -113,9 +131,9 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         vm_manager = fake_vm
         acquisition_path = None
 
-        _father_cache_dir = ForensicOrchestrator._father_cache_dir
+        _prebuilt_cache_dir = ForensicOrchestrator._prebuilt_cache_dir
         _display = ForensicOrchestrator._display
-        _resolve_father_input = ForensicOrchestrator._resolve_father_input
+        _resolve_prebuilt_input = ForensicOrchestrator._resolve_prebuilt_input
         _stage_run_inputs = ForensicOrchestrator._stage_run_inputs
 
         def _reset_lab(self, _distro_id):
@@ -190,7 +208,9 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         "orchestrator.core.orchestrator.run_interactive_shell", fake_interactive
     )
     monkeypatch.setattr("orchestrator.core.orchestrator.father.run_father", fake_father)
-    monkeypatch.setattr("orchestrator.core.orchestrator.run_ptrace_fa", fake_ptrace_fa)
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.ptrace.run_ptrace_fa", fake_ptrace_fa
+    )
 
     orchestrator = FakeOrchestrator()
     if failure_phase:
@@ -213,14 +233,16 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
 
     manifest_path = next(tmp_path.glob("*/manifest.json"))
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if scenario_id.startswith("userland_father") and not failure_phase:
+    if build_scenario in prebuilt_caches and not failure_phase:
+        assert cache is not None
         staged = manifest["inputs"][0]
         assert (
             manifest_path.parent / staged["build_json"]["path"]
         ).read_bytes() == (cache / "build.json").read_bytes()
-        assert staged["artifact"]["sha256"] == hashlib.sha256(
-            artifact.read_bytes()
-        ).hexdigest()
+        assert [item["sha256"] for item in staged["artifacts"]] == [
+            hashlib.sha256(artifact.read_bytes()).hexdigest()
+            for artifact in artifacts
+        ]
         assert staged["build_json"]["sha256"] == hashlib.sha256(
             (cache / "build.json").read_bytes()
         ).hexdigest()
@@ -271,14 +293,17 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     assert fake_vm.state == expected_vm_state
 
 
-def test_father_missing_prebuilt_does_not_reset_victim(tmp_path: Path):
+@pytest.mark.parametrize(
+    "scenario_id", ("userland_father_ldpreload", "ptrace_fa")
+)
+def test_prebuilt_missing_does_not_reset_victim(tmp_path: Path, scenario_id: str):
     resets = []
 
     class FakeOrchestrator:
         vm_manager = object()
         _paths = type("Paths", (), {"experiments_dir": tmp_path})()
 
-        def _resolve_father_input(self, _distro_id):
+        def _resolve_prebuilt_input(self, _distro_id, _scenario_id, _filenames):
             return None
 
         def _reset_lab(self, _distro_id):
@@ -288,14 +313,14 @@ def test_father_missing_prebuilt_does_not_reset_victim(tmp_path: Path):
         ForensicOrchestrator.run_experiment(
             FakeOrchestrator(),
             "ubuntu-22.04",
-            "userland_father_ldpreload",
+            scenario_id,
         )
     assert not resets and not any(tmp_path.iterdir())
 
 
 def test_father_wrong_image_does_not_reset_victim(
     tmp_path: Path,
-    father_cache: tuple[Path, Path],
+    prebuilt_caches: dict[str, tuple[Path, list[Path]]],
     monkeypatch: pytest.MonkeyPatch,
 ):
     resets = []
@@ -309,9 +334,9 @@ def test_father_wrong_image_does_not_reset_victim(
         vm_manager = object()
         _paths = FakePaths()
 
-        _father_cache_dir = ForensicOrchestrator._father_cache_dir
+        _prebuilt_cache_dir = ForensicOrchestrator._prebuilt_cache_dir
         _display = ForensicOrchestrator._display
-        _resolve_father_input = ForensicOrchestrator._resolve_father_input
+        _resolve_prebuilt_input = ForensicOrchestrator._resolve_prebuilt_input
 
         def _reset_lab(self, _distro_id):
             resets.append(True)

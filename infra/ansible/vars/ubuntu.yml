@@ -5,7 +5,5 @@ isf_base_packages:
   - golang-go
 
 
-# Packages baked into the lab baseline for offline scenario compilation.
-baseline_present_pkgs:
-  - gcc
-  - make
+# Scenario binaries are prepared on the builder VM.
+baseline_present_pkgs: []

@@ -84,7 +84,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--scenario",
         required=True,
-        choices=(FATHER_SCENARIO,),
+        choices=(FATHER_SCENARIO, PTRACE_FA_SCENARIO),
         help="Scenario whose artifact to build",
     )
 
@@ -240,7 +240,12 @@ def main() -> None:
                 console.ok(f"setup complete for '{distro_id}'")
 
             elif args.command == "build":
-                orchestrator.build_father(distro_id)
+                if args.scenario == FATHER_SCENARIO:
+                    orchestrator.build_father(distro_id)
+                elif args.scenario == PTRACE_FA_SCENARIO:
+                    orchestrator.build_ptrace_fa(distro_id)
+                else:
+                    raise RuntimeError(f"Unknown build scenario: {args.scenario}")
 
             elif args.command == "run":
                 if not orchestrator.lab_exists(distro_id):

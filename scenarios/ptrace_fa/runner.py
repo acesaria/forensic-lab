@@ -9,13 +9,16 @@ from pathlib import Path
 from orchestrator.core import console
 from orchestrator.core.ssh_client import SSHClient
 from scenarios.command_log import record_operation, run_logged_command
-from scenarios.ptrace_fa import shellcode
 
 SCENARIO_ID = "ptrace_fa"
 ROOT = Path(__file__).resolve().parent
 FILES_DIR = ROOT / "files"
+BUILD_SCRIPT = FILES_DIR / "build.sh"
 
 REMOTE_ROOT = "/tmp/forensic-lab/ptrace_fa"
+REMOTE_SOURCE_ROOT = "/tmp/forensic-lab/ptrace_fa_source"
+REMOTE_BUILD_ROOT = "/tmp/forensic-lab/ptrace_fa_build"
+REMOTE_BUILD_SCRIPT = "/tmp/ptrace-fa-build.sh"
 
 # Where the host listens for the reverse shell; it is the isolated lab
 # network's host-side gateway (see infra/provider.py). The shellcode is
@@ -25,19 +28,15 @@ LISTENER_PORT = 4444
 SHELL_TIMEOUT = 15
 
 SOURCE_FILES = (
-    ("src/shellcode_inject_fa.c", f"{REMOTE_ROOT}/src/shellcode_inject_fa.c"),
-    ("src/victim.c", f"{REMOTE_ROOT}/src/victim.c"),
-    ("common/ptrace_utils.c", f"{REMOTE_ROOT}/common/ptrace_utils.c"),
-    ("common/ptrace_utils.h", f"{REMOTE_ROOT}/common/ptrace_utils.h"),
-    ("common/utils.c", f"{REMOTE_ROOT}/common/utils.c"),
-    ("common/utils.h", f"{REMOTE_ROOT}/common/utils.h"),
+    "src/shellcode_inject_fa.c",
+    "src/victim.c",
+    "common/ptrace_utils.c",
+    "common/ptrace_utils.h",
+    "common/utils.c",
+    "common/utils.h",
 )
-
-BUILD_COMMANDS = (
-    "gcc -Wall -Wextra -o shellcode_inject_fa "
-    "src/shellcode_inject_fa.c common/ptrace_utils.c common/utils.c",
-    "gcc -o victim src/victim.c",
-)
+ARTIFACT_NAMES = ("shellcode_inject_fa", "victim")
+REMOTE_ARTIFACTS = tuple(f"/tmp/ptrace_fa-{name}" for name in ARTIFACT_NAMES)
 
 # Backgrounded, nohup'd, and disowned so the victim (and the shell it later
 # forks) survive the terminal closing while the run continues toward
@@ -50,10 +49,14 @@ def run_ptrace_fa(
     transcript_path: Path,
     *,
     command_log_path: Path,
+    artifact_paths: tuple[Path, Path],
+    build_meta: dict,
 ) -> tuple[dict, Callable[[], None]]:
-    """Build the PoC, inject shellcode into a live victim, validate the shell."""
+    """Execute the prepared PoC, inject shellcode, and validate the shell."""
     transcript_path.touch()
     listener = _open_listener()
+    console.scope("HOST", "stage ptrace_fa artifacts")
+    _upload_artifacts(ssh, command_log_path, artifact_paths)
     terminal = ssh.open_terminal()
     reverse_shell = None
 
@@ -66,21 +69,39 @@ def run_ptrace_fa(
 
     try:
         with terminal:
-            console.scope("GUEST", "stage and build")
-            run_logged_command(
-                terminal, command_log_path, f"mkdir -p {REMOTE_ROOT}/src {REMOTE_ROOT}/common"
-            )
-            _upload_sources(ssh, command_log_path)
-            run_logged_command(terminal, command_log_path, f"cd {REMOTE_ROOT}")
-            run_logged_command(
+            console.scope("GUEST", "verify prepared artifacts")
+            guest_identity = run_logged_command(
                 terminal,
                 command_log_path,
-                shellcode.retarget_command(
-                    "src/shellcode_inject_fa.c", LISTENER_HOST, LISTENER_PORT
-                ),
-            )
-            for command in BUILD_COMMANDS:
-                run_logged_command(terminal, command_log_path, command, timeout=60)
+                ". /etc/os-release; "
+                "printf '%s-%s %s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"",
+                timeout=180,
+            ).combined_output
+            try:
+                expected = (
+                    f"{build_meta['target']['distro_id']} "
+                    f"{build_meta['target']['arch']}"
+                )
+                if guest_identity != expected:
+                    raise RuntimeError(
+                        f"ptrace_fa artifacts target {expected}, guest is {guest_identity}"
+                    )
+            except Exception as exc:
+                record_operation(
+                    command_log_path, "verify_guest_identity", error=str(exc)
+                )
+                raise
+            record_operation(command_log_path, "verify_guest_identity")
+
+            console.scope("GUEST", "prepare binaries")
+            run_logged_command(terminal, command_log_path, f"mkdir -p {REMOTE_ROOT}")
+            for source, name in zip(REMOTE_ARTIFACTS, ARTIFACT_NAMES, strict=True):
+                run_logged_command(
+                    terminal,
+                    command_log_path,
+                    f"install -m 0755 {source} {REMOTE_ROOT}/{name}",
+                )
+            run_logged_command(terminal, command_log_path, f"cd {REMOTE_ROOT}")
 
             console.scope("GUEST", "start victim")
             identity = run_logged_command(
@@ -144,15 +165,21 @@ def run_ptrace_fa(
         raise
 
 
-def _upload_sources(ssh: SSHClient, command_log_path: Path) -> None:
-    console.step(f"uploading ptrace_fa sources to {REMOTE_ROOT}...")
+def _upload_artifacts(
+    ssh: SSHClient,
+    command_log_path: Path,
+    artifact_paths: tuple[Path, Path],
+) -> None:
+    console.step("uploading ptrace_fa artifacts...")
     try:
-        for local_name, remote_path in SOURCE_FILES:
-            ssh.put(FILES_DIR / local_name, remote_path)
+        for artifact, remote_path in zip(
+            artifact_paths, REMOTE_ARTIFACTS, strict=True
+        ):
+            ssh.put(artifact, remote_path)
     except Exception as exc:
-        record_operation(command_log_path, "upload_source", error=str(exc))
+        record_operation(command_log_path, "upload_artifact", error=str(exc))
         raise
-    record_operation(command_log_path, "upload_source")
+    record_operation(command_log_path, "upload_artifact")
 
 
 def _open_listener() -> socket.socket:
