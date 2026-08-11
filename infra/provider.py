@@ -386,12 +386,14 @@ class Provider:
 
     def get_vm_ip(self, vm_name: str, timeout: int = 180) -> str:
         """
-        Poll DHCP leases until an IPv4 address appears on the isolated NIC.
-        Lab VMs always SSH over the isolated network; the NAT NIC (when up)
-        also gets a lease but must never be used as the SSH target.
+        Poll DHCP leases until an IPv4 address appears. Lab VMs prefer their
+        isolated NIC; single-NIC builder VMs use their NAT lease.
         """
         conn = self._connect()
-        isolated_mac = self._isolated_nic_mac(vm_name).lower()
+        try:
+            isolated_mac = self._isolated_nic_mac(vm_name).lower()
+        except RuntimeError:
+            isolated_mac = None
         deadline = time.time() + timeout
         while time.time() < deadline:
             try:
@@ -403,7 +405,10 @@ class Provider:
                     cast(dict[str, dict[str, Any]], raw) or {}
                 )
                 for iface in ifaces.values():
-                    if (iface.get("hwaddr") or "").lower() != isolated_mac:
+                    if (
+                        isolated_mac
+                        and (iface.get("hwaddr") or "").lower() != isolated_mac
+                    ):
                         continue
                     for addr in iface.get("addrs", []):
                         if addr.get("type") == libvirt.VIR_IP_ADDR_TYPE_IPV4:
@@ -413,7 +418,7 @@ class Provider:
             time.sleep(5)
         raise RuntimeError(
             f"Timed out waiting for IP on '{vm_name}' "
-            f"(isolated NIC mac={isolated_mac}) after {timeout}s"
+            f"(preferred NIC mac={isolated_mac}) after {timeout}s"
         )
 
     def _isolated_nic_mac(self, vm_name: str) -> str:
