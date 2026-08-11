@@ -8,6 +8,26 @@ import pytest
 from orchestrator.core.orchestrator import ForensicOrchestrator
 
 
+@pytest.fixture
+def father_cache(tmp_path: Path) -> tuple[Path, Path]:
+    cache = tmp_path / "prebuilt/ubuntu-22.04/userland_father_ldpreload"
+    cache.mkdir(parents=True)
+    artifact = cache / "rk.so"
+    artifact.write_bytes(b"test artifact")
+    build_meta = {
+        "artifact": {
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()
+        },
+        "target": {
+            "distro_id": "ubuntu-22.04",
+            "image_checksum": "test-image",
+        },
+        "source": {},
+    }
+    (cache / "build.json").write_text(json.dumps(build_meta), encoding="utf-8")
+    return cache, artifact
+
+
 @pytest.mark.parametrize(
     (
         "scenario_id",
@@ -36,6 +56,7 @@ from orchestrator.core.orchestrator import ForensicOrchestrator
 )
 def test_explicit_scenarios_preserve_lifecycle_differences(
     tmp_path: Path,
+    father_cache: tuple[Path, Path],
     monkeypatch: pytest.MonkeyPatch,
     scenario_id: str,
     acquire: bool,
@@ -48,12 +69,7 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     facts = {"validated": True}
     events = []
     cleanup_socket = None
-    cache = tmp_path / "prebuilt/ubuntu-22.04/userland_father_ldpreload"
-    cache.mkdir(parents=True)
-    artifact = cache / "rk.so"
-    artifact.write_bytes(b"test artifact")
-    build_meta = {"artifact": {"sha256": hashlib.sha256(artifact.read_bytes()).hexdigest()}, "target": {"distro_id": "ubuntu-22.04", "image_checksum": "test-image"}, "source": {}}
-    (cache / "build.json").write_text(json.dumps(build_meta), encoding="utf-8")
+    cache, artifact = father_cache
 
     class FakeSocket:
         closed = False
@@ -166,7 +182,10 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.command_output", lambda *_args: "test-commit"
     )
-    monkeypatch.setattr("orchestrator.core.orchestrator.load_profile", lambda *_: {"image": {"checksum": "test-image"}})
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.load_profile",
+        lambda *_: {"image": {"checksum": "test-image"}},
+    )
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.run_interactive_shell", fake_interactive
     )
@@ -196,9 +215,15 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if scenario_id.startswith("userland_father") and not failure_phase:
         staged = manifest["inputs"][0]
-        assert (manifest_path.parent / staged["build_json"]["path"]).read_bytes() == (cache / "build.json").read_bytes()
-        assert staged["artifact"]["sha256"] == hashlib.sha256(artifact.read_bytes()).hexdigest()
-        assert staged["build_json"]["sha256"] == hashlib.sha256((cache / "build.json").read_bytes()).hexdigest()
+        assert (
+            manifest_path.parent / staged["build_json"]["path"]
+        ).read_bytes() == (cache / "build.json").read_bytes()
+        assert staged["artifact"]["sha256"] == hashlib.sha256(
+            artifact.read_bytes()
+        ).hexdigest()
+        assert staged["build_json"]["sha256"] == hashlib.sha256(
+            (cache / "build.json").read_bytes()
+        ).hexdigest()
     assert fake_vm.shutdowns == expected_shutdowns
     assert manifest["acquisition_requested"] is acquire
     assert manifest["repository"]["commit"] == "test-commit"
@@ -248,10 +273,61 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
 
 def test_father_missing_prebuilt_does_not_reset_victim(tmp_path: Path):
     resets = []
-    fake = type("Fake", (), {"vm_manager": object(), "_paths": type("Paths", (), {"experiments_dir": tmp_path})(), "_resolve_father_input": lambda *_: None, "_reset_lab": lambda *_: resets.append(True)})()
+
+    class FakeOrchestrator:
+        vm_manager = object()
+        _paths = type("Paths", (), {"experiments_dir": tmp_path})()
+
+        def _resolve_father_input(self, _distro_id):
+            return None
+
+        def _reset_lab(self, _distro_id):
+            resets.append(True)
+
     with pytest.raises(RuntimeError, match=r"\.venv/bin/python cli\.py build"):
-        ForensicOrchestrator.run_experiment(fake, "ubuntu-22.04", "userland_father_ldpreload")
+        ForensicOrchestrator.run_experiment(
+            FakeOrchestrator(),
+            "ubuntu-22.04",
+            "userland_father_ldpreload",
+        )
     assert not resets and not any(tmp_path.iterdir())
+
+
+def test_father_wrong_image_does_not_reset_victim(
+    tmp_path: Path,
+    father_cache: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    resets = []
+
+    class FakePaths:
+        experiments_dir = tmp_path / "experiments"
+        shared_dir = tmp_path
+
+    class FakeOrchestrator:
+        repo_root = tmp_path
+        vm_manager = object()
+        _paths = FakePaths()
+
+        _father_cache_dir = ForensicOrchestrator._father_cache_dir
+        _display = ForensicOrchestrator._display
+        _resolve_father_input = ForensicOrchestrator._resolve_father_input
+
+        def _reset_lab(self, _distro_id):
+            resets.append(True)
+
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.load_profile",
+        lambda *_: {"image": {"checksum": "another-image"}},
+    )
+
+    with pytest.raises(RuntimeError, match="targets another image"):
+        ForensicOrchestrator.run_experiment(
+            FakeOrchestrator(),
+            "ubuntu-22.04",
+            "userland_father_ldpreload",
+        )
+    assert not resets and not FakePaths.experiments_dir.exists()
 
 
 def test_raw_volatility_status_records_resolved_isf(

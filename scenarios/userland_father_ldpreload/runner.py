@@ -89,11 +89,21 @@ def run_father(
                 "printf '%s-%s %s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"",
                 timeout=180,
             ).combined_output
-            expected = f"{build_meta['target']['distro_id']} {build_meta['target']['arch']}"
-            if guest_identity != expected:
-                raise RuntimeError(
-                    f"Father artifact targets {expected}, guest is {guest_identity}"
+            try:
+                expected = (
+                    f"{build_meta['target']['distro_id']} "
+                    f"{build_meta['target']['arch']}"
                 )
+                if guest_identity != expected:
+                    raise RuntimeError(
+                        f"Father artifact targets {expected}, guest is {guest_identity}"
+                    )
+            except Exception as exc:
+                record_operation(
+                    command_log_path, "verify_guest_identity", error=str(exc)
+                )
+                raise
+            record_operation(command_log_path, "verify_guest_identity")
 
             console.scope("GUEST", "install and activate")
             for command in (
@@ -140,12 +150,30 @@ def run_father(
                         command,
                         timeout=180,
                     )
+                uploaded_artifact_absent = run_logged_command(
+                    terminal,
+                    command_log_path,
+                    f"test ! -e {REMOTE_ARTIFACT}",
+                    timeout=180,
+                ).exit_code == 0
+                home_bash_history_absent = run_logged_command(
+                    terminal,
+                    command_log_path,
+                    'test ! -e "${HISTFILE:-$HOME/.bash_history}"',
+                    timeout=180,
+                ).exit_code == 0
+                persistence_present = run_logged_command(
+                    terminal,
+                    command_log_path,
+                    f"test -e {PRELOAD_CONFIG} && test -e {INSTALLED_LIBRARY}",
+                    timeout=180,
+                ).exit_code == 0
                 cleanup_facts = {
                     "cleanup": {
-                        "uploaded_artifact_absent": True,
-                        "home_bash_history_absent": True,
-                        "preload_config_present": True,
-                        "installed_library_present": True,
+                        "uploaded_artifact_absent": uploaded_artifact_absent,
+                        "home_bash_history_absent": home_bash_history_absent,
+                        "preload_config_present": persistence_present,
+                        "installed_library_present": persistence_present,
                     }
                 }
     except BaseException:

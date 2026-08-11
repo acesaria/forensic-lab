@@ -335,6 +335,8 @@ class ForensicOrchestrator:
                 input_record = self._stage_run_inputs(
                     run_root, scenario_id, father_input[0]
                 )
+                if input_record["artifact"]["sha256"] != father_input[1]["artifact"]["sha256"]:
+                    raise RuntimeError("staged Father artifact differs from verified build")
 
             revision = command_output(
                 ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
