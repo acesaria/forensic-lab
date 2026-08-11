@@ -1,6 +1,6 @@
 # userland_father_ldpreload
 
-The `userland_father_ldpreload` calibration builds the pinned Father source,
+The `userland_father_ldpreload` calibration uses a builder-produced Father object,
 activates its shared object system-wide through `/etc/ld.so.preload`, validates
 native file hiding and Father's native `accept()` backdoor, then preserves the
 active compromise for optional acquisition. The
@@ -13,29 +13,33 @@ The active control flow is intentionally short:
 `cli.py` -> explicit orchestrator dispatch -> `runner.py` -> `SSHTerminal`
 
 There is no executable scenario YAML, loader, generic engine, executor adapter,
-dynamic hook, or run-context object. `runner.py` verifies and uploads the
-vendored archive, then executes the fixed experiment as ordinary Bash commands
-in one visible terminal. The terminal transcript and append-only command log
-are written at the run root.
+dynamic hook, or run-context object. The builder verifies and configures the
+vendored source, then publishes `rk.so` with `build.json`. Before victim reset,
+the run requires a build matching the selected image, copies both files
+byte-for-byte into immutable inputs, and records their hashes in the manifest.
+The runner then executes the fixed experiment as ordinary Bash commands in one
+visible terminal. The terminal transcript and append-only command log are
+written at the run root.
 
 The vendored archive is locked by `father.lock.yml` to upstream commit
-`4eb2712caf612a7dc55fd4f34ff5c72b74c7c332` and is hash-checked before upload.
-The runner then:
+`4eb2712caf612a7dc55fd4f34ff5c72b74c7c332` and is hash-checked by the builder.
+The runner uploads the staged artifact rather than the cache copy, then:
 
-- extracts and configures the pristine pinned source in the guest;
-- builds and installs `rk.so` at Father's default `/lib/selinux.so.3` path;
+- compares the guest distro/version and architecture with `build.json` before
+  installing anything;
+- installs `rk.so` at Father's default `/lib/selinux.so.3` path;
 - lists `__malicious_file`, writes the library path to `/etc/ld.so.preload`,
   then lists the same directory and confirms that the file is hidden;
 - restarts `ssh.service` and validates Father's native root shell.
 
 For the cleanup treatment only, the same interactive `labuser` Bash session
-then removes the uploaded archive and extracted source/build tree, runs the
-naive history commands, and confirms `$HOME/.bash_history` is absent. One
-exit-status check confirms that the staging paths are absent while
-`/etc/ld.so.preload` and `/lib/selinux.so.3` remain present. The cleanup does
-not target the probe directory or controlled hidden file. The terminal
-transcript and append-only command log preserve the cleanup commands as
-experimental ground truth.
+then removes the uploaded `/tmp/rk.so`, runs the naive history commands, and
+confirms `$HOME/.bash_history` is absent while `/etc/ld.so.preload` and
+`/lib/selinux.so.3` remain present. The cleanup does not target the probe
+directory or controlled hidden file. The terminal transcript and append-only
+command log preserve the guest identity check, activation, validation, and
+cleanup commands as experimental ground truth. Builder provenance lives in the
+separate build record, not the scenario command log.
 
 ## Native backdoor validation
 
@@ -67,6 +71,16 @@ capture and before VM shutdown. A `--no-acquire` run instead closes it
 immediately before the mandatory Father shutdown.
 
 ## Run
+
+Build the pinned artifact once for the exact target image. Builder networking is
+allowed for this explicit preparation step; the victim remains offline:
+
+```bash
+.venv/bin/python cli.py build --distro ubuntu-22.04 \
+  --scenario userland_father_ldpreload
+```
+
+Both treatments consume that same published artifact.
 
 The light production validation skips acquisition and still powers the Father
 VM off:

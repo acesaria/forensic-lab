@@ -15,8 +15,9 @@ source_integrity:
   repository_patches_father_source: false
   run_local_configuration_only: true
   note: >
-    The controlled scenario extracts the pristine archive into the run workspace,
-    edits that temporary copy's src/config.h with scenario parameters, builds
-    Father there, and records the configuration/build actions in the append-only
-    command log. The run manifest retains only concise operational activation
-    facts. No Father C/header/build file is patched in the repository.
+    The builder verifies and extracts the pristine archive, edits its temporary
+    copy's src/config.h with the fixed scenario parameter, and publishes rk.so
+    with build.json provenance for the source, recipe, packages, and target. A
+    run copies both files byte-for-byte into immutable inputs, checks the guest
+    distro and architecture, and logs activation and validation. No Father
+    C/header/build file is patched in the repository or compiled on the victim.

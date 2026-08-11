@@ -73,11 +73,6 @@ from scenarios.ptrace_fa.runner import (
     run_ptrace_fa,
 )
 from scenarios.userland_father_ldpreload import runner as father
-from scenarios.userland_father_ldpreload.runner import (
-    CLEANUP_SCENARIO_ID as FATHER_CLEANUP_SCENARIO,
-    SCENARIO_ID as FATHER_SCENARIO,
-    run_father,
-)
 
 
 class ForensicOrchestrator:
@@ -207,7 +202,7 @@ class ForensicOrchestrator:
                 )
             record = {
                 "schema": "forensic-lab.build_manifest.v1",
-                "scenario": FATHER_SCENARIO,
+                "scenario": father.SCENARIO_ID,
                 "built_at": _utc_now(),
                 "artifact": {
                     "filename": father.ARTIFACT_NAME,
@@ -219,6 +214,7 @@ class ForensicOrchestrator:
                     "arch": facts["arch"].strip(),
                 },
                 "source": {
+                    "repository": source["repository"],
                     "commit": source["commit"],
                     "archive_sha256": source["archive_sha256"],
                 },
@@ -245,7 +241,7 @@ class ForensicOrchestrator:
         return cache_dir / father.ARTIFACT_NAME
 
     def _father_cache_dir(self, distro_id: str) -> Path:
-        return self._paths.shared_dir / "prebuilt" / distro_id / FATHER_SCENARIO
+        return self._paths.shared_dir / "prebuilt" / distro_id / father.SCENARIO_ID
 
     def _resolve_father_input(self, distro_id: str) -> tuple[Path, dict] | None:
         """
@@ -259,7 +255,7 @@ class ForensicOrchestrator:
         artifact = cache_dir / father.ARTIFACT_NAME
         fix = (
             f"remove {self._display(cache_dir)} and rerun: .venv/bin/python "
-            f"cli.py build --distro {distro_id} --scenario {FATHER_SCENARIO}"
+            f"cli.py build --distro {distro_id} --scenario {father.SCENARIO_ID}"
         )
         try:
             record = json.loads((cache_dir / "build.json").read_text(encoding="utf-8"))
@@ -293,7 +289,7 @@ class ForensicOrchestrator:
         acquire: bool = True,
     ) -> str | None:
         """Run one explicit scenario through the full experiment lifecycle."""
-        is_father = scenario_id in (FATHER_SCENARIO, FATHER_CLEANUP_SCENARIO)
+        is_father = scenario_id in (father.SCENARIO_ID, father.CLEANUP_SCENARIO_ID)
         is_ptrace_fa = scenario_id == PTRACE_FA_SCENARIO
         # Both scenarios return live facts plus a cleanup callback that keeps
         # their backdoor/reverse-shell connection open until just before the
@@ -301,6 +297,13 @@ class ForensicOrchestrator:
         has_scenario_cleanup = is_father or is_ptrace_fa
         if scenario_id != INTERACTIVE_SHELL_SCENARIO and not has_scenario_cleanup:
             raise RuntimeError(f"Unknown scenario: {scenario_id}")
+
+        father_input = self._resolve_father_input(distro_id) if is_father else None
+        if is_father and father_input is None:
+            raise RuntimeError(
+                "Father build missing; run: .venv/bin/python cli.py build "
+                f"--distro {distro_id} --scenario {father.SCENARIO_ID}"
+            )
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
@@ -326,6 +329,12 @@ class ForensicOrchestrator:
             command_log_path = run_root / "command_log.jsonl"
             transcript_path = run_root / "terminal_transcript.txt"
             command_log_path.touch()
+
+            input_record = None
+            if father_input is not None:
+                input_record = self._stage_run_inputs(
+                    run_root, scenario_id, father_input[0]
+                )
 
             revision = command_output(
                 ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
@@ -361,6 +370,8 @@ class ForensicOrchestrator:
                     "snapshot_created_at": snapshot_created_at,
                 },
             }
+            if input_record is not None:
+                manifest["inputs"] = [input_record]
             _write_run_manifest(manifest_path, manifest)
 
             console.step_header("scenario execution")
@@ -368,11 +379,14 @@ class ForensicOrchestrator:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
                     if is_father:
-                        facts, backdoor_cleanup = run_father(
+                        assert father_input is not None and input_record is not None
+                        facts, backdoor_cleanup = father.run_father(
                             ssh,
                             transcript_path,
                             command_log_path=command_log_path,
                             scenario_id=scenario_id,
+                            artifact_path=run_root / input_record["artifact"]["path"],
+                            build_meta=father_input[1],
                         )
                     elif is_ptrace_fa:
                         facts, backdoor_cleanup = run_ptrace_fa(
@@ -466,6 +480,27 @@ class ForensicOrchestrator:
                 finally:
                     if not vm_off:
                         self.vm_manager.shutdown_vm(vm_name)
+
+    def _stage_run_inputs(
+        self, run_root: Path, scenario_id: str, artifact: Path
+    ) -> dict[str, Any]:
+        inputs_dir = run_root / "inputs" / scenario_id
+        inputs_dir.mkdir(parents=True)
+        staged_artifact = inputs_dir / artifact.name
+        staged_build = inputs_dir / "build.json"
+        shutil.copy2(artifact, staged_artifact)
+        shutil.copy2(artifact.parent / "build.json", staged_build)
+        return {
+            "scenario": scenario_id,
+            "artifact": {
+                "path": str(staged_artifact.relative_to(run_root)),
+                "sha256": file_sha256(staged_artifact),
+            },
+            "build_json": {
+                "path": str(staged_build.relative_to(run_root)),
+                "sha256": file_sha256(staged_build),
+            },
+        }
 
     @staticmethod
     def _guest_facts(ssh: SSHClient) -> dict[str, Any]:
@@ -898,7 +933,7 @@ def _print_experiment_summary(
     console.ok("scenario status: completed")
     if scenario_id == INTERACTIVE_SHELL_SCENARIO and raw_outputs is None:
         console.ok(f"console transcript: {run_display / artifacts['terminal_transcript']}")
-    elif scenario_id == FATHER_CLEANUP_SCENARIO:
+    elif scenario_id == father.CLEANUP_SCENARIO_ID:
         console.info(f"scenario: {scenario_id}")
     console.info(f"distro/profile: {platform['distro_id']} / {platform['profile']}")
 

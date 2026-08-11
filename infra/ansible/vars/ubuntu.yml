@@ -5,10 +5,7 @@ isf_base_packages:
   - golang-go
 
 
-# Packages baked into the lab baseline so offline scenarios can run their
-# compile/setup steps without network access (lab VM is on the isolated net).
+# Packages baked into the lab baseline for offline scenario compilation.
 baseline_present_pkgs:
   - gcc
   - make
-  - libpam0g-dev
-  - libgcrypt20-dev

