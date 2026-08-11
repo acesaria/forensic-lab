@@ -1,89 +1,119 @@
 # Thesis delivery queue
 
-Updated 2026-08-07. This file contains mutable priorities only.
+Updated 2026-08-11. This is the sole active execution plan. Verify mutable
+implementation facts from the current source and preserve unrelated work.
 
-## Immediate sequence
+## Hard deadlines
 
-1. After the `ptrace_fa` implementation commit, make a new Ubuntu 22.04 full
-   acquired run and use it as the authoritative investigation case. Retain
-   `ubuntu-22.04_ptrace_fa_20260806-155755` as successful treatment/evidence
-   validation only: its recorded repository revision predates the uncommitted
-   integration.
-2. Produce one concise `ptrace_fa` investigation, led by memory (`pslist`,
-   `psaux`, `sockstat`, and `malfind`) with only the disk/timeline observations
-   that materially help.
-3. Run `ptrace_fa` without acquisition on Ubuntu 24.04 as a targeted replication
-   after the Ubuntu 22.04 implementation is frozen.
-4. Resolve the concrete Father Ubuntu 24.04 prerequisite failure with the
-   smallest baseline/package fix and validate without acquisition.
-5. Integrate and investigate one traditional LKM scenario, while starting the
-   kernel-dependent ftrace feasibility check early enough to expose blockers.
+- By `2026-08-12 23:00`: send the supervisor a concise status email. Do not wait
+  for optional infrastructure or cross-distribution work.
+- By `2026-08-17`: freeze the abstract.
+- By `2026-09-21`: complete the thesis, final project material, and slides.
 
-## August 10-11 deadline queue
+## Gate 0 — storage and repository baseline
 
-- Finish the authoritative `ptrace_fa` run and concise investigation first.
-- Complete one traditional LKM scenario and the focused ftrace scenario with
-  concise disk, memory, and timeline investigations only where each source is
-  relevant. Keep ftrace as the kernel-dependent risk lane.
-- Perform the Ubuntu 24.04 ptrace replication and Father prerequisite fix
-  without expanding them into second deep investigations.
+- Finish the read-only storage audit and set the required free-space target.
+- Distinguish deletion, archival, compaction, and true virtual-disk shrinking.
+- Preserve evidence and all three exact-profile builder VMs. Do not delete,
+  shrink, rename, replace, or recreate a builder without explicit approval.
+- Record the dirty worktree and registered worktrees before implementation.
+- Require explicit approval before any destructive, privileged, VM, forensic,
+  or commit operation.
 
-Passing Ubuntu 22.04 and Ubuntu 24.04 supports a targeted two-release Ubuntu
-replication claim, not a claim of compatibility with arbitrary Linux distros.
+## Implementation sequence
 
-Existing draft reports and comparative material are review inputs, not standing
-instructions. Use `METHODOLOGY.md` for the current method and cite the exact
-immutable run in every evidence-facing task.
+Complete exactly one task at a time. Each task requires a Codex plan, human
+approval, bounded implementation, independent review, and an explicit commit
+decision. Never push unless requested.
 
-## Delivery milestones
+1. **Minimal prebuilt workflow and Father** — recheck the CLI end to end; add
+   only the smallest explicit `build` workflow; resolve an exact prebuilt plus
+   `build.json`; copy both into immutable run inputs; and convert Father retained
+   and cleanup to one builder-produced `.so`. Validate Ubuntu 22.04 with
+   `--no-acquire`. Ceiling: 350 changed text lines and 9 files.
+2. **ptrace prebuilt conversion** — reuse Task 1's mechanism, remove victim-side
+   compilation, and upload and execute the exact prebuilt. Validate Ubuntu 22.04
+   with `--no-acquire`. Ceiling: 180 changed text lines and 5 files.
+3. **Diamorphine retained and cleanup** — build for the exact target kernel,
+   verify vermagic, implement only the bounded hidden-file/module and signal-64
+   behavior, and fail closed on incompatibility. Validate Ubuntu 22.04 with
+   `--no-acquire`. Ceiling: 320 changed text lines and 8 files.
+4. **Bounded compatibility validation** — on Ubuntu 24.04 and Debian 13, run
+   Father retained, ptrace, and Diamorphine retained with `--no-acquire`. Make no
+   code changes by default. A compatibility fix needs separate approval and is
+   limited to 80 changed lines per technique; otherwise record the limitation.
+5. **Remove automatic forensic extraction and freeze** — stop new runs from
+   automatically producing the TSK bodyfile, Plaso storage/JSONL, broad
+   `vol3.json`, and `raw_extraction_status.json`; make prerequisite checks
+   command-specific; preserve acquisition and input provenance; align current
+   documentation and focused existing tests; and produce the final run command
+   sheet. Ceiling: 280 changed text lines and 8 files.
 
-- By `2026-08-19`: experimental work substantially complete.
-- By `2026-09-21`: final project, LaTeX integration, and slides complete.
+For Tasks 1, 2, 3, and 5, review is read-only first and returns `PASS` or
+`BLOCKED`. Commit only after `PASS` and explicit authorization. Task 4 needs
+review and commit only if code changes.
 
-## Investigation workflow follow-up
+## Frozen engineering and method boundaries
 
-- Re-evaluate whether every acquisition should automatically run the default
-  TSK, Plaso, and Volatility extraction. Compare its runtime and provenance
-  value with running only the relevant tools, Plaso parsers, and Volatility
-  plugins from each scenario's reproducible Runme investigation. Consider
-  removing automatic extraction and its unused broad outputs (including
-  `vol3.json`) if investigation-time execution preserves enough provenance and
-  reproducibility; explicitly identify removable code such as the combined
-  `extract.py` workflow. Do not redesign this before the deadline work.
-- If automatic raw extraction is retained, generate
-  `analysis/raw_extraction_index.json` immediately after
-  `analysis/raw_extraction_status.json` as a small, non-authoritative summary
-  for Runme notebooks. Keep acquisition/raw exports under `shared/experiments/`
-  and do not make acquisition create `shared/investigations/` workspaces.
+- Freeze runner, execute an immutable run, then investigate. Every run records
+  the exact repository revision.
+- Builders may use networking for explicit builds. Victims never build, install
+  packages, or access the network during scenario execution.
+- `run` consumes an already prepared compatible input and never mutates the
+  builder cache. Missing or incompatible input fails before victim reset and
+  prints the exact build command required.
+- Father retained/cleanup share one `.so`; Diamorphine retained/cleanup share
+  one exact-kernel `.ko`. Copy the selected artifact and `build.json` into the
+  immutable run and index them in the manifest.
+- Keep scenario validation, forensic observation, and analyst interpretation
+  distinct. Target inventory and source applicability are prospective.
+- Do not add automatic detection, matching, scoring, reconstruction, a build
+  DSL, a scenario registry, new dependencies, or speculative abstractions.
+- Do not modify or delete historical runs or raw outputs. A changed executor
+  requires a new run; never relabel an earlier run.
 
-## Scenario workflow follow-up
+## Authoritative experiment matrix
 
-- Reconsider installing every scenario prerequisite in the shared offline VM
-  baseline. After the deadline work, evaluate a small scenario-owned
-  `run_prerequisites` step that installs each runner's explicit packages and
-  libraries immediately before scenario execution, then restores the intended
-  offline state. Accept the small per-run delay if it keeps unrelated packages
-  out of other scenarios; do not design or implement this now.
+After Task 5, require a clean committed tree and execute these Ubuntu 22.04 full
+acquisitions one at a time:
 
-## After the minimum deliverable
+1. Father retained;
+2. Father cleanup;
+3. ptrace;
+4. Diamorphine retained;
+5. Diamorphine cleanup.
 
-- Integrate accepted Father results into the thesis, figures, limitations, and
-  presentation material.
-- Consider one authoritative Father no-cleanup investigation as a paired control
-  for the cleanup case. Use it to measure the effect of cleanup, not to replace
-  or improve the accepted cleanup metrics; do not schedule it before the
-  ptrace/LKM/ftrace minimum is secure.
-- Perform only targeted Ubuntu 24.04 or Debian 13 replication that strengthens a
-  specific thesis claim without threatening the milestones.
-- Add another scenario or security-profile comparison only if the minimum
-  Ubuntu 22.04 deliverables are already secure.
+After each run, verify repository revision, scenario and acquisition statuses,
+input hashes, acquisition hashes, EWF verification, and artifact sizes. Stop
+before investigation if any gate fails. Retain all older experiment directories
+until replacement runs and investigations are accepted.
+
+## Investigation and writing
+
+- Decide concise Father, ptrace, and Diamorphine investigation plans from the
+  completed runs. Use only relevant TSK, Plaso, and Volatility commands in
+  reproducible Runme notebooks; record versions, commands, output paths, hashes,
+  failures, and valid zero results.
+- Produce a small LaTeX results/implementation chapter with the accepted cases,
+  reproducibility design, source complementarity, limitations, and figures.
+- Write in the author's own voice, verify every claim, and disclose tool use as
+  required by university policy. Do not use detector-evasion or "humanizer"
+  workflows.
+- Add an accurate thesis acknowledgment or methods disclosure for tools used in
+  implementation, testing, and documentation.
 
 ## Deferred unless explicitly reopened
 
-- automatic detection, matching, scoring, or reconstruction;
-- Fedora/SELinux and broad platform expansion;
-- Timesketch, Velociraptor, AIDE/NSRL, graph/ontology, or broad Sigma/YARA work;
-- a large test rewrite, architecture refactor, new framework, or major
-  dependency; and
-- optional scenarios that do not directly protect a thesis research question or
-  delivery milestone.
+- Dynamic kernel-version verification for profile `kernel:` fields: Task 1
+  adds a static, human-verified `kernel:` field to `infra/profiles/ubuntu-22.04.yaml`
+  for pre-reset prebuilt-path resolution. Automatically resolving the actual
+  kernel the first time it hasn't been checked, and updating the static field
+  on a detected mismatch, is deferred for now;
+- ftrace, Meterpreter, eBPF, CopyFail, ART, worms, timestomping, generalized
+  cleanup levels, extra privilege-escalation scenarios, and broad hardening;
+- Fedora/SELinux, Timesketch, Velociraptor, AIDE/NSRL, graphs/ontologies, and
+  broad Sigma/YARA work;
+- automatic detection, matching, scoring, reconstruction, new frameworks,
+  architecture rewrites, major dependencies, and cosmetic CLI work; and
+- read-only permissions for accepted memory/EWF files. This is optional
+  defense-in-depth, not evidence immutability or an acceptance condition.
