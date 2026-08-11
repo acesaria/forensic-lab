@@ -9,6 +9,7 @@ Public API
 setup_infra()              one-time: libvirt network + pool
 prepare_lab(distro_id)     one-time: image + VM + baseline snapshot + pipeline verify
 build_isf(distro_id)       one-time: Volatility symbol file
+build_father(distro_id)    build + publish Father's rk.so to the host cache
 run_experiment(...)        explicit scenario dispatch + experiment loop
 destroy_lab(distro_id)     teardown
 lab_exists(distro_id)      predicate
@@ -24,6 +25,7 @@ VM power-state contract
 -----------------------
 prepare_lab        ends OFF (snapshot taken, pipeline probe done)
 build_isf          ends OFF (lab parked, build VM retained)
+build_father       ends OFF (builder VM retained; lab never started)
 _reset_lab         ends ON + SSH ready
 _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
 Father and ptrace_fa experiments end OFF, including when acquisition is skipped
@@ -35,8 +37,8 @@ from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
-import shlex
 import shutil
+import tempfile
 from typing import Any
 
 from orchestrator.core.config import (
@@ -70,6 +72,7 @@ from scenarios.ptrace_fa.runner import (
     SCENARIO_ID as PTRACE_FA_SCENARIO,
     run_ptrace_fa,
 )
+from scenarios.userland_father_ldpreload import runner as father
 from scenarios.userland_father_ldpreload.runner import (
     CLEANUP_SCENARIO_ID as FATHER_CLEANUP_SCENARIO,
     SCENARIO_ID as FATHER_SCENARIO,
@@ -159,42 +162,126 @@ class ForensicOrchestrator:
         console.ok(f"ISF exported: {display_path}")
         return isf_path
 
-    def install_builder_packages(self, distro_id: str, packages: list[str]) -> None:
-        if not packages:
-            return
-        package_args = " ".join(shlex.quote(package) for package in packages)
-        code, _, stderr = self.run_builder_command(
-            distro_id,
-            f"sudo apt-get update && sudo apt-get install -y -- {package_args}",
-            "/",
+    def build_father(self, distro_id: str) -> Path:
+        """
+        Build Father's rk.so on the builder VM and publish it with its build
+        record under shared/prebuilt/. Never overwrites. Builder ends OFF.
+        """
+        source = father.verify_source()
+        published = self._resolve_father_input(distro_id)
+        if published is not None:
+            console.info(f"already published: {self._display(published[0])}")
+            return published[0]
+
+        profile = load_profile(self.repo_root, distro_id)
+        vm_name = self._ensure_builder_vm(distro_id)
+        with tempfile.TemporaryDirectory() as staging:
+            artifact = Path(staging) / father.ARTIFACT_NAME
+            try:
+                with self.vm_manager.open_ssh(vm_name) as ssh:
+                    ssh.put(father.ARCHIVE, father.UPLOAD_PATH)
+                    ssh.put(father.BUILD_SCRIPT, father.REMOTE_BUILD_SCRIPT)
+                    console.step(f"building {father.ARTIFACT_NAME} on {vm_name}...")
+                    stdout = ssh.run_checked(
+                        f"bash {father.REMOTE_BUILD_SCRIPT} {father.UPLOAD_PATH} "
+                        f"{father.REMOTE_BUILD_ROOT} {father.HIDDEN_PREFIX}",
+                        timeout=1800,
+                    )
+                    ssh.get(
+                        f"{father.REMOTE_BUILD_ROOT}/Father-{source['commit']}"
+                        f"/{father.ARTIFACT_NAME}",
+                        artifact,
+                    )
+            finally:
+                self.vm_manager.shutdown_vm(vm_name)
+
+            facts = dict(
+                line.removeprefix("FACT ").split("=", 1)
+                for line in stdout.splitlines()
+                if line.startswith("FACT ") and "=" in line
+            )
+            missing = [k for k in ("arch", "packages") if not facts.get(k, "").strip()]
+            if missing:
+                raise RuntimeError(
+                    f"builder reported no {', '.join(missing)}; build not published"
+                )
+            record = {
+                "schema": "forensic-lab.build_manifest.v1",
+                "scenario": FATHER_SCENARIO,
+                "built_at": _utc_now(),
+                "artifact": {
+                    "filename": father.ARTIFACT_NAME,
+                    "sha256": file_sha256(artifact),
+                },
+                "target": {
+                    "distro_id": distro_id,
+                    "image_checksum": profile["image"]["checksum"],
+                    "arch": facts["arch"].strip(),
+                },
+                "source": {
+                    "commit": source["commit"],
+                    "archive_sha256": source["archive_sha256"],
+                },
+                "recipe": {
+                    "sha256": file_sha256(father.BUILD_SCRIPT),
+                    "hidden_prefix": father.HIDDEN_PREFIX,
+                },
+                "packages": dict(
+                    entry.split("=", 1) for entry in facts["packages"].split()
+                ),
+            }
+
+            cache_dir = self._father_cache_dir(distro_id)
+            new_dir = cache_dir.with_name(f".{cache_dir.name}.new")
+            shutil.rmtree(new_dir, ignore_errors=True)
+            new_dir.mkdir(parents=True)
+            shutil.copy2(artifact, new_dir / father.ARTIFACT_NAME)
+            (new_dir / "build.json").write_text(
+                json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            os.rename(new_dir, cache_dir)
+
+        console.ok(f"published: {self._display(cache_dir)}")
+        return cache_dir / father.ARTIFACT_NAME
+
+    def _father_cache_dir(self, distro_id: str) -> Path:
+        return self._paths.shared_dir / "prebuilt" / distro_id / FATHER_SCENARIO
+
+    def _resolve_father_input(self, distro_id: str) -> tuple[Path, dict] | None:
+        """
+        Return (artifact, record) when a published build matches this distro's
+        pinned image, None when nothing is published, raise when it exists but
+        cannot be trusted.
+        """
+        cache_dir = self._father_cache_dir(distro_id)
+        if not cache_dir.exists():
+            return None
+        artifact = cache_dir / father.ARTIFACT_NAME
+        fix = (
+            f"remove {self._display(cache_dir)} and rerun: .venv/bin/python "
+            f"cli.py build --distro {distro_id} --scenario {FATHER_SCENARIO}"
         )
-        if code != 0:
-            raise RuntimeError(f"builder package install failed (exit {code}): {stderr.strip()}")
-
-    def run_builder_command(
-        self, distro_id: str, command: str, working_directory: str
-    ) -> tuple[int, str, str]:
-        vm_name = self._ensure_builder_vm(distro_id)
         try:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                return ssh.run(f"cd {shlex.quote(working_directory)} && {command}")
-        finally:
-            self.vm_manager.shutdown_vm(vm_name)
+            record = json.loads((cache_dir / "build.json").read_text(encoding="utf-8"))
+            target = record["target"]
+            expected_sha = record["artifact"]["sha256"]
+        except (OSError, ValueError, LookupError, TypeError) as exc:
+            raise RuntimeError(f"unreadable build record ({exc}); {fix}") from exc
 
-    def fetch_builder_file(
-        self, distro_id: str, remote_path: str, local_path: Path
-    ) -> None:
-        if local_path.exists():
-            return
-        temporary = local_path.with_name(f".{local_path.name}.tmp")
-        vm_name = self._ensure_builder_vm(distro_id)
-        try:
-            with self.vm_manager.open_ssh(vm_name) as ssh:
-                ssh.get(remote_path, temporary)
-            temporary.replace(local_path)
-        finally:
-            temporary.unlink(missing_ok=True)
-            self.vm_manager.shutdown_vm(vm_name)
+        if not artifact.is_file() or file_sha256(artifact) != expected_sha:
+            raise RuntimeError(f"published artifact missing or altered; {fix}")
+        # A missing checksum on either side is a mismatch, never a pass.
+        image = load_profile(self.repo_root, distro_id)["image"]
+        wanted = (distro_id, image.get("checksum"))
+        if None in wanted or wanted != (
+            target.get("distro_id"),
+            target.get("image_checksum"),
+        ):
+            raise RuntimeError(f"published build targets another image; {fix}")
+        return artifact, record
+
+    def _display(self, path: Path) -> str:
+        return os.path.relpath(path, self.repo_root)
 
     def lab_exists(self, distro_id: str) -> bool:
         return self.vm_manager.vm_exists(f"{LAB_VM_PREFIX}-{distro_id}")

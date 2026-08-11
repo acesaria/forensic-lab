@@ -78,6 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     setup.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
 
+    build_help = "Build a scenario artifact on the builder VM and publish it"
+    build = sub.add_parser("build", help=build_help, description=build_help)
+    build.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
+    build.add_argument(
+        "--scenario",
+        required=True,
+        choices=(FATHER_SCENARIO,),
+        help="Scenario whose artifact to build",
+    )
+
     run_help = (
         "Run one scenario using an existing prepared baseline; setup is not "
         "started automatically"
@@ -161,9 +171,9 @@ def main() -> None:
     args = build_parser().parse_args()
     _setup_logging(args.debug)
 
-    # The 'setup' and 'run' paths need a valid distro profile; fail fast with a
-    # config error before any VM work starts.
-    if args.command in ("setup", "run"):
+    # The 'setup', 'build' and 'run' paths need a valid distro profile; fail
+    # fast with a config error before any VM work starts.
+    if args.command in ("build", "setup", "run"):
         try:
             load_profile(repo_root, args.distro)
         except (KeyError, FileNotFoundError, ValueError) as exc:
@@ -228,6 +238,9 @@ def main() -> None:
                 console.section("raw extraction verification")
                 orchestrator.verify_pipeline(distro_id)
                 console.ok(f"setup complete for '{distro_id}'")
+
+            elif args.command == "build":
+                orchestrator.build_father(distro_id)
 
             elif args.command == "run":
                 if not orchestrator.lab_exists(distro_id):

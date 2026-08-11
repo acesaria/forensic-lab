@@ -17,10 +17,14 @@ SCENARIO_ID = "userland_father_ldpreload"
 CLEANUP_SCENARIO_ID = "userland_father_ldpreload_cleanup"
 ROOT = Path(__file__).resolve().parent
 ARCHIVE = ROOT / "files/father-upstream-4eb2712.tar"
+BUILD_SCRIPT = ROOT / "files/build.sh"
 LOCK = ROOT / "father.lock.yml"
+ARTIFACT_NAME = "rk.so"
 
 REMOTE_ROOT = "/tmp/forensic-lab/father_ldpreload"
 UPLOAD_PATH = "/tmp/father-upstream-4eb2712.tar"
+REMOTE_BUILD_ROOT = "/tmp/forensic-lab/father_build"
+REMOTE_BUILD_SCRIPT = "/tmp/father-build.sh"
 
 # Father defaults
 INSTALLED_LIBRARY = "/lib/selinux.so.3"
@@ -69,7 +73,12 @@ def run_father(
     cleanup = scenario_id == CLEANUP_SCENARIO_ID
     transcript_path.touch()
     console.scope("HOST", "stage Father source")
-    source = _verify_source(command_log_path)
+    try:
+        source = verify_source()
+    except Exception as exc:
+        record_operation(command_log_path, "verify_source", error=str(exc))
+        raise
+    record_operation(command_log_path, "verify_source")
     _upload_archive(ssh, command_log_path)
 
     terminal = ssh.open_terminal()
@@ -173,28 +182,22 @@ def run_father(
         raise
 
 
-def _verify_source(command_log_path: Path) -> dict:
-    try:
-        lock = yaml.safe_load(LOCK.read_text(encoding="utf-8"))
-        archive_hash = file_sha256(ARCHIVE)
-        expected_hash = lock["retrieval"]["archive_sha256"]
-        if archive_hash != expected_hash:
-            raise RuntimeError(
-                "Father archive SHA-256 mismatch: "
-                f"expected {expected_hash}, got {archive_hash}"
-            )
-    except Exception as exc:
-        record_operation(command_log_path, "verify_source", error=str(exc))
-        raise
-
-    source = {
+def verify_source() -> dict:
+    """Check the vendored archive against the pinned lock. Host-side, no VM."""
+    lock = yaml.safe_load(LOCK.read_text(encoding="utf-8"))
+    archive_hash = file_sha256(ARCHIVE)
+    expected_hash = lock["retrieval"]["archive_sha256"]
+    if archive_hash != expected_hash:
+        raise RuntimeError(
+            "Father archive SHA-256 mismatch: "
+            f"expected {expected_hash}, got {archive_hash}"
+        )
+    console.ok(f"Father source verified: {archive_hash}")
+    return {
         "repository": lock["upstream"]["url"],
         "commit": lock["upstream"]["pinned_commit"],
         "archive_sha256": archive_hash,
     }
-    record_operation(command_log_path, "verify_source")
-    console.ok(f"Father source verified: {archive_hash}")
-    return source
 
 
 def _upload_archive(

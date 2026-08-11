@@ -50,6 +50,7 @@ forensics_report.json
 
 shared/experiments/*
 shared/baselines/
+shared/prebuilt/
 
 # Ignore generated investigation material, but retain directory traversal
 shared/investigations/**
@@ -71,3 +72,4 @@ dfir-tools/
 ideas.txt
 shared/known_hashes/*
 .codex/*
+.claude/worktrees/
