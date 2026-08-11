@@ -33,7 +33,7 @@ CLOUD_INIT_NETWORK_CONFIG = CLOUD_INIT_DIR / "network-config"
 
 # VM name prefixes -- must match naming convention in README
 LAB_VM_PREFIX = "lab"
-BUILD_VM_PREFIX = "build-isf"
+BUILD_VM_PREFIX = "builder"
 
 # Acquisition output filenames. The run directory name already encodes which
 # scenario/run a dump belongs to, so the files themselves stay generic.
@@ -74,7 +74,7 @@ def load_config(repo_root: Path) -> dict[str, Any]:
 
     After this returns, every field listed in _HOST_PATH_FIELDS is an absolute
     pathlib.Path, and each role_defaults entry carries its libvirt network
-    names (lab -> isolated + NAT, build-isf -> NAT). Consumers should treat
+    names (lab -> isolated + NAT, builder -> NAT). Consumers should treat
     the result as fully wired and not re-normalize.
     """
     config_path = repo_root / "config.yaml"
@@ -94,8 +94,8 @@ def load_config(repo_root: Path) -> dict[str, Any]:
     if isinstance(role_defaults.get("lab"), dict):
         role_defaults["lab"]["network"] = host["isolated_network_name"]
         role_defaults["lab"]["nat_network"] = nat_network
-    if isinstance(role_defaults.get("build-isf"), dict):
-        role_defaults["build-isf"]["network"] = nat_network
+    if isinstance(role_defaults.get(BUILD_VM_PREFIX), dict):
+        role_defaults[BUILD_VM_PREFIX]["network"] = nat_network
     return cfg
 
 

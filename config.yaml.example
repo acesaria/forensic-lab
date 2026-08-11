@@ -24,7 +24,7 @@ role_defaults:
     disk_size: 10G
     ram_mb: 2048
     vcpus: 2
-  build-isf:
+  builder:
     disk_size: 25G
     ram_mb: 6144
     vcpus: 4

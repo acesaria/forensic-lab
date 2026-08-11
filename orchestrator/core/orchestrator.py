@@ -763,9 +763,9 @@ class ForensicOrchestrator:
 
     def _ensure_builder_vm(self, distro_id: str) -> str:
         profile = load_profile(self.repo_root, distro_id)
-        role_cfg = self._role_defaults.get("build-isf")
+        role_cfg = self._role_defaults.get(BUILD_VM_PREFIX)
         if not isinstance(role_cfg, dict):
-            raise RuntimeError("Missing 'role_defaults.build-isf' in config")
+            raise RuntimeError(f"Missing 'role_defaults.{BUILD_VM_PREFIX}' in config")
         vm_name = f"{BUILD_VM_PREFIX}-{distro_id}"
         exists = self.vm_manager.vm_exists(vm_name)
         required = 8 * 1024**3 + (0 if exists else int(str(role_cfg["disk_size"]).upper().removesuffix("G")) * 1024**3)
@@ -775,7 +775,7 @@ class ForensicOrchestrator:
         if not exists:
             base_image = self.vm_manager.ensure_base_image(profile)
             self.vm_manager.create_vm(
-                role="build-isf",
+                role=BUILD_VM_PREFIX,
                 distro_id=distro_id,
                 profile=profile,
                 role_cfg=role_cfg,

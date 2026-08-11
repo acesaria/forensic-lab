@@ -26,11 +26,15 @@ Complete exactly one task at a time. Each task requires a Codex plan, human
 approval, bounded implementation, independent review, and an explicit commit
 decision. Never push unless requested.
 
-1. **Minimal prebuilt workflow and Father** — recheck the CLI end to end; add
-   only the smallest explicit `build` workflow; resolve an exact prebuilt plus
-   `build.json`; copy both into immutable run inputs; and convert Father retained
-   and cleanup to one builder-produced `.so`. Validate Ubuntu 22.04 with
-   `--no-acquire`. Ceiling: 350 changed text lines and 9 files.
+1. **Minimal prebuilt workflow and Father** — DONE (`33d0073`, `1490697`,
+   `7010c86`). `cli.py build` compiles Father on the builder and publishes
+   `rk.so` plus `build.json`; `run` verifies and stages both into the immutable
+   run before touching the victim. Compatibility is keyed on the profile's
+   pinned image checksum, not the kernel. Validated on Ubuntu 22.04 with
+   `--no-acquire`: build, idempotent rebuild, both scenarios, and the
+   fail-closed negative test. Actual cost 9 files and 545 changed text lines
+   against a 350-line ceiling that predated the scenario README, the source-lock
+   note, and the tests. The `build-isf` -> `builder` rename followed separately.
 2. **ptrace prebuilt conversion** — reuse Task 1's mechanism, remove victim-side
    compilation, and upload and execute the exact prebuilt. Validate Ubuntu 22.04
    with `--no-acquire`. Ceiling: 180 changed text lines and 5 files.
@@ -83,6 +87,10 @@ acquisitions one at a time:
 4. Diamorphine retained;
 5. Diamorphine cleanup.
 
+Leave about a minute between consecutive Father runs. The trigger source port
+54321 is fixed, so the host socket stays in `TIME_WAIT` and an immediate second
+run fails with `Address already in use` before reaching the backdoor check.
+
 After each run, verify repository revision, scenario and acquisition statuses,
 input hashes, acquisition hashes, EWF verification, and artifact sizes. Stop
 before investigation if any gate fails. Retain all older experiment directories
@@ -104,11 +112,10 @@ until replacement runs and investigations are accepted.
 
 ## Deferred unless explicitly reopened
 
-- Dynamic kernel-version verification for profile `kernel:` fields: Task 1
-  adds a static, human-verified `kernel:` field to `infra/profiles/ubuntu-22.04.yaml`
-  for pre-reset prebuilt-path resolution. Automatically resolving the actual
-  kernel the first time it hasn't been checked, and updating the static field
-  on a detected mismatch, is deferred for now;
+- Kernel identity for userland artifacts: rejected, not deferred. Task 1 keys
+  Father's compatibility on `image.checksum`, which both the builder and the
+  victim already derive from, so no profile carries a `kernel:` field. Task 3
+  records kernel and vermagic for Diamorphine's `.ko`, where they matter;
 - ftrace, Meterpreter, eBPF, CopyFail, ART, worms, timestomping, generalized
   cleanup levels, extra privilege-escalation scenarios, and broad hardening;
 - Fedora/SELinux, Timesketch, Velociraptor, AIDE/NSRL, graphs/ontologies, and
