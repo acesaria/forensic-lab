@@ -18,6 +18,24 @@ Runme investigation notebook.
 - Apply KISS: use short sequential steps and do not add speculative analysis,
   helpers, abstractions, or automation.
 
+## Shell history and Linux log examination
+
+- Every disk investigation performs a bounded lookup for command-history
+  files belonging to the relevant user accounts and root. Examine metadata
+  and content when present. Untimestamped history preserves command
+  text/order only; it does not establish per-command time, successful
+  execution, or completeness.
+- Every disk investigation inventories the principal Linux logs available
+  under `/var/log` and the persistent systemd journal. Examine only logs
+  relevant to the technique, users, services, and bounded case window.
+  Typical candidates include `auth.log`, `syslog`, `kern.log`, and
+  `audit.log` when present; names and availability vary by distribution.
+- Prefer the timeline investigation for broad temporal correlation and
+  structured journal parsing. Do not duplicate large log output in the disk
+  notebook.
+- Keep run-root `command_log.jsonl` and `terminal_transcript.txt` classified
+  as scenario provenance/validation, not disk-image forensic evidence.
+
 ## Runme style
 
 - Use ordinary, readable Bash. Avoid functions, arrays, complex loops, and
