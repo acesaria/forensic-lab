@@ -160,7 +160,7 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             path.write_text("{}\n", encoding="utf-8")
             fake_vm.state = "off"
             self.acquisition_path = str(path)
-            return self.acquisition_path
+            return self.acquisition_path, path, path
 
     def fake_interactive(*_args, **_kwargs):
         if failure_phase == "scenario" and scenario_id == "interactive_shell":

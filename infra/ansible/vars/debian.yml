@@ -5,13 +5,8 @@ isf_base_packages:
   - golang-go
 
 
-baseline_disable_services: []
-
-baseline_absent_pkgs:
-  - cloud-init
-
-# Packages baked into the lab baseline so offline scenarios can run their
-# compile/setup steps without network access (lab VM is on the isolated net).
+# Packages baked into the lab baseline. Scenario binaries are prepared on the
+# builder VM; the victim never compiles or installs during a run.
 baseline_present_pkgs:
   - build-essential
   - netcat-openbsd

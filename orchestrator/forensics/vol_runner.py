@@ -16,12 +16,6 @@ import subprocess
 from pathlib import Path
 
 from orchestrator.core import console
-from orchestrator.core.provenance import command_result
-
-
-def _isf_name(family: str, kernel_release: str) -> str:
-    # Mirrors orchestrator._isf_filename so build and resolve agree on the name.
-    return f"{family}_{kernel_release.replace('/', '_')}.json"
 
 
 def _run_vol_command(
@@ -29,10 +23,7 @@ def _run_vol_command(
     memory_path: Path,
     isf_path: Path,
     plugin: str,
-    extra_args: list[str] | None = None,
-    invocation: dict | None = None,
 ) -> list[dict]:
-    # Centralise Volatility JSON normalization and invocation provenance.
     cmd = [
         vol_bin,
         "-f",
@@ -42,31 +33,14 @@ def _run_vol_command(
         "-r",
         "json",
         plugin,
-        *(extra_args or []),
     ]
-    if invocation is not None:
-        invocation.update({"command": cmd, "status": "running"})
     try:
         result = subprocess.run(cmd, capture_output=True, text=True)
     except FileNotFoundError as exc:
-        if invocation is not None:
-            invocation.update(
-                {
-                    "status": "failed",
-                    "exit_status": None,
-                    "stdout": "",
-                    "stderr": str(exc),
-                }
-            )
         raise RuntimeError(
             "vol3: binary not found. Install volatility3 and ensure it is on PATH."
         ) from exc
-    if invocation is not None:
-        invocation.update(command_result(cmd, result, include_stdout=False))
     if result.returncode != 0:
-        if invocation is not None:
-            invocation["status"] = "failed"
-            invocation["stdout"] = result.stdout or ""
         raise RuntimeError(
             f"vol3 '{plugin}' failed (rc={result.returncode}):\n"
             f"{result.stderr.strip() or '(no output)'}"
@@ -74,9 +48,6 @@ def _run_vol_command(
     try:
         data = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
-        if invocation is not None:
-            invocation["status"] = "failed"
-            invocation["stdout"] = result.stdout or ""
         raise RuntimeError(f"vol3 '{plugin}' output is not valid JSON: {exc}") from exc
 
     if isinstance(data, dict) and isinstance(data.get("rows"), list):
@@ -84,22 +55,10 @@ def _run_vol_command(
     elif isinstance(data, list):
         raw_rows = data
     else:
-        if invocation is not None:
-            invocation["status"] = "failed"
-            invocation["stdout"] = result.stdout or ""
         raise RuntimeError(
             f"vol3 '{plugin}' JSON has an unsupported top-level structure"
         )
-    rows = [row for row in raw_rows if isinstance(row, dict)]
-    if invocation is not None:
-        invocation.update(
-            {
-                "status": "completed",
-                "result": "zero_results" if not rows else "results",
-                "row_count": len(rows),
-            }
-        )
-    return rows
+    return [row for row in raw_rows if isinstance(row, dict)]
 
 
 def first_present(row: dict, *keys: str) -> object | None:
@@ -123,15 +82,11 @@ class VolatilityRunner:
         self._vol_bin = resolved
         self._isf_dir = isf_dir
 
-    def resolve_isf(self, distro_id: str, kernel_release: str | None = None) -> Path:
+    def resolve_isf(self, distro_id: str) -> Path:
+        # vol3 selects the matching ISF inside -s by kernel banner, so this
+        # only has to prove the family has symbols at all and name one for
+        # the error/repro text.
         family = distro_id.split("-", 1)[0]
-        # An exact kernel match is required when several distros share a family
-        # prefix (ubuntu-22.04 and ubuntu-24.04 both glob as ubuntu_*); the
-        # lexically-last ISF would otherwise be the wrong kernel's symbols.
-        if kernel_release:
-            exact = self._isf_dir / _isf_name(family, kernel_release)
-            if exact.is_file():
-                return exact
         matches = sorted(self._isf_dir.glob(f"{family}_*.json"))
         if not matches:
             raise RuntimeError(
@@ -140,33 +95,14 @@ class VolatilityRunner:
             )
         return matches[-1]
 
-    def run_plugin(
-        self,
-        memory_path: Path,
-        distro_id: str,
-        plugin: str,
-        extra_args: list[str] | None = None,
-        kernel_release: str | None = None,
-        isf_path: Path | None = None,
-        invocation: dict | None = None,
-    ) -> list[dict]:
-        if isf_path is None:
-            isf_path = self.resolve_isf(distro_id, kernel_release)
-        return _run_vol_command(
-            self._vol_bin,
-            memory_path,
-            isf_path,
-            plugin,
-            extra_args,
-            invocation,
-        )
-
     def probe(self, memory_path: Path, distro_id: str) -> None:
         isf_path = self.resolve_isf(distro_id)
         repro = f"{self._vol_bin} -f {memory_path} -s {isf_path.parent} linux.pslist"
 
         try:
-            rows = self.run_plugin(memory_path, distro_id, "linux.pslist")
+            rows = _run_vol_command(
+                self._vol_bin, memory_path, isf_path, "linux.pslist"
+            )
         except RuntimeError as exc:
             raise RuntimeError(
                 f"Volatility ISF probe failed for {memory_path.name}. "

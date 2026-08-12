@@ -69,8 +69,8 @@ class ImageMetadata:
 @dataclass
 class AcquisitionManifest:
     # run_id is the unique per-run label "{distro}_{scenario}_{ts}" used as
-    # the experiment directory name under experiments_dir (which holds the
-    # dumps/ and analysis/ subtrees).
+    # the experiment directory name under experiments_dir, which holds the
+    # dumps/ subtree.
     run_id: str
     # scenario_id is the bare explicit scenario name (or "verify"); never has
     # a timestamp baked in. Use this for semantic queries / grouping.
@@ -87,8 +87,10 @@ class AcquisitionManifest:
 class Dumper:
     def __init__(self, paths: ProjectPaths) -> None:
         self._paths = paths
-        self.experiments_root = paths.experiments_dir
-        self.experiments_root.mkdir(parents=True, exist_ok=True)
+        paths.experiments_dir.mkdir(parents=True, exist_ok=True)
+
+    def _display(self, path: Path | str) -> str:
+        return os.path.relpath(path, self._paths.repo_root)
 
     # --- directory layout ------------------------------------------------
 
@@ -173,10 +175,9 @@ class Dumper:
             }
         )
         self._write_status(status_path, record)
-        display_path = os.path.relpath(dest, self._paths.repo_root)
         console.ok(
             f"memory dump done ({elapsed:.1f}s): "
-            f"{display_path}, {_format_bytes(size_bytes)}"
+            f"{self._display(dest)}, {_format_bytes(size_bytes)}"
         )
         return ImageMetadata(
             path=str(dest),
@@ -296,8 +297,7 @@ class Dumper:
         manifest_path = self.run_dir(run_id) / "acquisition.json"
         with open(manifest_path, "w") as f:
             json.dump(asdict(manifest), f, indent=2)
-        display_path = os.path.relpath(manifest_path, self._paths.repo_root)
-        console.ok(f"acquisition manifest written: {display_path}")
+        console.ok(f"acquisition manifest written: {self._display(manifest_path)}")
         return str(manifest_path)
 
     # --- private: disk acquisition steps ---------------------------------
@@ -467,10 +467,9 @@ class Dumper:
             size_info = (
                 f"{segment_count} segments, ewf {_format_bytes(ewf_total_size)} total"
             )
-        display_path = os.path.relpath(segments[0], self._paths.repo_root)
         console.ok(
             f"disk acquisition done ({elapsed:.1f}s): "
-            f"{display_path} "
+            f"{self._display(segments[0])} "
             f"(virtual {_format_bytes(virtual_size)}, {size_info})"
         )
 

@@ -21,6 +21,7 @@ VM lifecycle:
     is_running(vm_name) -> bool
     start_vm(vm_name) -> None
     shutdown_vm(vm_name, timeout) -> None
+    set_nat_link(vm_name, up) -> None
 
 Introspection:
     get_vm_ip(vm_name, timeout) -> str

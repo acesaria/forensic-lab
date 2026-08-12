@@ -8,7 +8,6 @@ import pytest
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.provenance import command_output
 from orchestrator.forensics.dumper import Dumper
-from orchestrator.forensics.pipeline_config import reported_version
 
 
 def test_memory_dump_precreates_readable_user_file_without_sudo(
@@ -124,7 +123,7 @@ def test_ewfverify_calculated_sha256_is_preserved(
         )
 
 
-def test_provenance_output_and_version_failures_remain_distinguishable(
+def test_provenance_output_failures_remain_distinguishable(
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
@@ -136,23 +135,6 @@ def test_provenance_output_and_version_failures_remain_distinguishable(
     assert command_output(["probe"], allow_nonzero=True) == (
         "version stdout\nversion stderr"
     )
-
-    tools = {"volatility3": "/opt/vol3"}
-    monkeypatch.setattr(
-        "orchestrator.forensics.pipeline_config.command_output",
-        lambda *_args, **kwargs: (
-            "Volatility 3 Framework version: 2.28.0"
-            if kwargs.get("allow_nonzero")
-            else None
-        ),
-    )
-    assert reported_version("volatility3", tools) == "2.28.0"
-
-    monkeypatch.setattr(
-        "orchestrator.forensics.pipeline_config.command_output",
-        lambda *_args, **_kwargs: "unrecognized version banner",
-    )
-    assert reported_version("volatility3", tools) is None
 
 
 def test_qemu_virtual_size_requires_positive_integer(
@@ -169,14 +151,3 @@ def test_qemu_virtual_size_requires_positive_integer(
         Dumper._qemu_virtual_size(Path("evidence.qcow2"))
 
     assert "qemu diagnostic" in str(exc.value)
-
-
-def test_volatility_version_parser_accepts_no_plugin_output(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    monkeypatch.setattr(
-        "orchestrator.forensics.pipeline_config.command_output",
-        lambda *_args, **_kwargs: "usage: vol.py [...]\nVolatility 3 Framework 2.28.0",
-    )
-
-    assert reported_version("volatility3", {"volatility3": "/opt/vol3"}) == "2.28.0"

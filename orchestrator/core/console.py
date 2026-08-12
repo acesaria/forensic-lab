@@ -21,9 +21,7 @@ Indentation
 Depth is implicit. `section()` and `section_end()` reset depth to 0;
 `step_header()` prints its header at depth 0 then opens depth 1, so every
 subsequent emit inside the step is auto-indented. `scope()` does the same for
-HOST/GUEST phases. Callers do not pass
-`indent=True` -- a `with console.indented():` block is the explicit escape
-hatch for anything that needs to nest deeper than the structural defaults.
+HOST/GUEST phases. Callers never pass an indent argument.
 
 State is held in a ContextVar so concurrent contexts (threads, asyncio
 tasks) cannot trample each other's depth.
@@ -43,9 +41,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from contextlib import contextmanager
 from contextvars import ContextVar
-from typing import Iterator
 
 _log = logging.getLogger("console")
 
@@ -64,9 +60,9 @@ _PROMPT_COLOR = "\033[32m"
 
 _INDENT_UNIT = "    "
 
-# Current indent depth. Mutated only by structural helpers and
-# by the indented() context manager. ContextVar (not a plain int) so a
-# future async or threaded caller can't corrupt the depth seen by another.
+# Current indent depth. Mutated only by the structural helpers below.
+# ContextVar (not a plain int) so a future async or threaded caller can't
+# corrupt the depth seen by another.
 _indent_level: ContextVar[int] = ContextVar("console_indent_level", default=0)
 
 
@@ -166,20 +162,3 @@ def scope(kind: str, label: str) -> None:
 def section_end() -> None:
     """Reset depth to 0. Closes a step_header block."""
     _indent_level.set(0)
-
-
-# --- explicit nesting ------------------------------------------------------
-
-
-@contextmanager
-def indented() -> Iterator[None]:
-    """
-    Push one extra indent level for the block. Escape hatch for callers that
-    need to nest deeper than the structural defaults; the context manager
-    pattern guarantees the level is restored even on exceptions.
-    """
-    token = _indent_level.set(_indent_level.get() + 1)
-    try:
-        yield
-    finally:
-        _indent_level.reset(token)

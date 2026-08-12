@@ -2,7 +2,7 @@
 orchestrator/core/orchestrator.py
 
 Coordinates the full experiment lifecycle. Sits above vm_manager and
-below attack modules -- it knows the sequence, not the details.
+below the scenario runners -- it knows the sequence, not the details.
 
 Public API
 ----------
@@ -34,7 +34,7 @@ or a step fails
 """
 
 from collections.abc import Callable
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -54,7 +54,7 @@ from orchestrator.core.config import (
 )
 from orchestrator.core import console
 from orchestrator.core.paths import ProjectPaths
-from orchestrator.core.provenance import command_output, file_sha256
+from orchestrator.core.provenance import command_output, file_sha256, utc_now
 from orchestrator.core.ssh_client import SSHClient
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper
@@ -137,11 +137,10 @@ class ForensicOrchestrator:
         isf_path = self._paths.isf_dir / isf_name
 
         if isf_path.exists():
-            display_path = os.path.relpath(isf_path, self.repo_root)
-            console.info(f"symbol file already present: {display_path}")
+            console.info(f"symbol file already present: {self._display(isf_path)}")
             return isf_path
 
-        self._build_isf_with_ephemeral_vm(
+        self._build_isf_on_builder(
             distro_id=distro_id,
             kernel_release=kernel_release,
             isf_name=isf_name,
@@ -150,8 +149,7 @@ class ForensicOrchestrator:
         if not isf_path.exists():
             raise RuntimeError(f"ISF build completed but output not found: {isf_path}")
 
-        display_path = os.path.relpath(isf_path, self.repo_root)
-        console.ok(f"ISF exported: {display_path}")
+        console.ok(f"ISF exported: {self._display(isf_path)}")
         return isf_path
 
     def build_father(self, distro_id: str) -> Path:
@@ -189,16 +187,6 @@ class ForensicOrchestrator:
             finally:
                 self.vm_manager.shutdown_vm(vm_name)
 
-            facts = dict(
-                line.removeprefix("FACT ").split("=", 1)
-                for line in stdout.splitlines()
-                if line.startswith("FACT ") and "=" in line
-            )
-            missing = [k for k in ("arch", "packages") if not facts.get(k, "").strip()]
-            if missing:
-                raise RuntimeError(
-                    f"builder reported no {', '.join(missing)}; build not published"
-                )
             record = self._build_record(
                 distro_id,
                 father.SCENARIO_ID,
@@ -212,20 +200,12 @@ class ForensicOrchestrator:
                     "sha256": file_sha256(father.BUILD_SCRIPT),
                     "hidden_prefix": father.HIDDEN_PREFIX,
                 },
-                facts,
+                _builder_facts(stdout),
+            )
+            cache_dir = self._publish_build(
+                distro_id, father.SCENARIO_ID, (artifact,), record
             )
 
-            cache_dir = self._prebuilt_cache_dir(distro_id, father.SCENARIO_ID)
-            new_dir = cache_dir.with_name(f".{cache_dir.name}.new")
-            shutil.rmtree(new_dir, ignore_errors=True)
-            new_dir.mkdir(parents=True)
-            shutil.copy2(artifact, new_dir / father.ARTIFACT_NAME)
-            (new_dir / "build.json").write_text(
-                json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-            os.rename(new_dir, cache_dir)
-
-        console.ok(f"published: {self._display(cache_dir)}")
         return cache_dir / father.ARTIFACT_NAME
 
     def build_ptrace_fa(self, distro_id: str) -> Path:
@@ -271,16 +251,6 @@ class ForensicOrchestrator:
             finally:
                 self.vm_manager.shutdown_vm(vm_name)
 
-            facts = dict(
-                line.removeprefix("FACT ").split("=", 1)
-                for line in stdout.splitlines()
-                if line.startswith("FACT ") and "=" in line
-            )
-            missing = [k for k in ("arch", "packages") if not facts.get(k, "").strip()]
-            if missing:
-                raise RuntimeError(
-                    f"builder reported no {', '.join(missing)}; build not published"
-                )
             record = self._build_record(
                 distro_id,
                 ptrace.SCENARIO_ID,
@@ -295,21 +265,12 @@ class ForensicOrchestrator:
                     "sha256": file_sha256(ptrace.BUILD_SCRIPT),
                     "target_hex": target_hex,
                 },
-                facts,
+                _builder_facts(stdout),
+            )
+            cache_dir = self._publish_build(
+                distro_id, ptrace.SCENARIO_ID, artifacts, record
             )
 
-            cache_dir = self._prebuilt_cache_dir(distro_id, ptrace.SCENARIO_ID)
-            new_dir = cache_dir.with_name(f".{cache_dir.name}.new")
-            shutil.rmtree(new_dir, ignore_errors=True)
-            new_dir.mkdir(parents=True)
-            for artifact in artifacts:
-                shutil.copy2(artifact, new_dir / artifact.name)
-            (new_dir / "build.json").write_text(
-                json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
-            )
-            os.rename(new_dir, cache_dir)
-
-        console.ok(f"published: {self._display(cache_dir)}")
         return cache_dir / ptrace.ARTIFACT_NAMES[0]
 
     def _build_record(
@@ -325,7 +286,7 @@ class ForensicOrchestrator:
         return {
             "schema": "forensic-lab.build_manifest.v1",
             "scenario": scenario_id,
-            "built_at": _utc_now(),
+            "built_at": utc_now(),
             "artifacts": [
                 {"filename": path.name, "sha256": file_sha256(path)}
                 for path in artifacts
@@ -344,6 +305,27 @@ class ForensicOrchestrator:
 
     def _prebuilt_cache_dir(self, distro_id: str, scenario_id: str) -> Path:
         return self._paths.shared_dir / "prebuilt" / distro_id / scenario_id
+
+    def _publish_build(
+        self,
+        distro_id: str,
+        scenario_id: str,
+        artifacts: tuple[Path, ...],
+        record: dict,
+    ) -> Path:
+        """Install artifacts + build.json into the cache under one rename."""
+        cache_dir = self._prebuilt_cache_dir(distro_id, scenario_id)
+        new_dir = cache_dir.with_name(f".{cache_dir.name}.new")
+        shutil.rmtree(new_dir, ignore_errors=True)
+        new_dir.mkdir(parents=True)
+        for artifact in artifacts:
+            shutil.copy2(artifact, new_dir / artifact.name)
+        (new_dir / "build.json").write_text(
+            json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
+        os.rename(new_dir, cache_dir)
+        console.ok(f"published: {self._display(cache_dir)}")
+        return cache_dir
 
     def _resolve_prebuilt_input(
         self, distro_id: str, scenario_id: str, filenames: tuple[str, ...]
@@ -428,6 +410,16 @@ class ForensicOrchestrator:
                 f"--distro {distro_id} --scenario {build_scenario}"
             )
 
+        # Every run records its exact revision; one that cannot is not a run.
+        revision = command_output(
+            ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
+        )
+        if revision is None:
+            raise RuntimeError(
+                f"cannot record the repository revision: "
+                f"'git -C {self.repo_root} rev-parse HEAD' failed"
+            )
+
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
         backdoor_cleanup: Callable[[], None] | None = None
@@ -447,7 +439,8 @@ class ForensicOrchestrator:
 
             run_id = _make_run_id(distro_id, scenario_id)
             run_root = self._paths.experiments_dir / run_id
-            run_root.mkdir(parents=True, exist_ok=True)
+            # exist_ok=False: an accepted run directory is never written twice.
+            run_root.mkdir(parents=True)
             manifest_path = run_root / "manifest.json"
             command_log_path = run_root / "command_log.jsonl"
             transcript_path = run_root / "terminal_transcript.txt"
@@ -463,9 +456,6 @@ class ForensicOrchestrator:
                 ]:
                     raise RuntimeError("staged artifacts differ from verified build")
 
-            revision = command_output(
-                ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
-            )
             manifest = {
                 "schema": "forensic-lab.run_manifest",
                 "version": 3,
@@ -482,7 +472,7 @@ class ForensicOrchestrator:
                     "commit": revision,
                 },
                 "timestamps": {
-                    "scenario_started_at": _utc_now(),
+                    "scenario_started_at": utc_now(),
                 },
                 "status": "running",
                 "scenario_status": "running",
@@ -515,7 +505,7 @@ class ForensicOrchestrator:
                             artifact_path=(
                                 run_root / input_record["artifacts"][0]["path"]
                             ),
-                            build_meta=prepared_input[1],
+                            build_record=prepared_input[1],
                         )
                     elif is_ptrace_fa:
                         assert prepared_input is not None and input_record is not None
@@ -527,7 +517,7 @@ class ForensicOrchestrator:
                                 run_root / item["path"]
                                 for item in input_record["artifacts"]
                             ),
-                            build_meta=prepared_input[1],
+                            build_record=prepared_input[1],
                         )
                     else:
                         run_interactive_shell(
@@ -536,7 +526,7 @@ class ForensicOrchestrator:
                             command_log_path=command_log_path,
                         )
             except Exception:
-                ended_at = _utc_now()
+                ended_at = utc_now()
                 manifest.update(
                     status="failed", scenario_status="failed", failed_phase="scenario"
                 )
@@ -557,13 +547,13 @@ class ForensicOrchestrator:
             if has_scenario_cleanup:
                 manifest["scenario_facts"] = facts
             manifest["scenario_status"] = "completed"
-            manifest["timestamps"]["scenario_ended_at"] = _utc_now()
+            manifest["timestamps"]["scenario_ended_at"] = utc_now()
             _write_run_manifest(manifest_path, manifest)
 
             acquisition_path = None
             if acquire:
                 try:
-                    acquisition_path = self._run_acquisition(
+                    acquisition_path, _, _ = self._run_acquisition(
                         vm_name,
                         run_id,
                         scenario_id,
@@ -576,7 +566,7 @@ class ForensicOrchestrator:
                     _write_run_manifest(manifest_path, manifest)
                 except Exception:
                     manifest.update(status="failed", failed_phase="acquisition")
-                    manifest["timestamps"]["run_ended_at"] = _utc_now()
+                    manifest["timestamps"]["run_ended_at"] = utc_now()
                     _write_run_manifest(manifest_path, manifest)
                     raise
             elif has_scenario_cleanup:
@@ -586,10 +576,17 @@ class ForensicOrchestrator:
                 vm_off = True
 
             manifest["status"] = "completed"
-            manifest["timestamps"]["run_ended_at"] = _utc_now()
+            manifest["timestamps"]["run_ended_at"] = utc_now()
             _write_run_manifest(manifest_path, manifest)
 
-            _print_experiment_summary(self.repo_root, run_root, manifest, vm_off)
+            console.step_header("summary")
+            console.ok(f"run: {self._display(run_root)}")
+            console.info(
+                "acquisition: "
+                + ("completed" if acquire else "intentionally skipped (--no-acquire)")
+            )
+            console.info(f"final VM state: {'off' if vm_off else 'running'}")
+            console.section_end()
             return acquisition_path
         finally:
             if has_scenario_cleanup:
@@ -642,41 +639,30 @@ class ForensicOrchestrator:
             "kernel": None,
             "timezone": "UTC",
         }
-        try:
-            code, out, _ = ssh.run(cmd, timeout=30)
-        except Exception:
-            return facts
-        if code != 0:
-            return facts
+        # No swallowing: a manifest recording kernel=null under a completed run
+        # is a false evidence record.
+        out = ssh.run_checked(cmd, timeout=30)
         for line in out.splitlines():
             key, sep, value = line.partition("=")
             if sep and key.strip() in facts and value.strip():
                 facts[key.strip()] = value.strip()
         return facts
 
-    def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> dict:
+    def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> None:
         """
-        Run the Plaso pipeline over the acquired disk and return the events.
-        Keep timeline.plaso/timeline.jsonl in the caller's analysis directory
-        and return invocation provenance with the events.
+        Run the Plaso pipeline over the acquired disk, leaving
+        timeline.plaso/timeline.jsonl in the caller's analysis directory.
         """
-
-        storage_path = analysis_dir / "timeline.plaso"
         timeline_path = analysis_dir / "timeline.jsonl"
-
-        file_filter = default_linux_filter()
-        result = run_timeline(
+        run_timeline(
             disk_path=disk_path,
-            storage_path=storage_path,
+            storage_path=analysis_dir / "timeline.plaso",
             output_path=timeline_path,
             log2timeline_bin=self._raw_tools["log2timeline"],
             psort_bin=self._raw_tools["psort"],
-            file_filter=file_filter,
+            file_filter=default_linux_filter(),
         )
-        events = result["events"]
-        display_path = os.path.relpath(timeline_path, self.repo_root)
-        console.ok(f"timeline built: {len(events)} event(s) ({display_path})")
-        return result
+        console.ok(f"timeline built: {self._display(timeline_path)}")
 
     # --- teardown --------------------------------------------------------
 
@@ -737,15 +723,15 @@ class ForensicOrchestrator:
         self.vm_manager.shutdown_vm(lab_vm_name)
         return kernel_release
 
-    def _build_isf_with_ephemeral_vm(
+    def _build_isf_on_builder(
         self,
         distro_id: str,
         kernel_release: str,
         isf_name: str,
     ) -> None:
         """
-        Create or reuse the build VM, run the ISF build playbook, then stop it.
-        Lab VM is not touched here.
+        Create or reuse the builder VM, run the ISF build playbook, then stop
+        it. The builder is retained. Lab VM is not touched here.
         """
         build_vm_name = self._ensure_builder_vm(distro_id)
         try:
@@ -787,11 +773,9 @@ class ForensicOrchestrator:
         # Compute run_id ONCE so dumps/ and analysis/ share the same timestamp.
         run_id = _make_run_id(distro_id, VERIFY_SCENARIO)
 
-        manifest_path = self._run_acquisition(vm_name, run_id, VERIFY_SCENARIO)
-
-        manifest = json.loads(Path(manifest_path).read_text())
-        memory_path = Path(manifest["memory_image"]["path"])
-        disk_path = Path(manifest["disk_image"]["path"])
+        _, memory_path, disk_path = self._run_acquisition(
+            vm_name, run_id, VERIFY_SCENARIO
+        )
 
         console.step(f"probing acquired images for {distro_id}...")
         self._vol_runner.probe(memory_path, distro_id)
@@ -821,11 +805,12 @@ class ForensicOrchestrator:
         scenario_id: str,
         *,
         before_shutdown: Callable[[], None] | None = None,
-    ) -> str:
+    ) -> tuple[str, Path, Path]:
         """
         Acquire memory (VM ON), then shut the guest down and acquire its disk
         host-side from the released qcow2. Run before_shutdown between memory
-        capture and shutdown when provided. Returns the manifest path.
+        capture and shutdown when provided.
+        Returns (manifest path, memory image, disk image).
         """
         vm_disk_path = self.vm_manager.get_disk_path(vm_name)
 
@@ -845,9 +830,10 @@ class ForensicOrchestrator:
                 before_shutdown()
             self.vm_manager.shutdown_vm(vm_name)
             disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
-            return self.dumper.write_manifest(
+            manifest_path = self.dumper.write_manifest(
                 run_id, scenario_id, memory_meta, disk_meta
             )
+            return manifest_path, memory_dump_path, Path(disk_meta.path)
         finally:
             console.section_end()
 
@@ -855,39 +841,19 @@ class ForensicOrchestrator:
 # --- module helpers ------------------------------------------------------
 
 
-def _print_experiment_summary(
-    repo_root: Path,
-    run_root: Path,
-    manifest: dict[str, Any],
-    vm_off: bool,
-) -> None:
-    run_display = Path(os.path.relpath(run_root, repo_root))
-    scenario_id = manifest["scenario_id"]
-    platform = manifest["platform"]
-    artifacts = manifest["artifacts"]
-    console.step_header("summary")
-    console.ok("scenario status: completed")
-    if scenario_id == INTERACTIVE_SHELL_SCENARIO:
-        console.ok(f"console transcript: {run_display / artifacts['terminal_transcript']}")
-    elif scenario_id == father.CLEANUP_SCENARIO_ID:
-        console.info(f"scenario: {scenario_id}")
-    console.info(f"distro/profile: {platform['distro_id']} / {platform['profile']}")
-
-    if not manifest["acquisition_requested"]:
-        console.info("acquisition: intentionally skipped (--no-acquire)")
-    else:
-        console.ok("acquisition status: completed")
-
-    console.info(f"final VM state: {'off' if vm_off else 'running'}")
-    console.info(f"run directory: {run_display}")
-    console.info(f"root manifest: {run_display / 'manifest.json'}")
-    console.section_end()
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
-        "+00:00", "Z"
+def _builder_facts(stdout: str) -> dict[str, str]:
+    """Parse the build script's `FACT key=value` lines. Fails closed."""
+    facts = dict(
+        line.removeprefix("FACT ").split("=", 1)
+        for line in stdout.splitlines()
+        if line.startswith("FACT ") and "=" in line
     )
+    missing = [k for k in ("arch", "packages") if not facts.get(k, "").strip()]
+    if missing:
+        raise RuntimeError(
+            f"builder reported no {', '.join(missing)}; build not published"
+        )
+    return facts
 
 
 def _write_run_manifest(path: Path, manifest: dict[str, Any]) -> None:

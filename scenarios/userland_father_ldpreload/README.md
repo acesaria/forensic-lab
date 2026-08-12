@@ -98,5 +98,5 @@ The cleanup treatment uses the same runner and lifecycle:
 ```
 
 Omit `--no-acquire` for the established memory-while-on and disk-while-off
-acquisition followed by raw TSK, Plaso, and Volatility extraction. The scenario
-is only for an isolated disposable thesis VM.
+acquisition. The run stops there; TSK, Plaso, and Volatility examination is
+manual. The scenario is only for an isolated disposable thesis VM.

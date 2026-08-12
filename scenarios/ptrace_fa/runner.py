@@ -50,7 +50,7 @@ def run_ptrace_fa(
     *,
     command_log_path: Path,
     artifact_paths: tuple[Path, Path],
-    build_meta: dict,
+    build_record: dict,
 ) -> tuple[dict, Callable[[], None]]:
     """Execute the prepared PoC, inject shellcode, and validate the shell."""
     transcript_path.touch()
@@ -79,8 +79,8 @@ def run_ptrace_fa(
             ).combined_output
             try:
                 expected = (
-                    f"{build_meta['target']['distro_id']} "
-                    f"{build_meta['target']['arch']}"
+                    f"{build_record['target']['distro_id']} "
+                    f"{build_record['target']['arch']}"
                 )
                 if guest_identity != expected:
                     raise RuntimeError(

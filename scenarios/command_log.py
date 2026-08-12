@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
+from orchestrator.core.provenance import utc_now
 from orchestrator.core.ssh_client import SSHTerminal, TerminalCommandResult
 
 
@@ -25,7 +25,7 @@ def run_logged_command(
             path,
             {
                 "operation": "terminal",
-                "recorded_at": _utc_now(),
+                "recorded_at": utc_now(),
                 "status": "failure",
                 "command": command,
                 "error": str(exc),
@@ -39,7 +39,7 @@ def run_logged_command(
         status = "success" if result.exit_code == 0 else "failure"
     row = {
         "operation": "terminal",
-        "recorded_at": _utc_now(),
+        "recorded_at": utc_now(),
         "status": status,
         "command": command,
         "exit_code": result.exit_code,
@@ -61,7 +61,7 @@ def record_operation(
     """Record one non-terminal scenario operation."""
     row = {
         "operation": operation,
-        "recorded_at": _utc_now(),
+        "recorded_at": utc_now(),
         "status": "failure" if error is not None else "success",
     }
     if error is not None:
@@ -74,9 +74,3 @@ def _append_record(path: Path | None, row: dict[str, object]) -> None:
         return
     with path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(row, sort_keys=True) + "\n")
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
-        "+00:00", "Z"
-    )

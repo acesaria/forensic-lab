@@ -42,9 +42,7 @@ review its acquisition and examination:
 - repository revision, scenario, distro, timestamps, baseline identity, and
   workflow status;
 - append-only command and terminal records;
-- disk and memory acquisition commands, hashes, verification, and status;
-- raw-tool versions, commands, output paths, hashes, zero results, and failures;
-  and
+- disk and memory acquisition commands, hashes, verification, and status; and
 - analyst records that cite exact run-relative evidence locations.
 
 The run-root manifest is the lifecycle index. `dumps/acquisition.json` is the

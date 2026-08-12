@@ -8,9 +8,9 @@ User-tunable roots come from config.yaml (machine-local):
 
 Derived locations are computed as properties so callers never re-derive shared
 or state paths on their own. Each experiment owns one directory under
-experiments_dir, named by its `run_id` ("{distro}_{scenario}_{ts}"), holding
-both a dumps/ subtree (raw acquisition) and an analysis/ subtree (derived
-results), built via run_dumps_dir() / run_analysis_dir().
+experiments_dir, named by its `run_id` ("{distro}_{scenario}_{ts}"), holding a
+dumps/ subtree (raw acquisition) via run_dumps_dir(). run_analysis_dir() is
+used only by the setup-time Plaso probe; a scenario run creates no analysis/.
 """
 
 from dataclasses import dataclass
@@ -43,10 +43,6 @@ class ProjectPaths:
         return self.shared_dir / "experiments"
 
     @property
-    def baselines_dir(self) -> Path:
-        return self.shared_dir / "baselines"
-
-    @property
     def isf_dir(self) -> Path:
         return self.shared_dir / "isf"
 
@@ -61,8 +57,7 @@ class ProjectPaths:
         return self.state_dir / "disks"
 
     # --- per-run -------------------------------------------------------
-    # One directory per experiment (named by run_id), split into raw
-    # acquisition (dumps/) and derived analysis (analysis/) subtrees.
+    # One directory per experiment, named by run_id.
 
     def run_dumps_dir(self, run_id: str) -> Path:
         return self.experiments_dir / run_id / "dumps"

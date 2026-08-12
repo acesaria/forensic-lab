@@ -1,17 +1,14 @@
 # orchestrator/forensics/plaso_runner.py
 #
 # Thin wrapper around Plaso (log2timeline + psort).
-# No classes, no state; this module only produces and loads the raw JSON-line
-# timeline used for manual investigation.
+# No classes, no state; this module only produces the raw JSON-line timeline
+# used for manual investigation.
 #
-import json
 import logging
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-
-from orchestrator.core.provenance import command_result
 
 _log = logging.getLogger(__name__)
 
@@ -38,7 +35,7 @@ def run_log2timeline(
     log2timeline_bin: str = "log2timeline",
     partitions: str = "all",
     file_filter: Path | None = None,
-) -> dict:
+) -> None:
     binary = resolve_binary(log2timeline_bin)
     storage_path.parent.mkdir(parents=True, exist_ok=True)
     log_path = storage_path.parent / "log2timeline.log"
@@ -78,35 +75,20 @@ def run_log2timeline(
         if staged_log.exists():
             shutil.move(str(staged_log), log_path)
         if result.returncode != 0:
-            error = RuntimeError(
+            raise RuntimeError(
                 f"log2timeline failed for {disk_path.name} "
                 f"(see {log_path}):\n"
                 f"{result.stderr.strip() or '(no output)'}"
             )
-            error.invocations = {
-                "log2timeline": command_result(
-                    cmd, result, log_path=str(log_path)
-                )
-            }
-            raise error
     finally:
         shutil.rmtree(log_stage, ignore_errors=True)
-
-    return command_result(
-        cmd,
-        result,
-        storage_path=str(storage_path),
-        disk_path=str(disk_path),
-        parsers=parsers,
-        file_filter=str(file_filter) if file_filter is not None else None,
-    )
 
 
 def run_psort(
     storage_path: Path,
     output_path: Path,
     psort_bin: str = "psort",
-) -> dict:
+) -> None:
     binary = resolve_binary(psort_bin)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -114,41 +96,10 @@ def run_psort(
     _log.debug("psort: %s", " ".join(cmd))
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
-        error = RuntimeError(
+        raise RuntimeError(
             f"psort failed for {storage_path.name}:\n"
             f"{result.stderr.strip() or '(no output)'}"
         )
-        error.invocations = {
-            "psort": command_result(
-                cmd, result, output_path=str(output_path)
-            )
-        }
-        raise error
-
-    return command_result(
-        cmd,
-        result,
-        storage_path=str(storage_path),
-        output_path=str(output_path),
-        format="json_line",
-    )
-
-
-def read_timeline(output_path: Path) -> list[dict]:
-    events: list[dict] = []
-    with output_path.open("r", encoding="utf-8") as fh:
-        for lineno, line in enumerate(fh, start=1):
-            if not line.strip():
-                continue
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise RuntimeError(
-                    f"invalid JSON in {output_path} at line {lineno}: {exc}"
-                ) from exc
-            if isinstance(entry, dict):
-                events.append(entry)
-    return events
 
 
 def run_timeline(
@@ -159,36 +110,19 @@ def run_timeline(
     log2timeline_bin: str = "log2timeline",
     psort_bin: str = "psort",
     file_filter: Path | None = None,
-) -> dict:
-    log2timeline_result = run_log2timeline(
+) -> None:
+    run_log2timeline(
         disk_path=disk_path,
         storage_path=storage_path,
         parsers=parsers,
         log2timeline_bin=log2timeline_bin,
         file_filter=file_filter,
     )
-    try:
-        psort_result = run_psort(
-            storage_path=storage_path,
-            output_path=output_path,
-            psort_bin=psort_bin,
-        )
-    except RuntimeError as exc:
-        exc.invocations = {
-            "log2timeline": log2timeline_result,
-            **getattr(exc, "invocations", {}),
-        }
-        raise
-    try:
-        events = read_timeline(output_path)
-    except RuntimeError as exc:
-        exc.invocations = {
-            "log2timeline": log2timeline_result,
-            "psort": psort_result,
-        }
-        raise
-    return {
-        "log2timeline": log2timeline_result,
-        "psort": psort_result,
-        "events": events,
-    }
+    run_psort(
+        storage_path=storage_path,
+        output_path=output_path,
+        psort_bin=psort_bin,
+    )
+    # The probe has to prove the toolchain emitted events, not just exited 0.
+    if not output_path.is_file() or output_path.stat().st_size == 0:
+        raise RuntimeError(f"psort produced no timeline events: {output_path}")

@@ -4,8 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import subprocess
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+
+def utc_now() -> str:
+    """ISO-8601 UTC with millisecond resolution; the record timestamp format."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace(
+        "+00:00", "Z"
+    )
 
 
 def file_sha256(path: Path) -> str:
@@ -59,8 +67,3 @@ def command_output(
         if stream and stream.strip()
     )
     return output or None
-
-
-def excerpt(text: str, limit: int = 1200) -> str:
-    value = (text or "").strip()
-    return value if len(value) <= limit else value[: limit - 3] + "..."

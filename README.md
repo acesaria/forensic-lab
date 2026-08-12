@@ -14,8 +14,9 @@ reconstruction system.
 
 ## Current repository surface
 
-The CLI exposes `init`, `setup`, `run`, and `destroy`. `run` dispatches directly
-to one of four scenario keys:
+The CLI exposes `init`, `setup`, `build`, `run`, and `destroy`. `build` publishes
+a scenario's prebuilt artifact and is required before running that scenario.
+`run` dispatches directly to one of four scenario keys:
 
 - `interactive_shell`;
 - `ptrace_fa`;
@@ -83,6 +84,8 @@ Then use the repository interpreter:
 ```bash
 .venv/bin/python cli.py init
 .venv/bin/python cli.py setup --distro ubuntu-22.04
+.venv/bin/python cli.py build --distro ubuntu-22.04 \
+  --scenario userland_father_ldpreload
 .venv/bin/python cli.py run --distro ubuntu-22.04 \
   --scenario userland_father_ldpreload
 ```

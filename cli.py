@@ -14,6 +14,7 @@ from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
+from orchestrator.forensics.pipeline_config import raw_tool_paths
 from scenarios.interactive_shell.runner import SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO
 from scenarios.ptrace_fa.runner import SCENARIO_ID as PTRACE_FA_SCENARIO
 from scenarios.userland_father_ldpreload.runner import SCENARIO_ID as FATHER_SCENARIO
@@ -200,8 +201,6 @@ def main() -> None:
     # never raw host_cfg path entries.
     cfg = load_config(repo_root)
     host_cfg = cfg["host"]
-    from orchestrator.forensics.pipeline_config import raw_tool_paths
-
     raw_tools = raw_tool_paths(host_cfg)
     _check_prerequisites(
         args.command, raw_tools, acquire=getattr(args, "acquire", True)
@@ -257,7 +256,7 @@ def main() -> None:
                 orchestrator.prepare_lab(distro_id)
                 console.section("volatility symbols")
                 orchestrator.build_isf(distro_id)
-                console.section("raw extraction verification")
+                console.section("tool verification")
                 orchestrator.verify_pipeline(distro_id)
                 console.ok(f"setup complete for '{distro_id}'")
 

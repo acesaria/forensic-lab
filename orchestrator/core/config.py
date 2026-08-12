@@ -31,7 +31,7 @@ CLOUD_INIT_DIR = Path("infra/cloud-init")
 CLOUD_INIT_USER_DATA = CLOUD_INIT_DIR / "user-data"
 CLOUD_INIT_NETWORK_CONFIG = CLOUD_INIT_DIR / "network-config"
 
-# VM name prefixes -- must match naming convention in README
+# VM name prefixes -- libvirt domains are "<prefix>-<distro_id>"
 LAB_VM_PREFIX = "lab"
 BUILD_VM_PREFIX = "builder"
 

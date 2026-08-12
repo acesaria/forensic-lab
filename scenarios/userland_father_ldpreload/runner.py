@@ -56,7 +56,7 @@ def run_father(
     command_log_path: Path,
     scenario_id: str,
     artifact_path: Path,
-    build_meta: dict,
+    build_record: dict,
 ) -> tuple[dict, Callable[[], None]]:
     """Run Father visibly in Bash, then validate its native accept-hook shell."""
     if scenario_id not in (SCENARIO_ID, CLEANUP_SCENARIO_ID):
@@ -65,7 +65,7 @@ def run_father(
     cleanup = scenario_id == CLEANUP_SCENARIO_ID
     transcript_path.touch()
     console.scope("HOST", "stage Father artifact")
-    source = build_meta["source"]
+    source = build_record["source"]
     _upload_artifact(ssh, command_log_path, artifact_path)
 
     terminal = ssh.open_terminal()
@@ -91,8 +91,8 @@ def run_father(
             ).combined_output
             try:
                 expected = (
-                    f"{build_meta['target']['distro_id']} "
-                    f"{build_meta['target']['arch']}"
+                    f"{build_record['target']['distro_id']} "
+                    f"{build_record['target']['arch']}"
                 )
                 if guest_identity != expected:
                     raise RuntimeError(

@@ -20,7 +20,6 @@ from orchestrator.core import console
 
 
 def _filename_from_url(url: str) -> str:
-    # TODO: Add release number to filename to avoid collisions between different releases
     return url.rstrip("/").split("/")[-1]
 
 
@@ -30,29 +29,6 @@ def _compute_checksum(path: Path, algo: str) -> str:
         for chunk in iter(lambda: fh.read(4 * 1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
-
-
-def _expected_checksum(checksum_url: str, filename: str, algo: str) -> str:
-    """
-    Fetch the remote checksum file and extract the hash for *filename*.
-
-    Ubuntu SHA256SUMS format:   <hash>  <filename>
-    Debian  SHA512SUMS format:  <hash>  <filename>
-    Both are the same line structure, so one parser handles both.
-    """
-    resp = requests.get(checksum_url, timeout=30)
-    resp.raise_for_status()
-
-    for line in resp.text.splitlines():
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        # the filename in the manifest may have a leading "./" or "*"
-        manifest_name = parts[-1].lstrip("./").lstrip("*")
-        if manifest_name == filename:
-            return parts[0].lower()
-
-    raise RuntimeError(f"Checksum for '{filename}' not found in {checksum_url}")
 
 
 def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
@@ -70,10 +46,8 @@ def ensure_image(profile: dict[str, Any], images_dir: Path) -> Path:
     algo: str = img_cfg["checksum_algo"]
     filename: str = img_cfg.get("filename") or _filename_from_url(url)
     dest = images_dir / filename
-    expected = str(
-        img_cfg.get("checksum")
-        or _expected_checksum(img_cfg["checksum_url"], _filename_from_url(url), algo)
-    ).lower()
+    # Every profile pins its own checksum; it is also the build compatibility key.
+    expected = str(img_cfg["checksum"]).lower()
 
     if dest.exists():
         console.info(f"image already present: {dest}")

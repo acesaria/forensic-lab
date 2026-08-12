@@ -58,18 +58,12 @@ class VMManager:
     # --- image and VM creation -------------------------------------------
 
     def ensure_base_image(self, profile: dict[str, Any]) -> Path:
-        img_cfg = profile["image"]
-        url = img_cfg["url"]
-        filename = img_cfg.get("filename") or url.rstrip("/").split("/")[-1]
-        dest = self._images_dir / filename
-        distro_id = profile.get("distro_id", "unknown")
         try:
             return ensure_image(profile, self._images_dir)
         except OSError as exc:
-            if dest.exists():
-                dest.unlink()
             raise RuntimeError(
-                f"download: failed to fetch image for '{distro_id}': {exc}\n"
+                f"download: failed to fetch image for "
+                f"'{profile.get('distro_id', 'unknown')}': {exc}\n"
                 "Check host network connectivity."
             ) from exc
 
