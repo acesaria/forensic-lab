@@ -59,12 +59,10 @@ def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
         ("userland_father_ldpreload_cleanup", True, None, 0, True, "off"),
         ("interactive_shell", False, "scenario", 0, False, "on"),
         ("interactive_shell", True, None, 0, False, "off"),
-        ("userland_father_ldpreload", True, "raw_extraction", 0, True, "off"),
         ("ptrace_fa", False, None, 1, True, "off"),
         ("ptrace_fa", False, "scenario", 1, False, "off"),
         ("ptrace_fa", True, None, 0, True, "off"),
         ("ptrace_fa", True, "acquisition", 1, True, "off"),
-        ("ptrace_fa", True, "raw_extraction", 0, True, "off"),
     ],
 )
 def test_explicit_scenarios_preserve_lifecycle_differences(
@@ -164,19 +162,6 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             self.acquisition_path = str(path)
             return self.acquisition_path
 
-        def _extract_raw_outputs(self, run_id, *_args, **_kwargs):
-            assert fake_vm.state == "off"
-            if failure_phase == "raw_extraction":
-                raise error
-            path = tmp_path / run_id / "analysis" / "raw_extraction_status.json"
-            path.parent.mkdir(parents=True)
-            path.write_text("{}\n", encoding="utf-8")
-            return {
-                "volatility": {"status": "completed"},
-                "tsk": {"status": "completed"},
-                "plaso": {"status": "completed"},
-            }, path
-
     def fake_interactive(*_args, **_kwargs):
         if failure_phase == "scenario" and scenario_id == "interactive_shell":
             raise error
@@ -266,25 +251,13 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
                 manifest["artifacts"]["acquisition_manifest"]
                 == "dumps/acquisition.json"
             )
-            assert (
-                manifest["artifacts"]["raw_extraction_status"]
-                == "analysis/raw_extraction_status.json"
-            )
         else:
             assert result is None
             assert "acquisition_manifest" not in manifest["artifacts"]
-            assert "raw_extraction_status" not in manifest["artifacts"]
-    if failure_phase in ("acquisition", "raw_extraction"):
+    if failure_phase == "acquisition":
         assert manifest["scenario_status"] == "completed"
     if failure_phase == "acquisition":
         assert "acquisition_manifest" not in manifest["artifacts"]
-        assert "raw_extraction_status" not in manifest["artifacts"]
-    elif failure_phase == "raw_extraction":
-        assert (
-            manifest["artifacts"]["acquisition_manifest"]
-            == "dumps/acquisition.json"
-        )
-        assert "raw_extraction_status" not in manifest["artifacts"]
     if cleanup_socket is not None:
         assert cleanup_socket.closed
         assert events.index("backdoor close") < events.index("shutdown")
@@ -353,64 +326,3 @@ def test_father_wrong_image_does_not_reset_victim(
             "userland_father_ldpreload",
         )
     assert not resets and not FakePaths.experiments_dir.exists()
-
-
-def test_raw_volatility_status_records_resolved_isf(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-):
-    isf_contents = b'{"symbols": "test"}\n'
-    isf_path = tmp_path / "ubuntu_6.8.0-test.json"
-    isf_path.write_bytes(isf_contents)
-
-    class FakeVolatility:
-        resolve_calls = 0
-
-        def resolve_isf(self, distro_id, kernel_release=None):
-            assert (distro_id, kernel_release) == ("ubuntu-22.04", "6.8.0-test")
-            self.resolve_calls += 1
-            return isf_path
-
-        def run_plugin(self, _memory, _distro, _plugin, **kwargs):
-            assert kwargs["isf_path"] == isf_path.resolve()
-            kwargs["invocation"].update(
-                status="completed", result="zero_results", row_count=0
-            )
-            return []
-
-    class FakeOrchestrator:
-        repo_root = tmp_path
-        _vol_runner = FakeVolatility()
-        _sleuth_runner = object()
-        _raw_tools = {}
-
-    acquisition_path = tmp_path / "acquisition.json"
-    acquisition_path.write_text(
-        '{"memory_image":{"path":"memory.raw"},'
-        '"disk_image":{"path":"disk.E01"}}',
-        encoding="utf-8",
-    )
-
-    monkeypatch.setattr(
-        "orchestrator.core.orchestrator.reported_version",
-        lambda *_args, **_kwargs: "test-version",
-    )
-
-    status = ForensicOrchestrator._produce_raw_outputs(
-        FakeOrchestrator(),
-        "test-run",
-        "ubuntu-22.04",
-        str(acquisition_path),
-        tmp_path,
-        kernel_release="6.8.0-test",
-    )
-
-    resolved_isf = isf_path.resolve()
-    assert FakeOrchestrator._vol_runner.resolve_calls == 1
-    assert status["volatility"]["isf"] == {
-        "path": str(resolved_isf),
-        "sha256": hashlib.sha256(isf_contents).hexdigest(),
-    }
-    assert all(
-        "isf" not in invocation
-        for invocation in status["volatility"]["invocations"].values()
-    )

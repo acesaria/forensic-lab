@@ -4,8 +4,8 @@
 
 Linux Multi-Source DFIR Lab supports a Master's thesis on reproducible Linux
 post-mortem DFIR experiments. It runs controlled compromise scenarios in
-isolated VMs, acquires disk and memory evidence, produces raw Sleuth Kit, Plaso,
-and Volatility 3 exports, and supports manual investigation across filesystem,
+isolated VMs, acquires disk and memory evidence, and supports manual
+investigation with Sleuth Kit, Plaso, and Volatility 3 across filesystem,
 timeline, and memory sources.
 
 The project is research infrastructure, not a production SIEM, EDR, malware
@@ -24,9 +24,8 @@ to one of four scenario keys:
 
 A full run restores the prepared baseline, executes and validates the selected
 scenario, acquires memory while the VM is on, shuts the VM down, acquires disk,
-and produces raw filesystem, timeline, and memory exports. The implementation
-then stops: investigation, cross-source interpretation, and conclusions are
-human work.
+and then stops. Investigation-time tools produce only the outputs the analyst
+needs; cross-source interpretation and conclusions are human work.
 
 Current runs use manifest schema v3 and are recorded as `vanilla`. There is no
 runtime selector for a hardened security profile. Distro definitions exist for
@@ -43,15 +42,12 @@ manifest.json                         run identity, lifecycle status, revision, 
 command_log.jsonl                     append-only scenario operations and commands
 terminal_transcript.txt               human-readable scenario terminal record
 dumps/acquisition.json                acquisition commands, hashes, verification, image metadata
-analysis/raw_extraction_status.json   raw-tool versions, commands, outputs, hashes, failures
 ```
 
-Raw outputs include the TSK bodyfile, Plaso storage/timeline exports, and
-Volatility output. The root manifest is a small lifecycle index; the acquisition
-and raw-extraction sidecars are the authorities for their respective provenance.
-A successful `--no-acquire` run keeps the root records but no acquisition or
-raw-extraction sidecars; it validates only the scenario and is not a complete
-forensic experiment.
+The root manifest is a small lifecycle index, and the acquisition sidecar is the
+authority for acquisition provenance. A successful `--no-acquire` run keeps the
+root records but no acquisition sidecar; it validates only the scenario and is
+not a complete forensic experiment.
 
 Accepted evidence and raw exports are immutable. Other generated caches may be
 recreated, but accepted run material must not be overwritten. Tool failures,
@@ -63,7 +59,7 @@ zero-result tools, and source-scoped negative observations remain distinct.
 cli.py                    command entry point
 infra/                    libvirt/QEMU, Ansible, images, distro definitions
 orchestrator/core/        lifecycle, VM state, configuration, run paths
-orchestrator/forensics/   acquisition and raw TSK/Plaso/Volatility runners
+orchestrator/forensics/   acquisition and investigation/verification runners
 scenarios/                explicit scenario runners and command logging
 docs/investigations/      scenario/run notebooks, accepted reports, comparative material
 shared/                   generated run evidence, exports, and local analysis

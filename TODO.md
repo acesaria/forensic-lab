@@ -46,12 +46,11 @@ decision. Never push unless requested.
    Father retained, ptrace, and Diamorphine retained with `--no-acquire`. Make no
    code changes by default. A compatibility fix needs separate approval and is
    limited to 80 changed lines per technique; otherwise record the limitation.
-5. **Remove automatic forensic extraction and freeze** — stop new runs from
-   automatically producing the TSK bodyfile, Plaso storage/JSONL, broad
-   `vol3.json`, and `raw_extraction_status.json`; make prerequisite checks
-   command-specific; preserve acquisition and input provenance; align current
-   documentation and focused existing tests; and produce the final run command
-   sheet. Ceiling: 280 changed text lines and 8 files.
+5. **Remove automatic forensic extraction and freeze** — automatic per-run
+   extraction and command-specific prerequisite checks are complete. Preserve
+   acquisition and input provenance, then align the remaining documentation and
+   focused tests and produce the final run command sheet. Ceiling: 280 changed
+   text lines and 8 files.
 
 For Tasks 1, 2, 3, and 5, review is read-only first and returns `PASS` or
 `BLOCKED`. Commit only after `PASS` and explicit authorization. Task 4 needs

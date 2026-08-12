@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
             "Linux post-mortem forensic lab.\n"
             "Primary thesis path: controlled scenario execution -> "
             "run manifest/command log\n"
-            "  -> acquisition -> raw forensic exports -> manual investigation."
+            "  -> acquisition -> manual investigation."
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
@@ -138,15 +138,21 @@ def _setup_logging(debug: bool) -> None:
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
-def _check_prerequisites(raw_tools: dict[str, str]) -> None:
-    required = [
-        ("virsh", "virsh", "libvirt-clients"),
+def _check_prerequisites(
+    command: str, raw_tools: dict[str, str], *, acquire: bool = True
+) -> None:
+    vm_create = [
         ("virt-install", "virt-install", "virtinst"),
         ("qemu-img", "qemu-img", "qemu-utils"),
         ("cloud-localds", "cloud-localds", "cloud-image-utils"),
-        ("ansible-playbook", "ansible-playbook", "ansible"),
+    ]
+    acquisition = [
+        ("virsh", "virsh", "libvirt-clients"),
+        ("qemu-img", "qemu-img", "qemu-utils"),
         ("ewfacquire", "ewfacquire", "libewf-dev"),
         ("ewfverify", "ewfverify", "libewf-dev"),
+    ]
+    verification = [
         ("volatility3", raw_tools["volatility3"], "volatility3"),
         ("mmls", raw_tools["mmls"], "sleuthkit"),
         ("fls", raw_tools["fls"], "sleuthkit"),
@@ -154,6 +160,14 @@ def _check_prerequisites(raw_tools: dict[str, str]) -> None:
         ("log2timeline", raw_tools["log2timeline"], "plaso"),
         ("psort", raw_tools["psort"], "plaso"),
     ]
+    required = {
+        "setup": vm_create
+        + [("ansible-playbook", "ansible-playbook", "ansible")]
+        + acquisition
+        + verification,
+        "build": vm_create,
+        "run": acquisition if acquire else [],
+    }.get(command, [])
     missing = [
         f"  {name}: {command}  ({package})"
         for name, command, package in required
@@ -189,7 +203,9 @@ def main() -> None:
     from orchestrator.forensics.pipeline_config import raw_tool_paths
 
     raw_tools = raw_tool_paths(host_cfg)
-    _check_prerequisites(raw_tools)
+    _check_prerequisites(
+        args.command, raw_tools, acquire=getattr(args, "acquire", True)
+    )
     if args.debug:
         console.info("debug mode on")
 
@@ -206,9 +222,15 @@ def main() -> None:
     vm_manager = VMManager(provider=provider, paths=paths)
 
     dumper = Dumper(paths)
-    vol_runner = VolatilityRunner(raw_tools["volatility3"], paths.isf_dir)
-    sleuth_runner = SleuthKitRunner(
-        raw_tools["mmls"], raw_tools["fls"], raw_tools["fsstat"]
+    vol_runner = (
+        VolatilityRunner(raw_tools["volatility3"], paths.isf_dir)
+        if args.command == "setup"
+        else None
+    )
+    sleuth_runner = (
+        SleuthKitRunner(raw_tools["mmls"], raw_tools["fls"], raw_tools["fsstat"])
+        if args.command == "setup"
+        else None
     )
 
     distro_id: str = getattr(args, "distro", "ubuntu-22.04")

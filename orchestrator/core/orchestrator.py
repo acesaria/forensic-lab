@@ -63,8 +63,6 @@ from orchestrator.forensics.plaso_runner import (
     default_linux_filter,
     run_timeline,
 )
-from orchestrator.forensics.extract import extract_bodyfile, extract_plugins
-from orchestrator.forensics.pipeline_config import reported_version
 from scenarios.interactive_shell.runner import (
     SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO,
     run_interactive_shell,
@@ -79,8 +77,8 @@ class ForensicOrchestrator:
         self,
         vm_manager: VMManager,
         dumper: Dumper,
-        vol_runner: VolatilityRunner,
-        sleuth_runner: SleuthKitRunner,
+        vol_runner: VolatilityRunner | None,
+        sleuth_runner: SleuthKitRunner | None,
         paths: ProjectPaths,
         role_defaults: dict[str, Any],
         raw_tools: dict[str, str],
@@ -563,9 +561,7 @@ class ForensicOrchestrator:
             _write_run_manifest(manifest_path, manifest)
 
             acquisition_path = None
-            raw_outputs = None
             if acquire:
-                failed_phase = "acquisition"
                 try:
                     acquisition_path = self._run_acquisition(
                         vm_name,
@@ -578,20 +574,8 @@ class ForensicOrchestrator:
                         Path(acquisition_path).resolve().relative_to(run_root.resolve())
                     )
                     _write_run_manifest(manifest_path, manifest)
-
-                    failed_phase = "raw_extraction"
-                    raw_outputs = self._extract_raw_outputs(
-                        run_id,
-                        distro_id,
-                        acquisition_path,
-                        kernel_release=guest.get("kernel"),
-                    )
-                    raw_status_path = raw_outputs[1]
-                    manifest["artifacts"]["raw_extraction_status"] = str(
-                        raw_status_path.resolve().relative_to(run_root.resolve())
-                    )
                 except Exception:
-                    manifest.update(status="failed", failed_phase=failed_phase)
+                    manifest.update(status="failed", failed_phase="acquisition")
                     manifest["timestamps"]["run_ended_at"] = _utc_now()
                     _write_run_manifest(manifest_path, manifest)
                     raise
@@ -605,9 +589,7 @@ class ForensicOrchestrator:
             manifest["timestamps"]["run_ended_at"] = _utc_now()
             _write_run_manifest(manifest_path, manifest)
 
-            _print_experiment_summary(
-                self.repo_root, run_root, manifest, vm_off, raw_outputs
-            )
+            _print_experiment_summary(self.repo_root, run_root, manifest, vm_off)
             return acquisition_path
         finally:
             if has_scenario_cleanup:
@@ -671,195 +653,6 @@ class ForensicOrchestrator:
             if sep and key.strip() in facts and value.strip():
                 facts[key.strip()] = value.strip()
         return facts
-
-    def _extract_raw_outputs(
-        self,
-        run_id: str,
-        distro_id: str,
-        manifest_path: str,
-        *,
-        kernel_release: str | None = None,
-    ) -> tuple[dict[str, Any], Path]:
-        """Produce raw TSK, Plaso, and Volatility exports after acquisition."""
-        analysis_dir = self._paths.run_analysis_dir(run_id)
-        analysis_dir.mkdir(parents=True, exist_ok=True)
-
-        console.step_header("raw extraction")
-        try:
-            status = self._produce_raw_outputs(
-                run_id,
-                distro_id,
-                manifest_path,
-                analysis_dir,
-                kernel_release=kernel_release,
-            )
-            status_path = analysis_dir / "raw_extraction_status.json"
-            status_path.write_text(
-                json.dumps(status, indent=2, sort_keys=True) + "\n",
-                encoding="utf-8",
-            )
-            return status, status_path
-        finally:
-            console.section_end()
-
-    def _produce_raw_outputs(
-        self,
-        run_id: str,
-        distro_id: str,
-        manifest_path: str,
-        analysis_dir: Path,
-        *,
-        kernel_release: str | None = None,
-    ) -> dict[str, Any]:
-        """Run each raw extractor best-effort and return manifest-ready status."""
-        manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
-        memory_path = Path(manifest["memory_image"]["path"])
-        disk_path = Path(manifest["disk_image"]["path"])
-        analysis_display = Path(os.path.relpath(analysis_dir, self.repo_root))
-        status: dict[str, Any] = {}
-
-        vol_errors: dict[str, str] = {}
-        vol_invocations: dict[str, dict[str, Any]] = {}
-        try:
-            isf_path = self._vol_runner.resolve_isf(
-                distro_id, kernel_release
-            ).resolve()
-            isf_sha256 = file_sha256(isf_path)
-            vol_rows = extract_plugins(
-                self._vol_runner,
-                memory_path,
-                distro_id,
-                kernel_release=kernel_release,
-                isf_path=isf_path,
-                errors=vol_errors,
-                invocations=vol_invocations,
-            )
-            vol_path = analysis_dir / "vol3.json"
-            vol_path.write_text(
-                json.dumps(vol_rows, indent=2, default=str), encoding="utf-8"
-            )
-            plugin_counts = {
-                plugin: len(rows) if rows is not None else None
-                for plugin, rows in sorted(vol_rows.items())
-            }
-            for invocation in vol_invocations.values():
-                invocation["output_path"] = str(vol_path)
-            state = "completed"
-            if vol_errors:
-                state = "failed" if len(vol_errors) == len(vol_rows) else "degraded"
-                result_state = (
-                    "no_successful_results"
-                    if len(vol_errors) == len(vol_rows)
-                    else "partial_results"
-                )
-                console.warn(
-                    f"vol3 extraction {state}: "
-                    + "; ".join(f"{name}: {err}" for name, err in vol_errors.items())
-                )
-            else:
-                result_state = (
-                    "results" if any(plugin_counts.values()) else "zero_results"
-                )
-                console.ok(f"vol3 output written: {analysis_display / vol_path.name}")
-            status["volatility"] = {
-                "status": state,
-                "path": str(vol_path),
-                "tool": "volatility3",
-                "version": reported_version("volatility3", self._raw_tools),
-                "isf": {"path": str(isf_path), "sha256": isf_sha256},
-                "plugin_rows": plugin_counts,
-                "result": result_state,
-                "invocations": vol_invocations,
-                "output": _output_metadata(vol_path),
-            }
-            if vol_errors:
-                status["volatility"]["errors"] = vol_errors
-        except Exception as exc:
-            console.warn(f"vol3 extraction failed: {exc}")
-            status["volatility"] = _failed_status(
-                "volatility3",
-                reported_version("volatility3", self._raw_tools),
-                exc,
-                paths={"path": str(analysis_dir / "vol3.json")},
-                invocations=vol_invocations,
-            )
-
-        tsk_invocations: list[dict[str, Any]] = []
-        try:
-            tsk = extract_bodyfile(
-                self._sleuth_runner,
-                disk_path,
-                invocations=tsk_invocations,
-            )
-            bodyfile = tsk.get("bodyfile") or ""
-            bodyfile_path = analysis_dir / "bodyfile"
-            bodyfile_path.write_text(
-                bodyfile + ("\n" if bodyfile else ""), encoding="utf-8"
-            )
-            for invocation in tsk_invocations:
-                if Path(invocation["command"][0]).name == "fls":
-                    invocation["stdout_path"] = str(bodyfile_path)
-            console.ok(
-                f"tsk bodyfile written: {analysis_display / bodyfile_path.name}"
-            )
-            status["tsk"] = {
-                "status": "completed",
-                "path": str(bodyfile_path),
-                "tool": "sleuthkit",
-                "version": reported_version("sleuthkit", self._raw_tools),
-                "row_count": len(bodyfile.splitlines()),
-                "result": "zero_results" if not bodyfile else "results",
-                "invocations": tsk_invocations,
-                "output": _output_metadata(bodyfile_path),
-            }
-        except Exception as exc:
-            console.warn(f"tsk extraction failed: {exc}")
-            status["tsk"] = _failed_status(
-                "sleuthkit",
-                reported_version("sleuthkit", self._raw_tools),
-                exc,
-                paths={"path": str(analysis_dir / "bodyfile")},
-                invocations=tsk_invocations,
-            )
-
-        try:
-            timeline = self._build_timeline(disk_path, analysis_dir)
-            events = timeline["events"]
-            storage_path = analysis_dir / "timeline.plaso"
-            timeline_path = analysis_dir / "timeline.jsonl"
-            status["plaso"] = {
-                "status": "completed",
-                "storage_path": str(storage_path),
-                "path": str(timeline_path),
-                "tool": "plaso",
-                "version": reported_version("plaso", self._raw_tools),
-                "event_count": len(events),
-                "result": "zero_results" if not events else "results",
-                "invocations": {
-                    "log2timeline": timeline["log2timeline"],
-                    "psort": timeline["psort"],
-                },
-                "outputs": {
-                    "storage": _output_metadata(storage_path),
-                    "timeline": _output_metadata(timeline_path),
-                },
-            }
-        except Exception as exc:
-            console.warn(f"plaso timeline failed: {exc}")
-            status["plaso"] = _failed_status(
-                "plaso",
-                reported_version("plaso", self._raw_tools),
-                exc,
-                paths={
-                    "storage_path": str(analysis_dir / "timeline.plaso"),
-                    "path": str(analysis_dir / "timeline.jsonl"),
-                },
-                invocations=getattr(exc, "invocations", None),
-            )
-
-        status["run_id"] = run_id
-        status["acquisition_manifest"] = str(manifest_path)
-        return status
 
     def _build_timeline(self, disk_path: Path, analysis_dir: Path) -> dict:
         """
@@ -989,6 +782,7 @@ class ForensicOrchestrator:
         Requires the ISF to already exist (call after build_isf).
         VM ends OFF.
         """
+        assert self._vol_runner is not None and self._sleuth_runner is not None
         vm_name = self._reset_lab(distro_id)
         # Compute run_id ONCE so dumps/ and analysis/ share the same timestamp.
         run_id = _make_run_id(distro_id, VERIFY_SCENARIO)
@@ -1066,7 +860,6 @@ def _print_experiment_summary(
     run_root: Path,
     manifest: dict[str, Any],
     vm_off: bool,
-    raw_outputs: tuple[dict[str, Any], Path] | None,
 ) -> None:
     run_display = Path(os.path.relpath(run_root, repo_root))
     scenario_id = manifest["scenario_id"]
@@ -1074,32 +867,20 @@ def _print_experiment_summary(
     artifacts = manifest["artifacts"]
     console.step_header("summary")
     console.ok("scenario status: completed")
-    if scenario_id == INTERACTIVE_SHELL_SCENARIO and raw_outputs is None:
+    if scenario_id == INTERACTIVE_SHELL_SCENARIO:
         console.ok(f"console transcript: {run_display / artifacts['terminal_transcript']}")
     elif scenario_id == father.CLEANUP_SCENARIO_ID:
         console.info(f"scenario: {scenario_id}")
     console.info(f"distro/profile: {platform['distro_id']} / {platform['profile']}")
 
-    if raw_outputs is None:
+    if not manifest["acquisition_requested"]:
         console.info("acquisition: intentionally skipped (--no-acquire)")
-        console.info("raw extraction: intentionally skipped (--no-acquire)")
     else:
-        raw_status, raw_status_path = raw_outputs
         console.ok("acquisition status: completed")
-        for label, key in (
-            ("Volatility", "volatility"), ("TSK", "tsk"), ("Plaso", "plaso")
-        ):
-            state = raw_status.get(key, {}).get("status", "unknown")
-            emit = console.ok if state == "completed" else console.warn
-            emit(f"{label}: {state}")
 
     console.info(f"final VM state: {'off' if vm_off else 'running'}")
     console.info(f"run directory: {run_display}")
     console.info(f"root manifest: {run_display / 'manifest.json'}")
-    if raw_outputs is not None:
-        console.info(
-            f"raw extraction status: {run_display / raw_status_path.relative_to(run_root)}"
-        )
     console.section_end()
 
 
@@ -1114,35 +895,6 @@ def _write_run_manifest(path: Path, manifest: dict[str, Any]) -> None:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
-
-
-def _failed_status(
-    tool: str,
-    version: str | None,
-    exc: Exception,
-    *,
-    paths: dict[str, str] | None = None,
-    invocations: Any = None,
-) -> dict[str, Any]:
-    status = {
-        "status": "failed",
-        "tool": tool,
-        "version": version,
-        "error": str(exc),
-    }
-    if paths:
-        status.update(paths)
-    if invocations:
-        status["invocations"] = invocations
-    return status
-
-
-def _output_metadata(path: Path) -> dict[str, Any]:
-    return {
-        "path": str(path),
-        "size_bytes": path.stat().st_size,
-        "sha256": file_sha256(path),
-    }
 
 
 def _isf_filename(distro_id: str, kernel_release: str) -> str:

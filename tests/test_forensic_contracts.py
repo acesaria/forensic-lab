@@ -8,7 +8,6 @@ import pytest
 from orchestrator.core.paths import ProjectPaths
 from orchestrator.core.provenance import command_output
 from orchestrator.forensics.dumper import Dumper
-from orchestrator.forensics.extract import extract_plugins
 from orchestrator.forensics.pipeline_config import reported_version
 
 
@@ -170,42 +169,6 @@ def test_qemu_virtual_size_requires_positive_integer(
         Dumper._qemu_virtual_size(Path("evidence.qcow2"))
 
     assert "qemu diagnostic" in str(exc.value)
-
-
-def test_volatility_failure_is_distinct_from_successful_zero_results():
-    class FakeVolatility:
-        def run_plugin(self, _memory, _distro, plugin, **kwargs):
-            invocation = kwargs["invocation"]
-            if plugin == "failed.plugin":
-                invocation.update({"status": "failed", "exit_status": 2})
-                raise RuntimeError("plugin failed")
-            invocation.update(
-                {
-                    "status": "completed",
-                    "exit_status": 0,
-                    "result": "zero_results",
-                    "row_count": 0,
-                }
-            )
-            return []
-
-    errors = {}
-    invocations = {}
-    rows = extract_plugins(
-        FakeVolatility(),
-        Path("memory.raw"),
-        "ubuntu-22.04",
-        plugins=("empty.plugin", "failed.plugin"),
-        errors=errors,
-        invocations=invocations,
-    )
-
-    assert rows == {"empty.plugin": [], "failed.plugin": None}
-    assert invocations["empty.plugin"]["row_count"] == 0
-    assert invocations["empty.plugin"]["error"] is None
-    assert invocations["failed.plugin"]["exit_status"] == 2
-    assert invocations["failed.plugin"]["error"] == "plugin failed"
-    assert errors == {"failed.plugin": "plugin failed"}
 
 
 def test_volatility_version_parser_accepts_no_plugin_output(

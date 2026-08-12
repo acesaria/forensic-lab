@@ -48,8 +48,9 @@ review its acquisition and examination:
 - analyst records that cite exact run-relative evidence locations.
 
 The run-root manifest is the lifecycle index. `dumps/acquisition.json` is the
-acquisition authority, and `analysis/raw_extraction_status.json` is the raw-tool
-authority. Do not duplicate their full contents into narrative reports.
+acquisition authority. Investigation records preserve raw-tool commands,
+versions, outputs, hashes, zero results, and failures. Do not duplicate their
+full contents into narrative reports.
 
 Accepted disk and memory images and raw exports are immutable. Examination may
 create a separate analyst workspace and derived views, each tied back to the
