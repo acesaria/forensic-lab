@@ -1,0 +1,27 @@
+schema: forensic-lab.diamorphine_source_lock.v1
+upstream:
+  name: Diamorphine
+  url: https://github.com/m0nad/Diamorphine
+  branch: master
+  pinned_commit: af494fad213654aae16cfdbbb50e7dc26383e4b2
+  license: BSD-3-Clause
+retrieval:
+  method: vendored_git_archive
+  archive_path: files/diamorphine-upstream-af494fa.tar
+  archive_format: git-archive-tar
+  archive_sha256: 5bcc47a5f64cac5761d0c0232e2decc222a20fbf7931f0bee3c1de099501ef5e
+source_integrity:
+  repository_contains_pristine_upstream_archive: true
+  repository_patches_diamorphine_source: true
+  note: >
+    The builder preserves and verifies the pristine archive, then applies the
+    separately pinned compatibility patch before compilation. The victim
+    receives only the prepared module and build record.
+compatibility_patch:
+  path: files/ubuntu-backport-x64-dispatch.patch
+  sha256: 6414dc61d7a74dd511e07b2260a9337db99ccb96f93baa60161865ad4431202f
+  reason: >
+    Ubuntu backported x64_sys_call dispatch to kernels whose release is below
+    upstream 6.9, so version-only selection leaves Diamorphine patching the
+    retained but unused sys_call_table. The builder selects the upstream
+    FlipSwitch path from the exact running builder kernel's kallsyms capability.

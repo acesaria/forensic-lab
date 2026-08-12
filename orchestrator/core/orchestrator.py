@@ -10,6 +10,7 @@ setup_infra()              one-time: libvirt network + pool
 prepare_lab(distro_id)     one-time: image + VM + baseline snapshot + pipeline verify
 build_isf(distro_id)       one-time: Volatility symbol file
 build_father(distro_id)    build + publish Father's rk.so to the host cache
+build_diamorphine(...)     build + publish Diamorphine's exact-kernel module
 build_ptrace_fa(distro_id) build + publish ptrace_fa binaries to the host cache
 run_experiment(...)        explicit scenario dispatch + experiment loop
 destroy_lab(distro_id)     teardown
@@ -29,8 +30,8 @@ build_isf          ends OFF (lab parked, build VM retained)
 build_father       ends OFF (builder VM retained; lab never started)
 _reset_lab         ends ON + SSH ready
 _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
-Father and ptrace_fa experiments end OFF, including when acquisition is skipped
-or a step fails
+Father, ptrace_fa, and Diamorphine experiments end OFF, including when
+acquisition is skipped or a step fails
 """
 
 from collections.abc import Callable
@@ -67,6 +68,7 @@ from scenarios.interactive_shell.runner import (
     SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO,
     run_interactive_shell,
 )
+from scenarios.kernel_diamorphine import runner as diamorphine
 from scenarios.ptrace_fa import runner as ptrace
 from scenarios.ptrace_fa import shellcode as ptrace_shellcode
 from scenarios.userland_father_ldpreload import runner as father
@@ -191,11 +193,7 @@ class ForensicOrchestrator:
                 distro_id,
                 father.SCENARIO_ID,
                 (artifact,),
-                {
-                    "repository": source["repository"],
-                    "commit": source["commit"],
-                    "archive_sha256": source["archive_sha256"],
-                },
+                source,
                 {
                     "sha256": file_sha256(father.BUILD_SCRIPT),
                     "hidden_prefix": father.HIDDEN_PREFIX,
@@ -272,6 +270,87 @@ class ForensicOrchestrator:
             )
 
         return cache_dir / ptrace.ARTIFACT_NAMES[0]
+
+    def build_diamorphine(self, distro_id: str) -> Path:
+        """Build and publish Diamorphine for the builder's exact kernel."""
+        source = diamorphine.verify_source()
+        published = self._resolve_prebuilt_input(
+            distro_id, diamorphine.SCENARIO_ID, (diamorphine.ARTIFACT_NAME,)
+        )
+        if published is not None:
+            artifacts, record = published
+            if not diamorphine.build_record_is_current(record, source):
+                raise RuntimeError(
+                    "published Diamorphine build uses a stale recipe; remove "
+                    f"{self._display(artifacts[0].parent)} and rerun the build"
+                )
+            console.info(f"already published: {self._display(artifacts[0])}")
+            return artifacts[0]
+
+        vm_name = self._ensure_builder_vm(distro_id)
+        with tempfile.TemporaryDirectory() as staging:
+            artifact = Path(staging) / diamorphine.ARTIFACT_NAME
+            try:
+                with self.vm_manager.open_ssh(vm_name) as ssh:
+                    ssh.put(diamorphine.ARCHIVE, diamorphine.UPLOAD_PATH)
+                    ssh.put(
+                        diamorphine.BUILD_SCRIPT, diamorphine.REMOTE_BUILD_SCRIPT
+                    )
+                    ssh.put(
+                        diamorphine.COMPATIBILITY_PATCH,
+                        diamorphine.REMOTE_COMPATIBILITY_PATCH,
+                    )
+                    console.step(f"building {diamorphine.ARTIFACT_NAME} on {vm_name}...")
+                    stdout = ssh.run_checked(
+                        f"bash {diamorphine.REMOTE_BUILD_SCRIPT} "
+                        f"{diamorphine.UPLOAD_PATH} "
+                        f"{diamorphine.REMOTE_COMPATIBILITY_PATCH} "
+                        f"{diamorphine.REMOTE_BUILD_ROOT}",
+                        timeout=1800,
+                    )
+                    ssh.get(
+                        f"{diamorphine.REMOTE_BUILD_ROOT}/Diamorphine-"
+                        f"{source['commit']}/{diamorphine.ARTIFACT_NAME}",
+                        artifact,
+                    )
+            finally:
+                self.vm_manager.shutdown_vm(vm_name)
+
+            facts = _builder_facts(stdout)
+            missing = [
+                key
+                for key in ("kernel", "vermagic", "syscall_dispatch")
+                if not facts.get(key)
+            ]
+            if missing:
+                raise RuntimeError(
+                    f"builder reported no {', '.join(missing)}; build not published"
+                )
+            record = self._build_record(
+                distro_id,
+                diamorphine.SCENARIO_ID,
+                (artifact,),
+                {
+                    "repository": source["repository"],
+                    "commit": source["commit"],
+                    "archive_sha256": source["archive_sha256"],
+                    "compatibility_patch_sha256": source[
+                        "compatibility_patch_sha256"
+                    ],
+                },
+                {"sha256": file_sha256(diamorphine.BUILD_SCRIPT)},
+                facts,
+            )
+            record["target"].update(
+                kernel=facts["kernel"].strip(),
+                vermagic=facts["vermagic"].strip(),
+                syscall_dispatch=facts["syscall_dispatch"].strip(),
+            )
+            cache_dir = self._publish_build(
+                distro_id, diamorphine.SCENARIO_ID, (artifact,), record
+            )
+
+        return cache_dir / diamorphine.ARTIFACT_NAME
 
     def _build_record(
         self,
@@ -383,10 +462,10 @@ class ForensicOrchestrator:
         """Run one explicit scenario through the full experiment lifecycle."""
         is_father = scenario_id in (father.SCENARIO_ID, father.CLEANUP_SCENARIO_ID)
         is_ptrace_fa = scenario_id == ptrace.SCENARIO_ID
-        # Both scenarios return live facts plus a cleanup callback that keeps
-        # their backdoor/reverse-shell connection open until just before the
-        # guest shuts down for disk acquisition.
-        has_scenario_cleanup = is_father or is_ptrace_fa
+        is_diamorphine = scenario_id == diamorphine.SCENARIO_ID
+        # Father and ptrace keep a connection open through memory capture;
+        # Diamorphine uses a no-op callback to share their OFF lifecycle.
+        has_scenario_cleanup = is_father or is_ptrace_fa or is_diamorphine
         if scenario_id != INTERACTIVE_SHELL_SCENARIO and not has_scenario_cleanup:
             raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
@@ -396,6 +475,9 @@ class ForensicOrchestrator:
         elif is_ptrace_fa:
             build_scenario = ptrace.SCENARIO_ID
             artifact_names = ptrace.ARTIFACT_NAMES
+        elif is_diamorphine:
+            build_scenario = diamorphine.SCENARIO_ID
+            artifact_names = (diamorphine.ARTIFACT_NAME,)
         else:
             build_scenario = None
             artifact_names = ()
@@ -408,6 +490,12 @@ class ForensicOrchestrator:
             raise RuntimeError(
                 f"{build_scenario} build missing; run: .venv/bin/python cli.py build "
                 f"--distro {distro_id} --scenario {build_scenario}"
+            )
+        if is_diamorphine and not diamorphine.build_record_is_current(
+            prepared_input[1], diamorphine.verify_source()
+        ):
+            raise RuntimeError(
+                "published Diamorphine build uses a stale recipe; rerun the build"
             )
 
         # Every run records its exact revision; one that cannot is not a run.
@@ -516,6 +604,17 @@ class ForensicOrchestrator:
                             artifact_paths=tuple(
                                 run_root / item["path"]
                                 for item in input_record["artifacts"]
+                            ),
+                            build_record=prepared_input[1],
+                        )
+                    elif is_diamorphine:
+                        assert prepared_input is not None and input_record is not None
+                        facts, backdoor_cleanup = diamorphine.run_diamorphine(
+                            ssh,
+                            transcript_path,
+                            command_log_path=command_log_path,
+                            artifact_path=(
+                                run_root / input_record["artifacts"][0]["path"]
                             ),
                             build_record=prepared_input[1],
                         )

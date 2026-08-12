@@ -16,9 +16,10 @@ reconstruction system.
 
 The CLI exposes `init`, `setup`, `build`, `run`, and `destroy`. `build` publishes
 a scenario's prebuilt artifact and is required before running that scenario.
-`run` dispatches directly to one of four scenario keys:
+`run` dispatches directly to one of five scenario keys:
 
 - `interactive_shell`;
+- `kernel_diamorphine`;
 - `ptrace_fa`;
 - `userland_father_ldpreload`;
 - `userland_father_ldpreload_cleanup`.

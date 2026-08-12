@@ -16,6 +16,7 @@ from orchestrator.core.vm_manager import VMManager
 from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
 from orchestrator.forensics.pipeline_config import raw_tool_paths
 from scenarios.interactive_shell.runner import SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO
+from scenarios.kernel_diamorphine.runner import SCENARIO_ID as DIAMORPHINE_SCENARIO
 from scenarios.ptrace_fa.runner import SCENARIO_ID as PTRACE_FA_SCENARIO
 from scenarios.userland_father_ldpreload.runner import SCENARIO_ID as FATHER_SCENARIO
 from scenarios.userland_father_ldpreload.runner import (
@@ -27,6 +28,7 @@ SCENARIO_CHOICES = tuple(
     sorted(
         (
             INTERACTIVE_SHELL_SCENARIO,
+            DIAMORPHINE_SCENARIO,
             FATHER_SCENARIO,
             FATHER_CLEANUP_SCENARIO,
             PTRACE_FA_SCENARIO,
@@ -50,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  .venv/bin/python cli.py init\n"
             "  .venv/bin/python cli.py setup --distro ubuntu-22.04\n"
             "  .venv/bin/python cli.py run --distro ubuntu-22.04 "
-            "--scenario userland_father_ldpreload"
+            "--scenario kernel_diamorphine"
         ),
     )
     parser.add_argument(
@@ -85,7 +87,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--scenario",
         required=True,
-        choices=(FATHER_SCENARIO, PTRACE_FA_SCENARIO),
+        choices=(DIAMORPHINE_SCENARIO, FATHER_SCENARIO, PTRACE_FA_SCENARIO),
         help="Scenario whose artifact to build",
     )
 
@@ -263,6 +265,8 @@ def main() -> None:
             elif args.command == "build":
                 if args.scenario == FATHER_SCENARIO:
                     orchestrator.build_father(distro_id)
+                elif args.scenario == DIAMORPHINE_SCENARIO:
+                    orchestrator.build_diamorphine(distro_id)
                 elif args.scenario == PTRACE_FA_SCENARIO:
                     orchestrator.build_ptrace_fa(distro_id)
                 else:
