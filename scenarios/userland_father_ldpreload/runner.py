@@ -65,7 +65,6 @@ def run_father(
     cleanup = scenario_id == CLEANUP_SCENARIO_ID
     transcript_path.touch()
     console.scope("HOST", "stage Father artifact")
-    source = build_record["source"]
     _upload_artifact(ssh, command_log_path, artifact_path)
 
     terminal = ssh.open_terminal()
@@ -172,8 +171,9 @@ def run_father(
                     "cleanup": {
                         "uploaded_artifact_absent": uploaded_artifact_absent,
                         "home_bash_history_absent": home_bash_history_absent,
-                        "preload_config_present": persistence_present,
-                        "installed_library_present": persistence_present,
+                        # One check, one field: the cleanup leaves the preload
+                        # config and the installed library in place.
+                        "persistence_present": persistence_present,
                     }
                 }
     except BaseException:
@@ -188,7 +188,8 @@ def run_father(
 
     try:
         facts = {
-            "source": source,
+            # Source provenance is not repeated here: the run stages build.json
+            # under inputs/ and records its hash in the manifest.
             "installed_library_path": INSTALLED_LIBRARY,
             "preload_config_path": PRELOAD_CONFIG,
             "hidden_file_path": f"{HIDDEN_DIR}/{HIDDEN_FILE_NAME}",

@@ -47,7 +47,7 @@ def test_memory_dump_precreates_readable_user_file_without_sudo(
     assert status["status"] == "completed"
 
 
-def test_ewfverify_failure_is_preserved_and_fails_acquisition_status(
+def test_ewfverify_failure_is_preserved(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     first_segment = tmp_path / "evidence.E01"
@@ -60,32 +60,21 @@ def test_ewfverify_failure_is_preserved_and_fails_acquisition_status(
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    segments = [
-        {"path": str(first_segment), "size_bytes": 4, "sha256": "a" * 64},
-        {
-            "path": str(tmp_path / "evidence.E02"),
-            "size_bytes": 3,
-            "sha256": "b" * 64,
-        },
-    ]
 
     with pytest.raises(RuntimeError, match="ewfverify failed"):
         Dumper._run_ewfverify(
             object.__new__(Dumper),
             first_segment,
             str(tmp_path / "evidence"),
-            segment_metadata=segments,
         )
 
     status = json.loads(
         (tmp_path / "ewfverify_status.json").read_text(encoding="utf-8")
     )
     assert status["status"] == "failed"
-    assert status["acquisition_status"] == "failed"
     assert status["exit_status"] == 3
     assert status["stdout"] == "verification stdout\n"
     assert status["stderr"] == "verification stderr\n"
-    assert status["segments"] == segments
 
 
 def test_ewfverify_calculated_sha256_is_preserved(
@@ -105,11 +94,16 @@ def test_ewfverify_calculated_sha256_is_preserved(
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    status = Dumper._run_ewfverify(
+    record, calculated = Dumper._run_ewfverify(
         object.__new__(Dumper), first_segment, str(tmp_path / "evidence")
     )
 
-    assert status["status"] == "completed"
+    assert record["status"] == "completed"
+    assert calculated == digest
+    # The hash stays in the sidecar; only the embedded copy is dropped.
+    status = json.loads(
+        (tmp_path / "ewfverify_status.json").read_text(encoding="utf-8")
+    )
     assert status["calculated_sha256"] == digest
 
     monkeypatch.setattr(

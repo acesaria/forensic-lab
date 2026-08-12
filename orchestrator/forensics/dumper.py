@@ -55,14 +55,11 @@ class ImageMetadata:
     sha256: str | None
     size_bytes: int | None
     timestamp: float
-    segments: list[str] | None = None
-    segment_metadata: list[dict[str, object]] | None = None
     acquisition_seconds: float | None = None
-    tool_version: str | None = None
-    command: list[str] | None = None
-    stdout: str | None = None
-    stderr: str | None = None
+    # Per-command provenance; the tool version and argv live inside each entry.
     commands: list[dict[str, object]] | None = None
+    # Disk only. Unset keys are dropped when the manifest is written.
+    segment_metadata: list[dict[str, object]] | None = None
     verification: dict[str, object] | None = None
 
 
@@ -125,13 +122,6 @@ class Dumper:
         tool_version = self._tool_version(["virsh", "--version"])
         status_path = dest.parent / "virsh_dump_status.json"
         record = command_result(command, result, tool_version=tool_version)
-        record.update(
-            {
-                "status_path": str(status_path),
-                "output_path": str(dest),
-                "acquisition_status": record["status"],
-            }
-        )
         if result.returncode != 0:
             self._write_status(status_path, record)
             raise RuntimeError(
@@ -143,11 +133,7 @@ class Dumper:
 
         if not dest.exists() or dest.stat().st_size == 0:
             record.update(
-                {
-                    "status": "failed",
-                    "acquisition_status": "failed",
-                    "error": "output file not created or empty",
-                }
+                {"status": "failed", "error": "output file not created or empty"}
             )
             self._write_status(status_path, record)
             raise RuntimeError("Memory dump failed: output file not created or empty")
@@ -155,7 +141,6 @@ class Dumper:
             record.update(
                 {
                     "status": "failed",
-                    "acquisition_status": "failed",
                     "error": "output file is not readable by the current process",
                 }
             )
@@ -166,14 +151,6 @@ class Dumper:
         size_bytes = dest.stat().st_size
         sha256 = file_sha256(dest)
         completed_at = time.time()
-        record.update(
-            {
-                "sha256": sha256,
-                "size_bytes": size_bytes,
-                "timestamp": completed_at,
-                "acquisition_seconds": elapsed,
-            }
-        )
         self._write_status(status_path, record)
         console.ok(
             f"memory dump done ({elapsed:.1f}s): "
@@ -186,10 +163,6 @@ class Dumper:
             size_bytes=size_bytes,
             timestamp=completed_at,
             acquisition_seconds=elapsed,
-            tool_version=tool_version,
-            command=command,
-            stdout=result.stdout,
-            stderr=result.stderr,
             commands=[record],
         )
 
@@ -254,10 +227,8 @@ class Dumper:
             }
             for segment in ewf_segments
         ]
-        verification = self._run_ewfverify(
-            Path(ewf_segments[0]),
-            ewf_prefix,
-            segment_metadata=segment_metadata,
+        verification, calculated_sha256 = self._run_ewfverify(
+            Path(ewf_segments[0]), ewf_prefix
         )
 
         elapsed = time.time() - started
@@ -266,10 +237,9 @@ class Dumper:
 
         return ImageMetadata(
             path=str(Path(ewf_segments[0])),
-            segments=[str(Path(segment)) for segment in ewf_segments],
             segment_metadata=segment_metadata,
             tool=tool,
-            sha256=str(verification["calculated_sha256"]),
+            sha256=calculated_sha256,
             size_bytes=virtual_size,
             timestamp=time.time(),
             acquisition_seconds=elapsed,
@@ -296,7 +266,16 @@ class Dumper:
         )
         manifest_path = self.run_dir(run_id) / "acquisition.json"
         with open(manifest_path, "w") as f:
-            json.dump(asdict(manifest), f, indent=2)
+            # Drop unset keys: one ImageMetadata serves memory and disk, and a
+            # null field in an evidence record reads as an observation.
+            json.dump(
+                asdict(
+                    manifest,
+                    dict_factory=lambda kv: {k: v for k, v in kv if v is not None},
+                ),
+                f,
+                indent=2,
+            )
         console.ok(f"acquisition manifest written: {self._display(manifest_path)}")
         return str(manifest_path)
 
@@ -328,7 +307,6 @@ class Dumper:
             result,
             tool_version=self._tool_version(["qemu-img", "--version"]),
         )
-        record["status_path"] = str(status_path)
         self._write_status(status_path, record)
         if result.returncode != 0:
             raise RuntimeError(
@@ -370,7 +348,6 @@ class Dumper:
                 tool_version=self._tool_version(["ewfacquire", "-V"]),
             )
             status_path = Path(ewf_prefix).parent / "ewfacquire_status.json"
-            record["status_path"] = str(status_path)
             self._write_status(status_path, record)
             if result.returncode != 0:
                 raise RuntimeError(
@@ -390,9 +367,7 @@ class Dumper:
         self,
         first_segment: Path,
         ewf_prefix: str,
-        *,
-        segment_metadata: list[dict[str, object]] | None = None,
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], str]:
         command = ["ewfverify", "-d", "sha256", str(first_segment)]
         status_path = Path(ewf_prefix).parent / "ewfverify_status.json"
         try:
@@ -416,10 +391,6 @@ class Dumper:
                 "stderr": str(exc),
                 "tool_version": None,
             }
-        record["status_path"] = str(status_path)
-        record["acquisition_status"] = record["status"]
-        if segment_metadata is not None:
-            record["segments"] = segment_metadata
         if record["status"] != "completed":
             self._write_status(status_path, record)
             raise RuntimeError(
@@ -433,7 +404,6 @@ class Dumper:
             record.update(
                 {
                     "status": "failed",
-                    "acquisition_status": "failed",
                     "error": "ewfverify did not report a calculated SHA-256",
                 }
             )
@@ -442,9 +412,10 @@ class Dumper:
                 f"ewfverify did not report a calculated SHA-256; "
                 f"details preserved in {status_path}"
             )
-        record["calculated_sha256"] = calculated_sha256
-        self._write_status(status_path, record)
-        return record
+        # The hash belongs with the image: it is returned for ImageMetadata.sha256
+        # and kept in the sidecar, but not repeated inside the embedded record.
+        self._write_status(status_path, {**record, "calculated_sha256": calculated_sha256})
+        return record, calculated_sha256
 
     def _validate_ewf_segments(self, segments: list[str], ewf_prefix: str) -> None:
         if not segments:
