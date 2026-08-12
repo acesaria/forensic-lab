@@ -50,6 +50,22 @@ acquisition authority. Investigation records preserve raw-tool commands,
 versions, outputs, hashes, zero results, and failures. Do not duplicate their
 full contents into narrative reports.
 
+I treat reproducibility in three layers. The victim is reproducible from the
+checksum-pinned cloud image and cloud-init: `lab_baseline.yml` installs packages
+only when `baseline_present_pkgs` is non-empty, and Ubuntu currently sets that
+list to empty, so provisioning adds no packages and performs no upgrade. Every
+accepted run preserves its exact prebuilt input and build record byte-for-byte
+under `<run>/inputs/<scenario>/` and hashes them in the manifest, so reproducing
+that run's analysis requires no rebuild. Only rebuilding an input later can
+differ, and only in package versions because `apt-get install` resolves against
+a moving archive; `build.json` records the upstream commit, archive hash, recipe
+hash, target-image checksum, and exact package versions so builds remain
+precisely comparable and auditable. Such a rebuild is behaviourally equivalent,
+not byte-identical. Ubuntu 22.04 standard maintenance ends in May 2027 (the
+pinned 5.15 GA-kernel window ends in April 2027), after which historical archive
+content moves to `old-releases.ubuntu.com` and exact debug-symbol retrieval may
+no longer remain available from the live archive.
+
 Accepted disk and memory images and raw exports are immutable. Examination may
 create a separate analyst workspace and derived views, each tied back to the
 source run and command. The report is another layer: it cites evidence and

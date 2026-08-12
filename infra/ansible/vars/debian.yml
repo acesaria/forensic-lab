@@ -5,8 +5,5 @@ isf_base_packages:
   - golang-go
 
 
-# Packages baked into the lab baseline. Scenario binaries are prepared on the
-# builder VM; the victim never compiles or installs during a run.
-baseline_present_pkgs:
-  - build-essential
-  - netcat-openbsd
+# Scenario binaries are prepared on the builder VM.
+baseline_present_pkgs: []

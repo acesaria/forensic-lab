@@ -91,6 +91,34 @@ Then use the repository interpreter:
   --scenario userland_father_ldpreload
 ```
 
+### Pinned image and prebuilt inputs
+
+Ubuntu eventually prunes dated cloud-image release directories, so the pinned
+URL may return 404. Before downloading, `infra.image_store.ensure_image` checks
+`<state_dir>/images/<filename>` and verifies it against the profile checksum; an
+exact image obtained elsewhere can therefore be placed at
+`/var/lib/forensic-lab/images/ubuntu-22.04-20260515-server-cloudimg-amd64.img`.
+Verification, not the transfer source, controls acceptance. Prebuilt inputs are
+not committed: run `build` before `run` for every scenario that consumes one.
+
+```bash
+sudo install -o root -g root -m 0444 /path/to/ubuntu-22.04-20260515-server-cloudimg-amd64.img /var/lib/forensic-lab/images/ubuntu-22.04-20260515-server-cloudimg-amd64.img
+```
+
+### Complete experiment command sheet
+
+```bash
+cp config.yaml.example config.yaml
+./setup-venv.sh
+.venv/bin/python cli.py init
+.venv/bin/python cli.py setup --distro ubuntu-22.04
+.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario userland_father_ldpreload
+.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario ptrace_fa
+.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario kernel_diamorphine
+.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario kernel_diamorphine
+# Evidence: shared/experiments/<run_id>/
+```
+
 Host prerequisites include KVM/QEMU with libvirt, `cloud-localds`, `ewfacquire`,
 the configured forensic tools, and an SSH key for the lab VM. Passwordless sudo
 inside the disposable guest is a documented deployment precondition, not an
