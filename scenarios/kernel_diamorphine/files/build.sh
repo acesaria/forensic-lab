@@ -3,6 +3,9 @@
 # Usage: build.sh <archive> <compatibility-patch> <outdir>
 set -euo pipefail
 
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
 kernel=$(uname -r)
 headers="linux-headers-$kernel"
 dpkg -s gcc make kmod patch "$headers" >/dev/null 2>&1 || {

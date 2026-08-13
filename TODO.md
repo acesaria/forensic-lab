@@ -45,16 +45,14 @@ decision. Never push unless requested.
    artifacts with no victim-side compilation; accepted investigation exists at
    `docs/investigations/ptrace_fa/ubuntu-22.04_ptrace_fa_20260807-150736/` and
    is in `COMPARATIVE_RESULTS.md`.
-3. **Diamorphine retained and cleanup** — retained is implemented (`b889b83`,
+3. **Diamorphine retained** — implemented (`b889b83`,
    `scenarios/kernel_diamorphine/`), builds for the exact target kernel,
    verifies vermagic/dispatch path, and implements the bounded hidden-file/
-   module and signal-64 behavior. Cleanup is explicitly deferred per
+   module and signal-64 behavior. Cleanup remains deferred per
    `scenarios/kernel_diamorphine/README.md` ("Cleanup is deferred for separate
-   research and approval") — not implemented. No Diamorphine run has an
-   accepted investigation yet (no `docs/investigations/kernel_diamorphine/`
-   directory). Decide: is cleanup still in scope before delivery, or is this
-   task considered done for "retained" only, with cleanup formally dropped
-   from the authoritative matrix below?
+   research and approval") and is outside the delivery matrix. No Diamorphine
+   run has an accepted investigation yet (no
+   `docs/investigations/kernel_diamorphine/` directory).
 4. **Bounded compatibility validation** — on Ubuntu 24.04 and Debian 13, run
    Father, ptrace, and Diamorphine retained with `--no-acquire`. Make no
    code changes by default. A compatibility fix needs separate approval and is
@@ -78,9 +76,9 @@ review and commit only if code changes.
 - `run` consumes an already prepared compatible input and never mutates the
   builder cache. Missing or incompatible input fails before victim reset and
   prints the exact build command required.
-- Father uses one `.so` and one cleanup-by-default treatment; Diamorphine
-  retained/cleanup share one exact-kernel `.ko`. Copy the selected artifact and
-  `build.json` into the immutable run and index them in the manifest.
+- Father uses one `.so` and one cleanup-by-default treatment; Diamorphine uses
+  one exact-kernel `.ko`. Copy the selected artifact and `build.json` into the
+  immutable run and index them in the manifest.
 - Keep scenario validation, forensic observation, and analyst interpretation
   distinct. Target inventory and source applicability are prospective.
 - Do not add automatic detection, matching, scoring, reconstruction, a build
@@ -95,16 +93,12 @@ acquisitions one at a time:
 
 1. Father;
 2. ptrace;
-3. Diamorphine retained;
-4. Diamorphine cleanup.
+3. Diamorphine retained.
 
 After each run, verify repository revision, scenario and acquisition statuses,
 input hashes, acquisition hashes, EWF verification, and artifact sizes. Stop
 before investigation if any gate fails. Retain all older experiment directories
 until replacement runs and investigations are accepted.
-
-Item 4 (Diamorphine cleanup) currently conflicts with Task 3's deferred status
-above — resolve before executing the matrix.
 
 **In-flight, uncommitted, as of 2026-08-13 (dirty worktree, not yet part of the
 authoritative matrix):**
@@ -141,8 +135,9 @@ authoritative matrix):**
   Father's compatibility on `image.checksum`, which both the builder and the
   victim already derive from, so no profile carries a `kernel:` field. Task 3
   records kernel and vermagic for Diamorphine's `.ko`, where they matter;
-- ftrace, Meterpreter, eBPF, CopyFail, ART, worms, timestomping, generalized
-  cleanup levels, extra privilege-escalation scenarios, and broad hardening;
+- Diamorphine cleanup, ftrace, Meterpreter, eBPF, CopyFail, ART, worms,
+  timestomping, generalized cleanup levels, extra privilege-escalation
+  scenarios, and broad hardening;
 - Fedora/SELinux, Timesketch, Velociraptor, AIDE/NSRL, graphs/ontologies, and
   broad Sigma/YARA work;
 - automatic detection, matching, scoring, reconstruction, new frameworks,

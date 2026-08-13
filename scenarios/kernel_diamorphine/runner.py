@@ -20,11 +20,12 @@ COMPATIBILITY_PATCH = ROOT / "files/ubuntu-backport-x64-dispatch.patch"
 LOCK = ROOT / "diamorphine.lock.yml"
 ARTIFACT_NAME = "diamorphine.ko"
 
-UPLOAD_PATH = "/tmp/diamorphine-upstream-af494fa.tar"
-REMOTE_BUILD_ROOT = "/tmp/forensic-lab/diamorphine_build"
-REMOTE_BUILD_SCRIPT = "/tmp/diamorphine-build.sh"
-REMOTE_COMPATIBILITY_PATCH = "/tmp/diamorphine-compatibility.patch"
-REMOTE_ARTIFACT = f"/tmp/{ARTIFACT_NAME}"
+_BUILDER_ARCHIVE = "/tmp/diamorphine-upstream-af494fa.tar"
+_BUILDER_BUILD_ROOT = "/tmp/forensic-lab/diamorphine_build"
+_BUILDER_SCRIPT = "/tmp/diamorphine-build.sh"
+_BUILDER_PATCH = "/tmp/diamorphine-compatibility.patch"
+
+VICTIM_ARTIFACT = f"/tmp/{ARTIFACT_NAME}"
 
 PROBE_PARENT = "/tmp/forensic-lab/diamorphine-probe"
 PROBE_DIRECTORY_NAME = "diamorphine_secret_dir"
@@ -41,6 +42,41 @@ def build_record_is_current(record: dict, source: dict) -> bool:
         and record.get("source", {}).get("compatibility_patch_sha256")
         == source["compatibility_patch_sha256"]
     )
+
+
+def build(ssh: SSHClient, staging: Path, source: dict) -> tuple[Path, str]:
+    """Build the pinned Diamorphine module on its builder VM."""
+    artifact = staging / ARTIFACT_NAME
+    ssh.put(ARCHIVE, _BUILDER_ARCHIVE)
+    ssh.put(BUILD_SCRIPT, _BUILDER_SCRIPT)
+    ssh.put(COMPATIBILITY_PATCH, _BUILDER_PATCH)
+    console.step(f"building {ARTIFACT_NAME}...")
+    stdout = ssh.run_checked(
+        f"bash {_BUILDER_SCRIPT} {_BUILDER_ARCHIVE} "
+        f"{_BUILDER_PATCH} {_BUILDER_BUILD_ROOT}",
+        timeout=1800,
+    )
+    ssh.get(
+        f"{_BUILDER_BUILD_ROOT}/Diamorphine-{source['commit']}/{ARTIFACT_NAME}",
+        artifact,
+    )
+    return artifact, stdout
+
+
+def build_recipe() -> dict:
+    """Return the exact scenario-owned build recipe recorded by the host."""
+    return {"sha256": file_sha256(BUILD_SCRIPT)}
+
+
+def build_target(facts: dict[str, str]) -> dict[str, str]:
+    """Validate and return Diamorphine's required target facts."""
+    required = ("kernel", "vermagic", "syscall_dispatch")
+    missing = [key for key in required if not facts.get(key)]
+    if missing:
+        raise RuntimeError(
+            f"builder reported no {', '.join(missing)}; build not published"
+        )
+    return {key: facts[key].strip() for key in required}
 
 
 def run_diamorphine(
@@ -101,7 +137,7 @@ def run_diamorphine(
 
             console.scope("GUEST", "load and validate Diamorphine")
             run_logged_command(
-                terminal, command_log_path, f"sudo -n insmod {REMOTE_ARTIFACT}", timeout=180
+                terminal, command_log_path, f"sudo -n insmod {VICTIM_ARTIFACT}", timeout=180
             )
             parent_after = run_logged_command(
                 terminal, command_log_path, f"ls -1 -- {PROBE_PARENT}", timeout=180
@@ -206,9 +242,9 @@ def verify_source() -> dict:
 def _upload_artifact(
     ssh: SSHClient, command_log_path: Path, artifact_path: Path
 ) -> None:
-    console.step(f"Uploading {artifact_path.name} to {REMOTE_ARTIFACT}...")
+    console.step(f"Uploading {artifact_path.name} to {VICTIM_ARTIFACT}...")
     try:
-        ssh.put(artifact_path, REMOTE_ARTIFACT)
+        ssh.put(artifact_path, VICTIM_ARTIFACT)
     except Exception as exc:
         record_operation(command_log_path, "upload_artifact", error=str(exc))
         raise

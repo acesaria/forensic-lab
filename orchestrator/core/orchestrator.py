@@ -240,63 +240,25 @@ class ForensicOrchestrator:
 
         vm_name = self._ensure_builder_vm(distro_id)
         with tempfile.TemporaryDirectory() as staging:
-            artifact = Path(staging) / diamorphine.ARTIFACT_NAME
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
-                    ssh.put(diamorphine.ARCHIVE, diamorphine.UPLOAD_PATH)
-                    ssh.put(
-                        diamorphine.BUILD_SCRIPT, diamorphine.REMOTE_BUILD_SCRIPT
-                    )
-                    ssh.put(
-                        diamorphine.COMPATIBILITY_PATCH,
-                        diamorphine.REMOTE_COMPATIBILITY_PATCH,
-                    )
-                    console.step(f"building {diamorphine.ARTIFACT_NAME} on {vm_name}...")
-                    stdout = ssh.run_checked(
-                        f"bash {diamorphine.REMOTE_BUILD_SCRIPT} "
-                        f"{diamorphine.UPLOAD_PATH} "
-                        f"{diamorphine.REMOTE_COMPATIBILITY_PATCH} "
-                        f"{diamorphine.REMOTE_BUILD_ROOT}",
-                        timeout=1800,
-                    )
-                    ssh.get(
-                        f"{diamorphine.REMOTE_BUILD_ROOT}/Diamorphine-"
-                        f"{source['commit']}/{diamorphine.ARTIFACT_NAME}",
-                        artifact,
+                    artifact, stdout = diamorphine.build(
+                        ssh, Path(staging), source
                     )
             finally:
                 self.vm_manager.shutdown_vm(vm_name)
 
             facts = _builder_facts(stdout)
-            missing = [
-                key
-                for key in ("kernel", "vermagic", "syscall_dispatch")
-                if not facts.get(key)
-            ]
-            if missing:
-                raise RuntimeError(
-                    f"builder reported no {', '.join(missing)}; build not published"
-                )
+            target = diamorphine.build_target(facts)
             record = self._build_record(
                 distro_id,
                 diamorphine.SCENARIO_ID,
                 (artifact,),
-                {
-                    "repository": source["repository"],
-                    "commit": source["commit"],
-                    "archive_sha256": source["archive_sha256"],
-                    "compatibility_patch_sha256": source[
-                        "compatibility_patch_sha256"
-                    ],
-                },
-                {"sha256": file_sha256(diamorphine.BUILD_SCRIPT)},
+                source,
+                diamorphine.build_recipe(),
                 facts,
             )
-            record["target"].update(
-                kernel=facts["kernel"].strip(),
-                vermagic=facts["vermagic"].strip(),
-                syscall_dispatch=facts["syscall_dispatch"].strip(),
-            )
+            record["target"].update(target)
             cache_dir = self._publish_build(
                 distro_id, diamorphine.SCENARIO_ID, (artifact,), record
             )

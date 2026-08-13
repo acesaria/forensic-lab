@@ -55,6 +55,47 @@ def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
     return caches
 
 
+def test_diamorphine_runner_owns_builder_mechanics(tmp_path: Path):
+    ssh = MagicMock()
+    ssh.run_checked.return_value = "builder output"
+    source = {"commit": "pinned-commit"}
+
+    artifact, stdout = diamorphine.build(ssh, tmp_path, source)
+
+    assert artifact == tmp_path / diamorphine.ARTIFACT_NAME
+    assert stdout == "builder output"
+    assert ssh.put.call_args_list == [
+        call(diamorphine.ARCHIVE, "/tmp/diamorphine-upstream-af494fa.tar"),
+        call(diamorphine.BUILD_SCRIPT, "/tmp/diamorphine-build.sh"),
+        call(
+            diamorphine.COMPATIBILITY_PATCH,
+            "/tmp/diamorphine-compatibility.patch",
+        ),
+    ]
+    ssh.run_checked.assert_called_once_with(
+        "bash /tmp/diamorphine-build.sh /tmp/diamorphine-upstream-af494fa.tar "
+        "/tmp/diamorphine-compatibility.patch /tmp/forensic-lab/diamorphine_build",
+        timeout=1800,
+    )
+    ssh.get.assert_called_once_with(
+        "/tmp/forensic-lab/diamorphine_build/Diamorphine-pinned-commit/diamorphine.ko",
+        artifact,
+    )
+    assert diamorphine.build_recipe() == {
+        "sha256": file_sha256(diamorphine.BUILD_SCRIPT)
+    }
+    facts = {
+        "kernel": " kernel ",
+        "vermagic": " vermagic ",
+        "syscall_dispatch": " x64 ",
+    }
+    assert diamorphine.build_target(facts) == {
+        key: value.strip() for key, value in facts.items()
+    }
+    with pytest.raises(RuntimeError, match="kernel, vermagic, syscall_dispatch"):
+        diamorphine.build_target({})
+
+
 def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
     ssh = MagicMock()
     ssh.run_checked.side_effect = ["", "builder output"]
