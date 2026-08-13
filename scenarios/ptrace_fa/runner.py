@@ -17,11 +17,11 @@ ROOT = Path(__file__).resolve().parent
 FILES_DIR = ROOT / "files"
 BUILD_SCRIPT = FILES_DIR / "build.sh"
 
-_BUILDER_SOURCE_ROOT = "/tmp/forensic-lab/ptrace_fa_source"
-_BUILDER_BUILD_ROOT = "/tmp/forensic-lab/ptrace_fa_build"
+_BUILDER_SOURCE_ROOT = "/tmp/ptrace-fa-source"
+_BUILDER_BUILD_ROOT = "/tmp/ptrace-fa-build"
 _BUILDER_SCRIPT = "/tmp/ptrace-fa-build.sh"
 
-VICTIM_ROOT = "/tmp/forensic-lab/ptrace_fa"
+VICTIM_ROOT = "/tmp"
 
 # Where the host listens for the reverse shell; it is the isolated lab
 # network's host-side gateway (see infra/provider.py). The shellcode is
@@ -130,7 +130,6 @@ def run_ptrace_fa(
             record_operation(command_log_path, "verify_guest_identity")
 
             console.scope("GUEST", "prepare binaries")
-            run_logged_command(terminal, command_log_path, f"mkdir -p {VICTIM_ROOT}")
             for source, name in zip(VICTIM_ARTIFACTS, ARTIFACT_NAMES, strict=True):
                 run_logged_command(
                     terminal,

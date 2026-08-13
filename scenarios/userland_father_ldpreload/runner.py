@@ -23,10 +23,9 @@ ARTIFACT_NAME = "rk.so"
 # Paths on the builder VM, used only by the build path.
 _BUILDER_ARCHIVE = "/tmp/father-upstream-4eb2712.tar"
 _BUILDER_SCRIPT = "/tmp/father-build.sh"
-_BUILDER_BUILD_ROOT = "/tmp/forensic-lab/father_build"
+_BUILDER_BUILD_ROOT = "/tmp/father-build"
 
 # Paths on the victim VM. This is the evidence surface a run leaves behind.
-VICTIM_ROOT = "/tmp/forensic-lab/father_ldpreload"
 VICTIM_ARTIFACT = f"/tmp/{ARTIFACT_NAME}"
 
 # Father defaults
@@ -40,7 +39,7 @@ SHELL_MARKER = b"Enjoy the shell!"
 # Only intentional Father customization
 HIDDEN_PREFIX = "__malicious_"
 HIDDEN_FILE_NAME = f"{HIDDEN_PREFIX}file"
-HIDDEN_DIR = f"{VICTIM_ROOT}/probe"
+HIDDEN_DIR = "/tmp"
 LIST_HIDDEN_DIR = f"ls -la -- {HIDDEN_DIR}"
 
 _CLEANUP_COMMANDS = (
@@ -186,7 +185,6 @@ def _verify_guest_identity(
 def _activate_father(terminal: SSHTerminal, command_log_path: Path) -> None:
     console.scope("GUEST", "install and activate")
     for command in (
-        f"mkdir -p {HIDDEN_DIR}",
         f"sudo -n install -m 0644 {VICTIM_ARTIFACT} {INSTALLED_LIBRARY}",
         f"touch {HIDDEN_DIR}/{HIDDEN_FILE_NAME}",
     ):

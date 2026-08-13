@@ -154,6 +154,7 @@ authoritative matrix):**
 
 ## Runtime-path cleanup
 
-- Remove `/tmp/forensic-lab` from remaining victim-side scenario paths as each
-  scenario is revised. Some treatments already stage directly beneath `/tmp`;
-  immutable historical locators remain unchanged.
+- DONE for the four attack-scenario runners (Father, ptrace, Diamorphine,
+  Bad-BPF): they use direct `/tmp` paths or Bad-BPF's bounded hidden directory.
+  This statement does not cover `interactive_shell`. Immutable historical
+  locators remain unchanged.

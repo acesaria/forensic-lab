@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from contextlib import nullcontext
 from pathlib import Path
 from unittest.mock import call, MagicMock
@@ -84,11 +85,11 @@ def test_diamorphine_runner_owns_builder_mechanics(tmp_path: Path):
     ]
     ssh.run_checked.assert_called_once_with(
         "bash /tmp/diamorphine-build.sh /tmp/diamorphine-upstream-af494fa.tar "
-        "/tmp/diamorphine-compatibility.patch /tmp/forensic-lab/diamorphine_build",
+        "/tmp/diamorphine-compatibility.patch /tmp/diamorphine-build",
         timeout=1800,
     )
     ssh.get.assert_called_once_with(
-        "/tmp/forensic-lab/diamorphine_build/Diamorphine-pinned-commit/diamorphine.ko",
+        "/tmp/diamorphine-build/Diamorphine-pinned-commit/diamorphine.ko",
         artifact,
     )
     assert diamorphine.build_recipe() == {
@@ -126,11 +127,11 @@ def test_badbpf_runner_owns_current_builder_recipe(tmp_path: Path):
     ]
     ssh.run_checked.assert_called_once_with(
         "bash /tmp/badbpf-build.sh /tmp/badbpf-upstream.tar.gz "
-        "/tmp/forensic-lab/badbpf_build /tmp/xcrypto.c",
+        "/tmp/badbpf-build /tmp/xcrypto.c",
         timeout=1800,
     )
     assert ssh.get.call_args_list == [
-        call(f"/tmp/forensic-lab/badbpf_build/artifacts/{name}", artifact)
+        call(f"/tmp/badbpf-build/artifacts/{name}", artifact)
         for name, artifact in zip(badbpf.ARTIFACT_NAMES, artifacts, strict=True)
     ]
     record = {
@@ -217,6 +218,110 @@ def test_diamorphine_uses_direct_tmp_reconnaissance_note(tmp_path: Path, monkeyp
     assert facts["reconnaissance_parent_path"] == "/tmp"
 
 
+def test_father_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
+    ssh = MagicMock()
+    terminal = ssh.open_terminal.return_value
+    terminal.transcript = "transcript"
+    listing = f"-rw-r--r-- 1 labuser labuser 0 {father.HIDDEN_FILE_NAME}"
+    outputs = {
+        father.LIST_HIDDEN_DIR: [listing, "total 0"],
+    }
+    default = iter(["ubuntu-22.04 x86_64"] + [""] * 20)
+
+    def fake_run(_terminal, _log, command, **_kwargs):
+        queue = outputs.get(command)
+        output = queue.pop(0) if queue else next(default)
+        return MagicMock(combined_output=output)
+
+    run_command = MagicMock(side_effect=fake_run)
+    monkeypatch.setattr(father, "run_logged_command", run_command)
+    monkeypatch.setattr(
+        father, "_validate_backdoor", lambda _ssh: (MagicMock(), {"client_port": 54321})
+    )
+
+    _facts, _cleanup = father.run_father(
+        ssh,
+        tmp_path / "transcript.txt",
+        command_log_path=tmp_path / "command_log.jsonl",
+        artifact_path=tmp_path / father.ARTIFACT_NAME,
+        build_record={"target": {"distro_id": "ubuntu-22.04", "arch": "x86_64"}},
+    )
+
+    assert father.VICTIM_ARTIFACT == "/tmp/rk.so"
+    assert father.HIDDEN_DIR == "/tmp"
+    ssh.put.assert_called_once_with(tmp_path / father.ARTIFACT_NAME, "/tmp/rk.so")
+    commands = [item.args[2] for item in run_command.call_args_list]
+    assert f"touch /tmp/{father.HIDDEN_FILE_NAME}" in commands
+    assert "ls -la -- /tmp" in commands
+    assert "rm -f -- /tmp/rk.so" in commands
+    blob = "\n".join([*commands, father.VICTIM_ARTIFACT])
+    assert "forensic-lab" not in blob
+    assert "mkdir" not in blob
+    assert not re.findall(r"/tmp/[\w.\-]+/", blob)
+
+
+def test_ptrace_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
+    ssh = MagicMock()
+    terminal = ssh.open_terminal.return_value
+    terminal.transcript = "transcript"
+    outputs = iter(
+        [
+            "ubuntu-22.04 x86_64",
+            "",
+            "",
+            "",
+            "labuser",
+            "[1] 123\n123",
+            "",
+            "alive",
+        ]
+    )
+    run_command = MagicMock(
+        side_effect=lambda *_args, **_kwargs: MagicMock(
+            combined_output=next(outputs)
+        )
+    )
+    monkeypatch.setattr(ptrace, "run_logged_command", run_command)
+    monkeypatch.setattr(ptrace, "_open_listener", lambda: MagicMock())
+    monkeypatch.setattr(
+        ptrace,
+        "_accept_reverse_shell",
+        lambda _listener, identity: (identity, MagicMock()),
+    )
+
+    facts, _cleanup = ptrace.run_ptrace_fa(
+        ssh,
+        tmp_path / "transcript.txt",
+        command_log_path=tmp_path / "command_log.jsonl",
+        artifact_paths=tuple(tmp_path / name for name in ptrace.ARTIFACT_NAMES),
+        build_record={"target": {"distro_id": "ubuntu-22.04", "arch": "x86_64"}},
+    )
+
+    assert facts["victim_pid"] == 123
+    assert ptrace.VICTIM_ROOT == "/tmp"
+    assert ptrace.VICTIM_ARTIFACTS == (
+        "/tmp/ptrace_fa-shellcode_inject_fa",
+        "/tmp/ptrace_fa-victim",
+    )
+    assert ssh.put.call_args_list == [
+        call(tmp_path / name, remote)
+        for name, remote in zip(
+            ptrace.ARTIFACT_NAMES, ptrace.VICTIM_ARTIFACTS, strict=True
+        )
+    ]
+    commands = [item.args[2] for item in run_command.call_args_list]
+    assert (
+        "install -m 0755 /tmp/ptrace_fa-shellcode_inject_fa /tmp/shellcode_inject_fa"
+        in commands
+    )
+    assert "install -m 0755 /tmp/ptrace_fa-victim /tmp/victim" in commands
+    assert "cd /tmp" in commands
+    blob = "\n".join([*commands, *ptrace.VICTIM_ARTIFACTS])
+    assert "forensic-lab" not in blob
+    assert "mkdir" not in blob
+    assert not re.findall(r"/tmp/[\w.\-]+/", blob)
+
+
 def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
     ssh = MagicMock()
     ssh.run_checked.side_effect = ["", "builder output"]
@@ -227,13 +332,12 @@ def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
     assert stdout == "builder output"
     assert ssh.run_checked.call_args_list == [
         call(
-            "rm -rf /tmp/forensic-lab/ptrace_fa_source && mkdir -p "
-            "/tmp/forensic-lab/ptrace_fa_source/src "
-            "/tmp/forensic-lab/ptrace_fa_source/common"
+            "rm -rf /tmp/ptrace-fa-source && mkdir -p "
+            "/tmp/ptrace-fa-source/src /tmp/ptrace-fa-source/common"
         ),
         call(
-            "bash /tmp/ptrace-fa-build.sh /tmp/forensic-lab/ptrace_fa_source "
-            "/tmp/forensic-lab/ptrace_fa_build "
+            "bash /tmp/ptrace-fa-build.sh /tmp/ptrace-fa-source "
+            "/tmp/ptrace-fa-build "
             "0xc0,0xa8,0x64,0x01,0x66,0x68,0x11,0x5c",
             timeout=1800,
         ),
@@ -242,14 +346,14 @@ def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
         *[
             call(
                 ptrace.FILES_DIR / name,
-                f"/tmp/forensic-lab/ptrace_fa_source/{name}",
+                f"/tmp/ptrace-fa-source/{name}",
             )
             for name in ptrace.SOURCE_FILES
         ],
         call(ptrace.BUILD_SCRIPT, "/tmp/ptrace-fa-build.sh"),
     ]
     assert ssh.get.call_args_list == [
-        call(f"/tmp/forensic-lab/ptrace_fa_build/{name}", artifact)
+        call(f"/tmp/ptrace-fa-build/{name}", artifact)
         for name, artifact in zip(ptrace.ARTIFACT_NAMES, artifacts, strict=True)
     ]
     assert ptrace.build_source() == {

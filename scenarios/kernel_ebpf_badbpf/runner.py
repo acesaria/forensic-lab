@@ -24,7 +24,7 @@ ARTIFACT_NAMES = ("pidhide", "exechijack", "xcrypto")
 _BUILDER_ARCHIVE = "/tmp/badbpf-upstream.tar.gz"
 _BUILDER_SCRIPT = "/tmp/badbpf-build.sh"
 _BUILDER_XCRYPTO_SOURCE = "/tmp/xcrypto.c"
-_BUILDER_BUILD_ROOT = "/tmp/forensic-lab/badbpf_build"
+_BUILDER_BUILD_ROOT = "/tmp/badbpf-build"
 
 # Victim paths
 REMOTE_ROOT = "/tmp/.xcrypto"

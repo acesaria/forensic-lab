@@ -21,7 +21,7 @@ LOCK = ROOT / "diamorphine.lock.yml"
 ARTIFACT_NAME = "diamorphine.ko"
 
 _BUILDER_ARCHIVE = "/tmp/diamorphine-upstream-af494fa.tar"
-_BUILDER_BUILD_ROOT = "/tmp/forensic-lab/diamorphine_build"
+_BUILDER_BUILD_ROOT = "/tmp/diamorphine-build"
 _BUILDER_SCRIPT = "/tmp/diamorphine-build.sh"
 _BUILDER_PATCH = "/tmp/diamorphine-compatibility.patch"
 
