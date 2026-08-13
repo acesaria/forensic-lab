@@ -30,11 +30,15 @@ decision. Never push unless requested.
    `7010c86`). `cli.py build` compiles Father on the builder and publishes
    `rk.so` plus `build.json`; `run` verifies and stages both into the immutable
    run before touching the victim. Compatibility is keyed on the profile's
-   pinned image checksum, not the kernel. Validated on Ubuntu 22.04 with
-   `--no-acquire`: build, idempotent rebuild, both scenarios, and the
-   fail-closed negative test. Actual cost 9 files and 545 changed text lines
-   against a 350-line ceiling that predated the scenario README, the source-lock
-   note, and the tests. The `build-isf` -> `builder` rename followed separately.
+   pinned image checksum, not the kernel. The former retained and cleanup keys
+   were validated on Ubuntu 22.04 with `--no-acquire`, including the build,
+   idempotent rebuild, and fail-closed negative test. The consolidated
+   cleanup-by-default runner completed a full dirty-worktree validation in
+   `ubuntu-22.04_userland_father_ldpreload_20260813-124003`; a clean committed
+   authoritative run is still required before freeze. Actual cost was 9 files
+   and 545 changed text lines against a 350-line ceiling that predated the
+   scenario README, source-lock note, and tests. The `build-isf` -> `builder`
+   rename followed separately.
 2. **ptrace prebuilt conversion** — reuse Task 1's mechanism, remove victim-side
    compilation, and upload and execute the exact prebuilt. Validate Ubuntu 22.04
    with `--no-acquire`. Ceiling: 180 changed text lines and 5 files.
@@ -43,7 +47,7 @@ decision. Never push unless requested.
    behavior, and fail closed on incompatibility. Validate Ubuntu 22.04 with
    `--no-acquire`. Ceiling: 320 changed text lines and 8 files.
 4. **Bounded compatibility validation** — on Ubuntu 24.04 and Debian 13, run
-   Father retained, ptrace, and Diamorphine retained with `--no-acquire`. Make no
+   Father, ptrace, and Diamorphine retained with `--no-acquire`. Make no
    code changes by default. A compatibility fix needs separate approval and is
    limited to 80 changed lines per technique; otherwise record the limitation.
 5. **Remove automatic forensic extraction and freeze** — automatic per-run
@@ -65,9 +69,9 @@ review and commit only if code changes.
 - `run` consumes an already prepared compatible input and never mutates the
   builder cache. Missing or incompatible input fails before victim reset and
   prints the exact build command required.
-- Father retained/cleanup share one `.so`; Diamorphine retained/cleanup share
-  one exact-kernel `.ko`. Copy the selected artifact and `build.json` into the
-  immutable run and index them in the manifest.
+- Father uses one `.so` and one cleanup-by-default treatment; Diamorphine
+  retained/cleanup share one exact-kernel `.ko`. Copy the selected artifact and
+  `build.json` into the immutable run and index them in the manifest.
 - Keep scenario validation, forensic observation, and analyst interpretation
   distinct. Target inventory and source applicability are prospective.
 - Do not add automatic detection, matching, scoring, reconstruction, a build
@@ -80,15 +84,10 @@ review and commit only if code changes.
 After Task 5, require a clean committed tree and execute these Ubuntu 22.04 full
 acquisitions one at a time:
 
-1. Father retained;
-2. Father cleanup;
-3. ptrace;
-4. Diamorphine retained;
-5. Diamorphine cleanup.
-
-Leave about a minute between consecutive Father runs. The trigger source port
-54321 is fixed, so the host socket stays in `TIME_WAIT` and an immediate second
-run fails with `Address already in use` before reaching the backdoor check.
+1. Father;
+2. ptrace;
+3. Diamorphine retained;
+4. Diamorphine cleanup.
 
 After each run, verify repository revision, scenario and acquisition statuses,
 input hashes, acquisition hashes, EWF verification, and artifact sizes. Stop
@@ -108,6 +107,9 @@ until replacement runs and investigations are accepted.
   workflows.
 - Add an accurate thesis acknowledgment or methods disclosure for tools used in
   implementation, testing, and documentation.
+- Near delivery, review error checking and exception handling across the runners
+  and the orchestrator to confirm it is minimal rather than excessive. Covering
+  the full space of exception cases stays out of scope.
 
 ## Deferred unless explicitly reopened
 

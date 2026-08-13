@@ -170,22 +170,9 @@ class ForensicOrchestrator:
 
         vm_name = self._ensure_builder_vm(distro_id)
         with tempfile.TemporaryDirectory() as staging:
-            artifact = Path(staging) / father.ARTIFACT_NAME
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
-                    ssh.put(father.ARCHIVE, father.UPLOAD_PATH)
-                    ssh.put(father.BUILD_SCRIPT, father.REMOTE_BUILD_SCRIPT)
-                    console.step(f"building {father.ARTIFACT_NAME} on {vm_name}...")
-                    stdout = ssh.run_checked(
-                        f"bash {father.REMOTE_BUILD_SCRIPT} {father.UPLOAD_PATH} "
-                        f"{father.REMOTE_BUILD_ROOT} {father.HIDDEN_PREFIX}",
-                        timeout=1800,
-                    )
-                    ssh.get(
-                        f"{father.REMOTE_BUILD_ROOT}/Father-{source['commit']}"
-                        f"/{father.ARTIFACT_NAME}",
-                        artifact,
-                    )
+                    artifact, stdout = father.build(ssh, Path(staging), source)
             finally:
                 self.vm_manager.shutdown_vm(vm_name)
 
@@ -194,10 +181,7 @@ class ForensicOrchestrator:
                 father.SCENARIO_ID,
                 (artifact,),
                 source,
-                {
-                    "sha256": file_sha256(father.BUILD_SCRIPT),
-                    "hidden_prefix": father.HIDDEN_PREFIX,
-                },
+                father.build_recipe(),
                 _builder_facts(stdout),
             )
             cache_dir = self._publish_build(
@@ -460,7 +444,7 @@ class ForensicOrchestrator:
         acquire: bool = True,
     ) -> str | None:
         """Run one explicit scenario through the full experiment lifecycle."""
-        is_father = scenario_id in (father.SCENARIO_ID, father.CLEANUP_SCENARIO_ID)
+        is_father = scenario_id == father.SCENARIO_ID
         is_ptrace_fa = scenario_id == ptrace.SCENARIO_ID
         is_diamorphine = scenario_id == diamorphine.SCENARIO_ID
         # Father and ptrace keep a connection open through memory capture;
@@ -498,14 +482,15 @@ class ForensicOrchestrator:
                 "published Diamorphine build uses a stale recipe; rerun the build"
             )
 
-        # Every run records its exact revision; one that cannot is not a run.
+        # Every run records the revision it ran from; "-dirty" marks a run made
+        # from uncommitted code. A run that cannot record this is not a run.
         revision = command_output(
-            ["git", "-C", str(self.repo_root), "rev-parse", "HEAD"]
+            ["git", "-C", str(self.repo_root),
+             "describe", "--always", "--dirty", "--abbrev=40", "--match="]
         )
         if revision is None:
             raise RuntimeError(
-                f"cannot record the repository revision: "
-                f"'git -C {self.repo_root} rev-parse HEAD' failed"
+                f"cannot record the repository revision of {self.repo_root}"
             )
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
@@ -589,7 +574,6 @@ class ForensicOrchestrator:
                             ssh,
                             transcript_path,
                             command_log_path=command_log_path,
-                            scenario_id=scenario_id,
                             artifact_path=(
                                 run_root / input_record["artifacts"][0]["path"]
                             ),

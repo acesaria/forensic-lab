@@ -2,11 +2,9 @@
 
 The `userland_father_ldpreload` calibration uses a builder-produced Father object,
 activates its shared object system-wide through `/etc/ld.so.preload`, validates
-native file hiding and Father's native `accept()` backdoor, then preserves the
-active compromise for optional acquisition. The
-`userland_father_ldpreload_cleanup` treatment performs the same validated
-deployment before applying a small, naive staging cleanup. These are treatment
-checks, not forensic findings.
+native file hiding and Father's native `accept()` backdoor, applies a small
+post-deployment staging cleanup, then preserves the active compromise for
+optional acquisition. These are treatment checks, not forensic findings.
 
 The active control flow is intentionally short:
 
@@ -30,16 +28,19 @@ The runner uploads the staged artifact rather than the cache copy, then:
 - installs `rk.so` at Father's default `/lib/selinux.so.3` path;
 - lists `__malicious_file`, writes the library path to `/etc/ld.so.preload`,
   then lists the same directory and confirms that the file is hidden;
-- restarts `ssh.service` and validates Father's native root shell.
+- restarts `ssh.service` and validates Father's native root shell;
+- runs `sync`, removes the uploaded `/tmp/rk.so`, and applies the naive history
+  cleanup while retaining the active preload configuration and installed
+  library.
 
-For the cleanup treatment only, the same interactive `labuser` Bash session
-then removes the uploaded `/tmp/rk.so`, runs the naive history commands, and
-confirms `$HOME/.bash_history` is absent while `/etc/ld.so.preload` and
-`/lib/selinux.so.3` remain present. The cleanup does not target the probe
-directory or controlled hidden file. The terminal transcript and append-only
-command log preserve the guest identity check, activation, validation, and
-cleanup commands as experimental ground truth. Builder provenance lives in the
-separate build record, not the scenario command log.
+`sync` is a prospective calibration control: it makes the staging object's
+on-disk write deterministic before deletion, rather than modelling an attacker
+command. The cleanup does not target the probe directory, controlled hidden
+file, `/etc/ld.so.preload`, or `/lib/selinux.so.3`. The terminal transcript and
+append-only command log preserve the guest identity check, activation,
+validation, cleanup, and post-cleanup checks as experimental ground truth.
+Builder provenance lives in the separate build record, not the scenario command
+log.
 
 ## Native backdoor validation
 
@@ -55,15 +56,17 @@ The bounded check succeeds only when the shell marker is observed and `id`
 returns both `uid=0(root)` and `gid=1337`. The CLI displays only the shell marker
 and parsed identity, not Father's ASCII drawing. `command_log.jsonl` retains
 only a minimal `validate_backdoor` success or failure operation, with the
-exception message on failure. The parsed identity, trigger source port,
-listener service and port, and open connection at scenario completion live in
-`scenario_facts`. No raw response, response excerpt, response tail, or separate
-socket-response file is retained. This socket check is treatment validation,
-not a forensic conclusion.
+exception message on failure. `scenario_facts` retains only the established
+socket's client and server addresses and ports, obtained from the socket itself.
+It does not repeat paths, validation booleans, cleanup outcomes, or the parsed
+identity already enforced by the runner. No raw response, response excerpt,
+response tail, or separate socket-response file is retained. These facts are
+disclosed ground truth for validating an independently selected memory socket,
+not candidate-selection inputs or forensic conclusions.
 
-Both Father variants represent an active-compromise memory snapshot. The
-ordinary SSH orchestration shell exits before acquisition, while Father's
-native root `/bin/sh` and its TCP connection remain active during RAM capture.
+The scenario represents an active-compromise memory snapshot. The ordinary SSH
+orchestration shell exits before acquisition, while Father's native root
+`/bin/sh` and its TCP connection remain active during RAM capture.
 The client connects from source port 54321 to sshd's port 22, but Father's
 `accept()` hook intercepts it before SSH authentication, so it is not a second
 genuine SSH login. The host closes the native socket immediately after memory
@@ -80,21 +83,12 @@ allowed for this explicit preparation step; the victim remains offline:
   --scenario userland_father_ldpreload
 ```
 
-Both treatments consume that same published artifact.
-
 The light production validation skips acquisition and still powers the Father
 VM off:
 
 ```bash
 .venv/bin/python cli.py run --distro ubuntu-22.04 \
   --scenario userland_father_ldpreload --no-acquire
-```
-
-The cleanup treatment uses the same runner and lifecycle:
-
-```bash
-.venv/bin/python cli.py run --distro ubuntu-22.04 \
-  --scenario userland_father_ldpreload_cleanup --no-acquire
 ```
 
 Omit `--no-acquire` for the established memory-while-on and disk-while-off

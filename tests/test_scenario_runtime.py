@@ -2,12 +2,14 @@ import hashlib
 import json
 from contextlib import nullcontext
 from pathlib import Path
+from unittest.mock import call, MagicMock
 
 import pytest
 
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.provenance import file_sha256
 from scenarios.kernel_diamorphine import runner as diamorphine
+from scenarios.userland_father_ldpreload import runner as father
 
 
 @pytest.fixture
@@ -67,7 +69,6 @@ def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
         ("userland_father_ldpreload", False, None, 1, True, "off"),
         ("userland_father_ldpreload", False, "scenario", 1, False, "off"),
         ("userland_father_ldpreload", True, "acquisition", 1, True, "off"),
-        ("userland_father_ldpreload_cleanup", True, None, 0, True, "off"),
         ("interactive_shell", False, "scenario", 0, False, "on"),
         ("interactive_shell", True, None, 0, False, "off"),
         ("ptrace_fa", False, None, 1, True, "off"),
@@ -94,11 +95,7 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     facts = {"validated": True}
     events = []
     cleanup_socket = None
-    build_scenario = (
-        "userland_father_ldpreload"
-        if scenario_id.startswith("userland_father")
-        else scenario_id
-    )
+    build_scenario = scenario_id
     cache, artifacts = prebuilt_caches.get(build_scenario, (None, []))
 
     class FakeSocket:
@@ -181,9 +178,8 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             raise error
         return []
 
-    def fake_father(*_args, **kwargs):
+    def fake_father(*_args, **_kwargs):
         nonlocal cleanup_socket
-        assert kwargs["scenario_id"] == scenario_id
         if failure_phase == "scenario":
             raise error
         cleanup_socket = FakeSocket()
@@ -352,3 +348,34 @@ def test_father_wrong_image_does_not_reset_victim(
             "userland_father_ldpreload",
         )
     assert not resets and not FakePaths.experiments_dir.exists()
+
+
+def test_father_records_the_established_connection(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    response = MagicMock()
+    response.__iter__.side_effect = (
+        iter((b"Enjoy the shell!\n",)),
+        iter((b"\x1b[0muid=0(root) gid=1337 groups=1337\n",)),
+    )
+    client = MagicMock()
+    client.getsockname.return_value = "192.168.100.1", father.SOURCE_PORT
+    client.getpeername.return_value = "192.168.100.41", 22
+    client.makefile.return_value.__enter__.return_value = response
+    monkeypatch.setattr(
+        father.socket,
+        "create_connection",
+        lambda *_args, **_kwargs: client,
+    )
+    ssh = type("SSH", (), {"host": "192.168.100.41", "port": 22})()
+
+    connected, facts = father._validate_backdoor(ssh)
+
+    assert connected is client
+    assert facts == {
+        "client_address": "192.168.100.1",
+        "client_port": 54321,
+        "server_address": "192.168.100.41",
+        "server_port": 22,
+    }
+    assert client.sendall.call_args_list == [call(father.SHELL_PASSWORD), call(b"id\n")]

@@ -25,3 +25,7 @@ compatibility_patch:
     upstream 6.9, so version-only selection leaves Diamorphine patching the
     retained but unused sys_call_table. The builder selects the upstream
     FlipSwitch path from the exact running builder kernel's kallsyms capability.
+    The pinned commit is upstream master's tip, so no later upstream commit
+    resolves this and re-pinning is not an available alternative to the patch.
+    The patch changes only the dispatch selection gate and a loop declaration;
+    it adds no behavior.

@@ -16,13 +16,12 @@ reconstruction system.
 
 The CLI exposes `init`, `setup`, `build`, `run`, and `destroy`. `build` publishes
 a scenario's prebuilt artifact and is required before running that scenario.
-`run` dispatches directly to one of five scenario keys:
+`run` dispatches directly to one of four scenario keys:
 
 - `interactive_shell`;
 - `kernel_diamorphine`;
 - `ptrace_fa`;
-- `userland_father_ldpreload`;
-- `userland_father_ldpreload_cleanup`.
+- `userland_father_ldpreload`.
 
 A full run restores the prepared baseline, executes and validates the selected
 scenario, acquires memory while the VM is on, shuts the VM down, acquires disk,

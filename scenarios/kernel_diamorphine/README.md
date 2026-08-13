@@ -4,9 +4,10 @@
 lab. Its treatment checks are not forensic findings.
 
 The locked source archive is pristine upstream commit
-`af494fad213654aae16cfdbbb50e7dc26383e4b2`. Ubuntu backported direct
-`x64_sys_call` dispatch while retaining the now-unused `sys_call_table`, so the
-builder applies the separately hash-pinned compatibility patch and selects the
+`af494fad213654aae16cfdbbb50e7dc26383e4b2`, which is upstream master's tip.
+Ubuntu backported direct `x64_sys_call` dispatch while retaining the now-unused
+`sys_call_table`, and no upstream commit resolves this, so the builder applies
+the separately hash-pinned compatibility patch and selects the
 upstream FlipSwitch path from the exact running kernel's `/proc/kallsyms`. It publishes
 `diamorphine.ko` with a `build.json` carrying the kernel, vermagic, dispatch
 path, pristine-source hash, and patch hash. The victim never builds.

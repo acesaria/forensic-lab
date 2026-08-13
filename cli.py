@@ -19,9 +19,6 @@ from scenarios.interactive_shell.runner import SCENARIO_ID as INTERACTIVE_SHELL_
 from scenarios.kernel_diamorphine.runner import SCENARIO_ID as DIAMORPHINE_SCENARIO
 from scenarios.ptrace_fa.runner import SCENARIO_ID as PTRACE_FA_SCENARIO
 from scenarios.userland_father_ldpreload.runner import SCENARIO_ID as FATHER_SCENARIO
-from scenarios.userland_father_ldpreload.runner import (
-    CLEANUP_SCENARIO_ID as FATHER_CLEANUP_SCENARIO,
-)
 
 
 SCENARIO_CHOICES = tuple(
@@ -30,7 +27,6 @@ SCENARIO_CHOICES = tuple(
             INTERACTIVE_SHELL_SCENARIO,
             DIAMORPHINE_SCENARIO,
             FATHER_SCENARIO,
-            FATHER_CLEANUP_SCENARIO,
             PTRACE_FA_SCENARIO,
         )
     )
