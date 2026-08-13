@@ -11,6 +11,13 @@ or state paths on their own. Each experiment owns one directory under
 experiments_dir, named by its `run_id` ("{distro}_{scenario}_{ts}"), holding a
 dumps/ subtree (raw acquisition) via run_dumps_dir(). run_analysis_dir() is
 used only by the setup-time Plaso probe; a scenario run creates no analysis/.
+
+investigations_dir and its run_investigation_dir()/run_derived_dir() helpers
+mirror this for the ignored analyst workspace under shared/investigations/
+(see docs/investigations/README.md). No Python code creates or reads this
+tree today -- Runme notebooks derive it by hand as "shared/investigations/
+$RUN_ID" -- these accessors exist so any future orchestrator-side tooling
+does not re-hardcode that literal and drift from shared_dir.
 """
 
 from dataclasses import dataclass
@@ -46,6 +53,10 @@ class ProjectPaths:
     def isf_dir(self) -> Path:
         return self.shared_dir / "isf"
 
+    @property
+    def investigations_dir(self) -> Path:
+        return self.shared_dir / "investigations"
+
     # --- state_dir tree (libvirt-owned storage) --------------------------
 
     @property
@@ -64,3 +75,12 @@ class ProjectPaths:
 
     def run_analysis_dir(self, run_id: str) -> Path:
         return self.experiments_dir / run_id / "analysis"
+
+    def run_investigation_dir(self, run_id: str) -> Path:
+        """Ignored analyst workspace root for one run; see run_derived_dir()."""
+        return self.investigations_dir / run_id
+
+    def run_derived_dir(self, run_id: str, source: str) -> Path:
+        """Where a Runme notebook writes derived output for one source
+        (disk/memory/timeline/...), per docs/investigations/README.md."""
+        return self.run_investigation_dir(run_id) / "derived" / source

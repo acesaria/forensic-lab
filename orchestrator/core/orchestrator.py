@@ -849,12 +849,16 @@ class ForensicOrchestrator:
         Acquire a baseline image and probe with Volatility + SleuthKit + Plaso.
         Called automatically at the end of the CLI 'setup' sequence.
         Requires the ISF to already exist (call after build_isf).
-        VM ends OFF.
+        VM ends OFF. This run carries no manifest.json and is not an
+        experiment record, only a disposable pipeline self-test: on a
+        successful probe its directory is deleted. It is kept on failure so
+        the dumps/ and analysis/ output remain available for debugging.
         """
         assert self._vol_runner is not None and self._sleuth_runner is not None
         vm_name = self._reset_lab(distro_id)
         # Compute run_id ONCE so dumps/ and analysis/ share the same timestamp.
         run_id = _make_run_id(distro_id, VERIFY_SCENARIO)
+        run_dir = self._paths.experiments_dir / run_id
 
         _, memory_path, disk_path = self._run_acquisition(
             vm_name, run_id, VERIFY_SCENARIO
@@ -865,7 +869,8 @@ class ForensicOrchestrator:
         self._sleuth_runner.probe(disk_path)
         # Plaso probe: confirm the toolchain can ingest the disk and emit events.
         self._build_timeline(disk_path, self._paths.run_analysis_dir(run_id))
-        console.ok(f"pipeline verified for '{distro_id}'")
+        shutil.rmtree(run_dir, ignore_errors=True)
+        console.ok(f"pipeline verified for '{distro_id}' (verify run cleaned up)")
 
     # --- private: experiment helpers -------------------------------------
 

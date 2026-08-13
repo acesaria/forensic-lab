@@ -18,6 +18,32 @@ Runme investigation notebook.
 - Apply KISS: use short sequential steps and do not add speculative analysis,
   helpers, abstractions, or automation.
 
+## Identifying a run
+
+`shared/experiments/<run_id>/` holds every started run, including verify,
+failed, and `--no-acquire` validation runs, not only investigable ones.
+Before investigating, confirm what `run_id` actually is:
+
+- **Verify** (`{distro}_verify_{ts}`): a disposable `setup`-time pipeline
+  self-test, not an experiment record. It has no `manifest.json` at all and
+  is deleted automatically after a successful probe; one still on disk means
+  a prior probe failed and it is kept only for debugging. Never investigate
+  it.
+- **Validation-only** (`--no-acquire`): `manifest.json` has
+  `"acquisition_requested": false` and no `dumps/` directory. Proves the
+  scenario executed; not a forensic experiment.
+- **Failed**: `manifest.json` has `"status": "failed"` with `failed_phase`
+  set to `"scenario"` or `"acquisition"`.
+- **Real acquired run** (the only kind eligible for investigation):
+  `manifest.json` has `"status": "completed"` and
+  `manifest.json.artifacts.acquisition_manifest` set, alongside
+  `dumps/acquisition.json`.
+
+Older `shared/investigations/<run_id>/` trees predating the `derived/
+<source>/` convention above (`*-worklog.md`, `commands.txt`, `SHA256SUMS`)
+are superseded, gitignored, and carry no provenance; leave or prune them
+freely.
+
 ## Shell history and Linux log examination
 
 - Every disk investigation performs a bounded lookup for command-history
