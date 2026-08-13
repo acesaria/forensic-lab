@@ -1,0 +1,15 @@
+upstream:
+  url: https://github.com/pathtofile/bad-bpf
+  pinned_commit: 0fd3cd0bd4f3c1e6488a63d1e273bb7c36fa58d7
+
+retrieval:
+  method: git-clone-recursive
+  archive_filename: badbpf-upstream-0fd3cd0bd4f3c1e6488a63d1e273bb7c36fa58d7.tar.gz
+  archive_sha256: 97766d77c46c7da3ebc1bf23010d5caf46e151d62e596e73e69ef3d6218cdebc
+
+license: "BSD-3-Clause / GPL-2.0"
+notes: >
+  Educational malicious eBPF programs by pathtofile, presented at DEF CON 29.
+  Demonstrates eBPF-based process hiding and execution hijacking on Linux 5.8+.
+  libbpf submodule (f7081a6, v1.7.0) bundled in archive; bpftool built from
+  system package to avoid kernel version coupling.

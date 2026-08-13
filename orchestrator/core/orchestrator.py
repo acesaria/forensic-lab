@@ -10,6 +10,7 @@ setup_infra()              one-time: libvirt network + pool
 prepare_lab(distro_id)     one-time: image + VM + baseline snapshot + pipeline verify
 build_isf(distro_id)       one-time: Volatility symbol file
 build_father(distro_id)    build + publish Father's rk.so to the host cache
+build_badbpf(distro_id)    build + publish Bad-BPF and XCrypto inputs
 build_diamorphine(...)     build + publish Diamorphine's exact-kernel module
 build_ptrace_fa(distro_id) build + publish ptrace_fa binaries to the host cache
 run_experiment(...)        explicit scenario dispatch + experiment loop
@@ -30,7 +31,7 @@ build_isf          ends OFF (lab parked, build VM retained)
 build_father       ends OFF (builder VM retained; lab never started)
 _reset_lab         ends ON + SSH ready
 _run_acquisition   ends OFF (guest powered down for host-side disk acquisition)
-Father, ptrace_fa, and Diamorphine experiments end OFF, including when
+Explicit scenarios end OFF, including when
 acquisition is skipped or a step fails
 """
 
@@ -69,6 +70,7 @@ from scenarios.interactive_shell.runner import (
     run_interactive_shell,
 )
 from scenarios.kernel_diamorphine import runner as diamorphine
+from scenarios.kernel_ebpf_badbpf import runner as badbpf
 from scenarios.ptrace_fa import runner as ptrace
 from scenarios.userland_father_ldpreload import runner as father
 
@@ -221,6 +223,73 @@ class ForensicOrchestrator:
             )
 
         return cache_dir / ptrace.ARTIFACT_NAMES[0]
+
+    def build_badbpf(self, distro_id: str) -> Path:
+        """Build and publish Bad-BPF and XCrypto. Builder ends OFF."""
+        source = badbpf.verify_source()
+        published = self._resolve_prebuilt_input(
+            distro_id, badbpf.SCENARIO_ID, badbpf.ARTIFACT_NAMES
+        )
+        if published is not None:
+            artifacts, record = published
+            if not badbpf.build_record_is_current(record, source):
+                raise RuntimeError(
+                    "published bad-bpf build uses a stale recipe; remove "
+                    f"{self._display(artifacts[0].parent)} and rerun the build"
+                )
+            console.info(f"already published: {self._display(artifacts[0])}")
+            return artifacts[0]
+
+        vm_name = self._ensure_builder_vm(distro_id)
+        with tempfile.TemporaryDirectory() as staging:
+            artifacts = tuple(
+                Path(staging) / name for name in badbpf.ARTIFACT_NAMES
+            )
+            try:
+                with self.vm_manager.open_ssh(vm_name) as ssh:
+                    archive = badbpf.ROOT / "files" / source["archive_filename"]
+                    ssh.put(archive, badbpf.REMOTE_ARCHIVE)
+                    ssh.put(badbpf.BUILD_SCRIPT, badbpf.REMOTE_BUILD_SCRIPT)
+                    ssh.put(badbpf.XCRYPTO_SOURCE, badbpf.REMOTE_XCRYPTO_SOURCE)
+                    console.step(f"building bad-bpf on {vm_name}...")
+                    stdout = ssh.run_checked(
+                        f"bash {badbpf.REMOTE_BUILD_SCRIPT} "
+                        f"{badbpf.REMOTE_ARCHIVE} {badbpf.REMOTE_BUILD_ROOT} "
+                        f"{badbpf.REMOTE_XCRYPTO_SOURCE}",
+                        timeout=1800,
+                    )
+                    for line in stdout.splitlines():
+                        if line.startswith("STEP "):
+                            console.info(line.removeprefix("STEP "))
+                    for name, artifact in zip(
+                        badbpf.ARTIFACT_NAMES, artifacts, strict=True
+                    ):
+                        ssh.get(
+                            f"{badbpf.REMOTE_BUILD_ROOT}/artifacts/{name}", artifact
+                        )
+            finally:
+                self.vm_manager.shutdown_vm(vm_name)
+
+            facts = _builder_facts(stdout)
+            record = self._build_record(
+                distro_id,
+                badbpf.SCENARIO_ID,
+                artifacts,
+                {
+                    "repository": source["repository"],
+                    "commit": source["commit"],
+                    "archive_sha256": source["archive_sha256"],
+                    "xcrypto_sha256": source["xcrypto_sha256"],
+                },
+                {"sha256": file_sha256(badbpf.BUILD_SCRIPT)},
+                facts,
+            )
+            record["target"]["kernel"] = facts["kernel"].strip()
+            cache_dir = self._publish_build(
+                distro_id, badbpf.SCENARIO_ID, artifacts, record
+            )
+
+        return cache_dir / badbpf.ARTIFACT_NAMES[0]
 
     def build_diamorphine(self, distro_id: str) -> Path:
         """Build and publish Diamorphine for the builder's exact kernel."""
@@ -376,9 +445,12 @@ class ForensicOrchestrator:
         is_father = scenario_id == father.SCENARIO_ID
         is_ptrace_fa = scenario_id == ptrace.SCENARIO_ID
         is_diamorphine = scenario_id == diamorphine.SCENARIO_ID
+        is_badbpf = scenario_id == badbpf.SCENARIO_ID
         # Father and ptrace keep a connection open through memory capture;
         # Diamorphine uses a no-op callback to share their OFF lifecycle.
-        has_scenario_cleanup = is_father or is_ptrace_fa or is_diamorphine
+        has_scenario_cleanup = (
+            is_father or is_ptrace_fa or is_diamorphine or is_badbpf
+        )
         if scenario_id != INTERACTIVE_SHELL_SCENARIO and not has_scenario_cleanup:
             raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
@@ -391,6 +463,9 @@ class ForensicOrchestrator:
         elif is_diamorphine:
             build_scenario = diamorphine.SCENARIO_ID
             artifact_names = (diamorphine.ARTIFACT_NAME,)
+        elif is_badbpf:
+            build_scenario = badbpf.SCENARIO_ID
+            artifact_names = badbpf.ARTIFACT_NAMES
         else:
             build_scenario = None
             artifact_names = ()
@@ -409,6 +484,12 @@ class ForensicOrchestrator:
         ):
             raise RuntimeError(
                 "published Diamorphine build uses a stale recipe; rerun the build"
+            )
+        if is_badbpf and not badbpf.build_record_is_current(
+            prepared_input[1], badbpf.verify_source()
+        ):
+            raise RuntimeError(
+                "published bad-bpf build uses a stale recipe; rerun the build"
             )
 
         # Every run records the revision it ran from; "-dirty" marks a run made
@@ -528,6 +609,18 @@ class ForensicOrchestrator:
                             command_log_path=command_log_path,
                             artifact_path=(
                                 run_root / input_record["artifacts"][0]["path"]
+                            ),
+                            build_record=prepared_input[1],
+                        )
+                    elif is_badbpf:
+                        assert prepared_input is not None and input_record is not None
+                        facts, backdoor_cleanup = badbpf.run_badbpf(
+                            ssh,
+                            transcript_path,
+                            command_log_path=command_log_path,
+                            artifact_paths=tuple(
+                                run_root / item["path"]
+                                for item in input_record["artifacts"]
                             ),
                             build_record=prepared_input[1],
                         )

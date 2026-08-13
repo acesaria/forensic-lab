@@ -16,9 +16,10 @@ reconstruction system.
 
 The CLI exposes `init`, `setup`, `build`, `run`, and `destroy`. `build` publishes
 a scenario's prebuilt artifact and is required before running that scenario.
-`run` dispatches directly to one of four scenario keys:
+`run` dispatches directly to one of five scenario keys:
 
 - `interactive_shell`;
+- `kernel_ebpf_badbpf`;
 - `kernel_diamorphine`;
 - `ptrace_fa`;
 - `userland_father_ldpreload`.
@@ -114,7 +115,9 @@ cp config.yaml.example config.yaml
 .venv/bin/python cli.py build --distro ubuntu-22.04 --scenario userland_father_ldpreload
 .venv/bin/python cli.py build --distro ubuntu-22.04 --scenario ptrace_fa
 .venv/bin/python cli.py build --distro ubuntu-22.04 --scenario kernel_diamorphine
+.venv/bin/python cli.py build --distro ubuntu-22.04 --scenario kernel_ebpf_badbpf
 .venv/bin/python cli.py run --distro ubuntu-22.04 --scenario kernel_diamorphine
+.venv/bin/python cli.py run --distro ubuntu-22.04 --scenario kernel_ebpf_badbpf
 # Evidence: shared/experiments/<run_id>/
 ```
 
