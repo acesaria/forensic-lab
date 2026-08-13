@@ -1,12 +1,14 @@
 # Thesis delivery queue
 
-Updated 2026-08-11. This is the sole active execution plan. Verify mutable
+Updated 2026-08-13. This is the sole active execution plan. Verify mutable
 implementation facts from the current source and preserve unrelated work.
 
 ## Hard deadlines
 
-- By `2026-08-12 23:00`: send the supervisor a concise status email. Do not wait
-  for optional infrastructure or cross-distribution work.
+- `2026-08-12 23:00` supervisor status email: **overdue, not sent** as of
+  2026-08-13 — deliverables were not ready. Send it as soon as a truthful
+  concise status exists; do not keep waiting for optional infrastructure or
+  cross-distribution work to look further along than it is.
 - By `2026-08-17`: freeze the abstract.
 - By `2026-09-21`: complete the thesis, final project material, and slides.
 
@@ -39,22 +41,29 @@ decision. Never push unless requested.
    and 545 changed text lines against a 350-line ceiling that predated the
    scenario README, source-lock note, and tests. The `build-isf` -> `builder`
    rename followed separately.
-2. **ptrace prebuilt conversion** — reuse Task 1's mechanism, remove victim-side
-   compilation, and upload and execute the exact prebuilt. Validate Ubuntu 22.04
-   with `--no-acquire`. Ceiling: 180 changed text lines and 5 files.
-3. **Diamorphine retained and cleanup** — build for the exact target kernel,
-   verify vermagic, implement only the bounded hidden-file/module and signal-64
-   behavior, and fail closed on incompatibility. Validate Ubuntu 22.04 with
-   `--no-acquire`. Ceiling: 320 changed text lines and 8 files.
+2. **ptrace prebuilt conversion** — DONE (`d86dba8`). Runs from prepared
+   artifacts with no victim-side compilation; accepted investigation exists at
+   `docs/investigations/ptrace_fa/ubuntu-22.04_ptrace_fa_20260807-150736/` and
+   is in `COMPARATIVE_RESULTS.md`.
+3. **Diamorphine retained and cleanup** — retained is implemented (`b889b83`,
+   `scenarios/kernel_diamorphine/`), builds for the exact target kernel,
+   verifies vermagic/dispatch path, and implements the bounded hidden-file/
+   module and signal-64 behavior. Cleanup is explicitly deferred per
+   `scenarios/kernel_diamorphine/README.md` ("Cleanup is deferred for separate
+   research and approval") — not implemented. No Diamorphine run has an
+   accepted investigation yet (no `docs/investigations/kernel_diamorphine/`
+   directory). Decide: is cleanup still in scope before delivery, or is this
+   task considered done for "retained" only, with cleanup formally dropped
+   from the authoritative matrix below?
 4. **Bounded compatibility validation** — on Ubuntu 24.04 and Debian 13, run
    Father, ptrace, and Diamorphine retained with `--no-acquire`. Make no
    code changes by default. A compatibility fix needs separate approval and is
    limited to 80 changed lines per technique; otherwise record the limitation.
-5. **Remove automatic forensic extraction and freeze** — automatic per-run
-   extraction and command-specific prerequisite checks are complete. Preserve
-   acquisition and input provenance, then align the remaining documentation and
-   focused tests and produce the final run command sheet. Ceiling: 280 changed
-   text lines and 8 files.
+   Not started.
+5. **Remove automatic forensic extraction and freeze** — DONE (`b38ea01`).
+   Automatic per-run extraction and command-specific prerequisite checks are
+   removed; the final run command sheet is in `README.md`
+   ("Complete experiment command sheet").
 
 For Tasks 1, 2, 3, and 5, review is read-only first and returns `PASS` or
 `BLOCKED`. Commit only after `PASS` and explicit authorization. Task 4 needs
@@ -93,6 +102,21 @@ After each run, verify repository revision, scenario and acquisition statuses,
 input hashes, acquisition hashes, EWF verification, and artifact sizes. Stop
 before investigation if any gate fails. Retain all older experiment directories
 until replacement runs and investigations are accepted.
+
+Item 4 (Diamorphine cleanup) currently conflicts with Task 3's deferred status
+above — resolve before executing the matrix.
+
+**In-flight, uncommitted, as of 2026-08-13 (dirty worktree, not yet part of the
+authoritative matrix):**
+
+- `docs/investigations/userland_father_ldpreload/ubuntu-22.04_userland_father_ldpreload_20260813-124003/`
+  — disk notebook drafted only; this is the dirty-worktree validation run
+  referenced in Task 1, not the clean authoritative run.
+- `docs/investigations/userland_father_ldpreload_cleanup/ubuntu-22.04_userland_father_ldpreload_cleanup_20260813-105240/`
+  — disk notebook drafted only; a second, more recent cleanup run than the
+  already-accepted `..._20260805-144919` (which is in `COMPARATIVE_RESULTS.md`).
+  Confirm whether this supersedes the accepted 08-05 row or is a separate
+  draft, since the cleanup treatment changed in `1e8f5d3`.
 
 ## Investigation and writing
 
