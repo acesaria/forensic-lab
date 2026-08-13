@@ -17,6 +17,7 @@ from orchestrator.forensics import Dumper, SleuthKitRunner, VolatilityRunner
 from orchestrator.forensics.pipeline_config import raw_tool_paths
 from scenarios.interactive_shell.runner import SCENARIO_ID as INTERACTIVE_SHELL_SCENARIO
 from scenarios.kernel_diamorphine.runner import SCENARIO_ID as DIAMORPHINE_SCENARIO
+from scenarios.kernel_ebpf_badbpf.runner import SCENARIO_ID as BADBPF_SCENARIO
 from scenarios.ptrace_fa.runner import SCENARIO_ID as PTRACE_FA_SCENARIO
 from scenarios.userland_father_ldpreload.runner import SCENARIO_ID as FATHER_SCENARIO
 
@@ -25,6 +26,7 @@ SCENARIO_CHOICES = tuple(
     sorted(
         (
             INTERACTIVE_SHELL_SCENARIO,
+            BADBPF_SCENARIO,
             DIAMORPHINE_SCENARIO,
             FATHER_SCENARIO,
             PTRACE_FA_SCENARIO,
@@ -83,7 +85,7 @@ def build_parser() -> argparse.ArgumentParser:
     build.add_argument(
         "--scenario",
         required=True,
-        choices=(DIAMORPHINE_SCENARIO, FATHER_SCENARIO, PTRACE_FA_SCENARIO),
+        choices=(BADBPF_SCENARIO, DIAMORPHINE_SCENARIO, FATHER_SCENARIO, PTRACE_FA_SCENARIO),
         help="Scenario whose artifact to build",
     )
 
@@ -265,6 +267,8 @@ def main() -> None:
                     orchestrator.build_diamorphine(distro_id)
                 elif args.scenario == PTRACE_FA_SCENARIO:
                     orchestrator.build_ptrace_fa(distro_id)
+                elif args.scenario == BADBPF_SCENARIO:
+                    orchestrator.build_badbpf(distro_id)
                 else:
                     raise RuntimeError(f"Unknown build scenario: {args.scenario}")
 

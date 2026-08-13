@@ -53,18 +53,25 @@ decision. Never push unless requested.
    research and approval") and is outside the delivery matrix. No Diamorphine
    run has an accepted investigation yet (no
    `docs/investigations/kernel_diamorphine/` directory).
-4. **Bounded compatibility validation** — on Ubuntu 24.04 and Debian 13, run
+4. **Bad-BPF XCrypto** — IMPLEMENTED. The bounded execution-hijacking,
+   simulated-pool, and live process-hiding treatment completed a dirty-worktree
+   full acquisition in `ubuntu-22.04_kernel_ebpf_badbpf_20260813-183228`; its
+   final masquerade/Stratum behavior passed `--no-acquire` in
+   `ubuntu-22.04_kernel_ebpf_badbpf_20260813-194025`. Independent review, commit
+   approval, and one clean authoritative run remain before freeze and
+   investigation.
+5. **Bounded compatibility validation** — on Ubuntu 24.04 and Debian 13, run
    Father, ptrace, and Diamorphine retained with `--no-acquire`. Make no
    code changes by default. A compatibility fix needs separate approval and is
    limited to 80 changed lines per technique; otherwise record the limitation.
    Not started.
-5. **Remove automatic forensic extraction and freeze** — DONE (`b38ea01`).
+6. **Remove automatic forensic extraction and freeze** — DONE (`b38ea01`).
    Automatic per-run extraction and command-specific prerequisite checks are
    removed; the final run command sheet is in `README.md`
    ("Complete experiment command sheet").
 
-For Tasks 1, 2, 3, and 5, review is read-only first and returns `PASS` or
-`BLOCKED`. Commit only after `PASS` and explicit authorization. Task 4 needs
+For Tasks 1, 2, 3, 4, and 6, review is read-only first and returns `PASS` or
+`BLOCKED`. Commit only after `PASS` and explicit authorization. Task 5 needs
 review and commit only if code changes.
 
 ## Frozen engineering and method boundaries
@@ -135,7 +142,7 @@ authoritative matrix):**
   Father's compatibility on `image.checksum`, which both the builder and the
   victim already derive from, so no profile carries a `kernel:` field. Task 3
   records kernel and vermagic for Diamorphine's `.ko`, where they matter;
-- Diamorphine cleanup, ftrace, Meterpreter, eBPF, CopyFail, ART, worms,
+- Diamorphine cleanup, ftrace, Meterpreter, CopyFail, ART, worms,
   timestomping, generalized cleanup levels, extra privilege-escalation
   scenarios, and broad hardening;
 - Fedora/SELinux, Timesketch, Velociraptor, AIDE/NSRL, graphs/ontologies, and

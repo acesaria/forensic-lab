@@ -9,6 +9,7 @@ import pytest
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.provenance import file_sha256
 from scenarios.kernel_diamorphine import runner as diamorphine
+from scenarios.kernel_ebpf_badbpf import runner as badbpf
 from scenarios.ptrace_fa import runner as ptrace
 from scenarios.userland_father_ldpreload import runner as father
 
@@ -19,6 +20,7 @@ def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
     for scenario_id, filenames in (
         ("userland_father_ldpreload", ("rk.so",)),
         ("kernel_diamorphine", ("diamorphine.ko",)),
+        ("kernel_ebpf_badbpf", badbpf.ARTIFACT_NAMES),
         ("ptrace_fa", ("shellcode_inject_fa", "victim")),
     ):
         cache = tmp_path / "prebuilt/ubuntu-22.04" / scenario_id
@@ -49,6 +51,14 @@ def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
             }
             build_meta["source"]["compatibility_patch_sha256"] = file_sha256(
                 diamorphine.COMPATIBILITY_PATCH
+            )
+        elif scenario_id == "kernel_ebpf_badbpf":
+            source = badbpf.verify_source()
+            build_meta["target"]["kernel"] = "test"
+            build_meta["recipe"] = badbpf.build_recipe()
+            build_meta["source"].update(
+                archive_sha256=source["archive_sha256"],
+                xcrypto_sha256=source["xcrypto_sha256"],
             )
         (cache / "build.json").write_text(json.dumps(build_meta), encoding="utf-8")
         caches[scenario_id] = cache, artifacts
@@ -94,6 +104,65 @@ def test_diamorphine_runner_owns_builder_mechanics(tmp_path: Path):
     }
     with pytest.raises(RuntimeError, match="kernel, vermagic, syscall_dispatch"):
         diamorphine.build_target({})
+
+
+def test_badbpf_runner_owns_current_builder_recipe(tmp_path: Path):
+    ssh = MagicMock()
+    ssh.run_checked.return_value = "STEP done\nFACT kernel=test-kernel"
+    source = {
+        "archive_filename": "badbpf.tar.gz",
+        "archive_sha256": "archive-hash",
+        "xcrypto_sha256": "xcrypto-hash",
+    }
+
+    artifacts, stdout = badbpf.build(ssh, tmp_path, source)
+
+    assert artifacts == tuple(tmp_path / name for name in badbpf.ARTIFACT_NAMES)
+    assert stdout == "STEP done\nFACT kernel=test-kernel"
+    assert ssh.put.call_args_list == [
+        call(badbpf.ROOT / "files/badbpf.tar.gz", "/tmp/badbpf-upstream.tar.gz"),
+        call(badbpf.BUILD_SCRIPT, "/tmp/badbpf-build.sh"),
+        call(badbpf.XCRYPTO_SOURCE, "/tmp/xcrypto.c"),
+    ]
+    ssh.run_checked.assert_called_once_with(
+        "bash /tmp/badbpf-build.sh /tmp/badbpf-upstream.tar.gz "
+        "/tmp/forensic-lab/badbpf_build /tmp/xcrypto.c",
+        timeout=1800,
+    )
+    assert ssh.get.call_args_list == [
+        call(f"/tmp/forensic-lab/badbpf_build/artifacts/{name}", artifact)
+        for name, artifact in zip(badbpf.ARTIFACT_NAMES, artifacts, strict=True)
+    ]
+    record = {
+        "recipe": badbpf.build_recipe(),
+        "source": {
+            "archive_sha256": "archive-hash",
+            "xcrypto_sha256": "xcrypto-hash",
+        },
+    }
+    assert badbpf.build_record_is_current(record, source)
+    record["recipe"]["sha256"] = "stale"
+    assert not badbpf.build_record_is_current(record, source)
+    assert badbpf.build_target({"kernel": " test-kernel "}) == {
+        "kernel": "test-kernel"
+    }
+    with pytest.raises(RuntimeError, match="reported no kernel"):
+        badbpf.build_target({})
+
+
+def test_kernel_detection_failure_still_shuts_down_lab():
+    orchestrator = object.__new__(ForensicOrchestrator)
+    orchestrator.vm_manager = MagicMock()
+    error = RuntimeError("SSH unavailable")
+    orchestrator.vm_manager.wait_ssh_ready.side_effect = error
+
+    with pytest.raises(RuntimeError) as raised:
+        orchestrator._detect_kernel_release("lab-ubuntu-22.04")
+
+    assert raised.value is error
+    orchestrator.vm_manager.shutdown_vm.assert_called_once_with(
+        "lab-ubuntu-22.04"
+    )
 
 
 def test_diamorphine_uses_direct_tmp_reconnaissance_note(tmp_path: Path, monkeypatch):
@@ -218,6 +287,9 @@ def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
         ("kernel_diamorphine", False, None, 1, True, "off"),
         ("kernel_diamorphine", False, "scenario", 1, False, "off"),
         ("kernel_diamorphine", True, "acquisition", 1, True, "off"),
+        ("kernel_ebpf_badbpf", False, None, 1, True, "off"),
+        ("kernel_ebpf_badbpf", False, "scenario", 1, False, "off"),
+        ("kernel_ebpf_badbpf", True, "acquisition", 1, True, "off"),
     ],
 )
 def test_explicit_scenarios_preserve_lifecycle_differences(
@@ -339,6 +411,13 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
         cleanup_socket = FakeSocket()
         return facts, cleanup_socket.close
 
+    def fake_badbpf(*_args, **_kwargs):
+        nonlocal cleanup_socket
+        if failure_phase == "scenario":
+            raise error
+        cleanup_socket = FakeSocket()
+        return facts, cleanup_socket.close
+
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.command_output", lambda *_args: "test-commit"
     )
@@ -356,6 +435,9 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
     monkeypatch.setattr(
         "orchestrator.core.orchestrator.diamorphine.run_diamorphine",
         fake_diamorphine,
+    )
+    monkeypatch.setattr(
+        "orchestrator.core.orchestrator.badbpf.run_badbpf", fake_badbpf
     )
 
     orchestrator = FakeOrchestrator()
@@ -429,7 +511,12 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
 
 @pytest.mark.parametrize(
     "scenario_id",
-    ("userland_father_ldpreload", "ptrace_fa", "kernel_diamorphine"),
+    (
+        "userland_father_ldpreload",
+        "ptrace_fa",
+        "kernel_diamorphine",
+        "kernel_ebpf_badbpf",
+    ),
 )
 def test_prebuilt_missing_does_not_reset_victim(tmp_path: Path, scenario_id: str):
     resets = []

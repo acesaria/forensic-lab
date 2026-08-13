@@ -63,6 +63,7 @@ shared/investigations/**
 
 *.bak
 !scenarios/userland_father_ldpreload/files/father-upstream-4eb2712.tar
+!scenarios/kernel_ebpf_badbpf/files/badbpf-upstream-0fd3cd0bd4f3c1e6488a63d1e273bb7c36fa58d7.tar.gz
 
 # Local audit scaffolding (not part of the codebase)
 audit/
