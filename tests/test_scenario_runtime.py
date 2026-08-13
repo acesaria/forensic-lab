@@ -9,6 +9,7 @@ import pytest
 from orchestrator.core.orchestrator import ForensicOrchestrator
 from orchestrator.core.provenance import file_sha256
 from scenarios.kernel_diamorphine import runner as diamorphine
+from scenarios.ptrace_fa import runner as ptrace
 from scenarios.userland_father_ldpreload import runner as father
 
 
@@ -52,6 +53,52 @@ def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
         (cache / "build.json").write_text(json.dumps(build_meta), encoding="utf-8")
         caches[scenario_id] = cache, artifacts
     return caches
+
+
+def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
+    ssh = MagicMock()
+    ssh.run_checked.side_effect = ["", "builder output"]
+
+    artifacts, stdout = ptrace.build(ssh, tmp_path)
+
+    assert artifacts == tuple(tmp_path / name for name in ptrace.ARTIFACT_NAMES)
+    assert stdout == "builder output"
+    assert ssh.run_checked.call_args_list == [
+        call(
+            "rm -rf /tmp/forensic-lab/ptrace_fa_source && mkdir -p "
+            "/tmp/forensic-lab/ptrace_fa_source/src "
+            "/tmp/forensic-lab/ptrace_fa_source/common"
+        ),
+        call(
+            "bash /tmp/ptrace-fa-build.sh /tmp/forensic-lab/ptrace_fa_source "
+            "/tmp/forensic-lab/ptrace_fa_build "
+            "0xc0,0xa8,0x64,0x01,0x66,0x68,0x11,0x5c",
+            timeout=1800,
+        ),
+    ]
+    assert ssh.put.call_args_list == [
+        *[
+            call(
+                ptrace.FILES_DIR / name,
+                f"/tmp/forensic-lab/ptrace_fa_source/{name}",
+            )
+            for name in ptrace.SOURCE_FILES
+        ],
+        call(ptrace.BUILD_SCRIPT, "/tmp/ptrace-fa-build.sh"),
+    ]
+    assert ssh.get.call_args_list == [
+        call(f"/tmp/forensic-lab/ptrace_fa_build/{name}", artifact)
+        for name, artifact in zip(ptrace.ARTIFACT_NAMES, artifacts, strict=True)
+    ]
+    assert ptrace.build_source() == {
+        "files": {
+            name: file_sha256(ptrace.FILES_DIR / name) for name in ptrace.SOURCE_FILES
+        }
+    }
+    assert ptrace.build_recipe() == {
+        "sha256": file_sha256(ptrace.BUILD_SCRIPT),
+        "target_hex": "0xc0,0xa8,0x64,0x01,0x66,0x68,0x11,0x5c",
+    }
 
 
 @pytest.mark.parametrize(

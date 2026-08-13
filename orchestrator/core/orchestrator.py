@@ -70,7 +70,6 @@ from scenarios.interactive_shell.runner import (
 )
 from scenarios.kernel_diamorphine import runner as diamorphine
 from scenarios.ptrace_fa import runner as ptrace
-from scenarios.ptrace_fa import shellcode as ptrace_shellcode
 from scenarios.userland_father_ldpreload import runner as father
 
 
@@ -200,36 +199,12 @@ class ForensicOrchestrator:
             console.info(f"already published: {self._display(artifacts[0])}")
             return artifacts[0]
 
-        target_hex = ptrace_shellcode.target_hex(
-            ptrace.LISTENER_HOST, ptrace.LISTENER_PORT
-        )
         vm_name = self._ensure_builder_vm(distro_id)
         with tempfile.TemporaryDirectory() as staging:
-            artifacts = tuple(Path(staging) / name for name in ptrace.ARTIFACT_NAMES)
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
-                    ssh.run_checked(
-                        f"rm -rf {ptrace.REMOTE_SOURCE_ROOT} && "
-                        f"mkdir -p {ptrace.REMOTE_SOURCE_ROOT}/src "
-                        f"{ptrace.REMOTE_SOURCE_ROOT}/common"
-                    )
-                    for name in ptrace.SOURCE_FILES:
-                        ssh.put(
-                            ptrace.FILES_DIR / name,
-                            f"{ptrace.REMOTE_SOURCE_ROOT}/{name}",
-                        )
-                    ssh.put(ptrace.BUILD_SCRIPT, ptrace.REMOTE_BUILD_SCRIPT)
                     console.step(f"building ptrace_fa on {vm_name}...")
-                    stdout = ssh.run_checked(
-                        f"bash {ptrace.REMOTE_BUILD_SCRIPT} "
-                        f"{ptrace.REMOTE_SOURCE_ROOT} {ptrace.REMOTE_BUILD_ROOT} "
-                        f"{target_hex}",
-                        timeout=1800,
-                    )
-                    for name, artifact in zip(
-                        ptrace.ARTIFACT_NAMES, artifacts, strict=True
-                    ):
-                        ssh.get(f"{ptrace.REMOTE_BUILD_ROOT}/{name}", artifact)
+                    artifacts, stdout = ptrace.build(ssh, Path(staging))
             finally:
                 self.vm_manager.shutdown_vm(vm_name)
 
@@ -237,16 +212,8 @@ class ForensicOrchestrator:
                 distro_id,
                 ptrace.SCENARIO_ID,
                 artifacts,
-                {
-                    "files": {
-                        name: file_sha256(ptrace.FILES_DIR / name)
-                        for name in ptrace.SOURCE_FILES
-                    }
-                },
-                {
-                    "sha256": file_sha256(ptrace.BUILD_SCRIPT),
-                    "target_hex": target_hex,
-                },
+                ptrace.build_source(),
+                ptrace.build_recipe(),
                 _builder_facts(stdout),
             )
             cache_dir = self._publish_build(

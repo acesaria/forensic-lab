@@ -7,18 +7,21 @@ from collections.abc import Callable
 from pathlib import Path
 
 from orchestrator.core import console
+from orchestrator.core.provenance import file_sha256
 from orchestrator.core.ssh_client import SSHClient
 from scenarios.command_log import record_operation, run_logged_command
+from scenarios.ptrace_fa import shellcode
 
 SCENARIO_ID = "ptrace_fa"
 ROOT = Path(__file__).resolve().parent
 FILES_DIR = ROOT / "files"
 BUILD_SCRIPT = FILES_DIR / "build.sh"
 
-REMOTE_ROOT = "/tmp/forensic-lab/ptrace_fa"
-REMOTE_SOURCE_ROOT = "/tmp/forensic-lab/ptrace_fa_source"
-REMOTE_BUILD_ROOT = "/tmp/forensic-lab/ptrace_fa_build"
-REMOTE_BUILD_SCRIPT = "/tmp/ptrace-fa-build.sh"
+_BUILDER_SOURCE_ROOT = "/tmp/forensic-lab/ptrace_fa_source"
+_BUILDER_BUILD_ROOT = "/tmp/forensic-lab/ptrace_fa_build"
+_BUILDER_SCRIPT = "/tmp/ptrace-fa-build.sh"
+
+VICTIM_ROOT = "/tmp/forensic-lab/ptrace_fa"
 
 # Where the host listens for the reverse shell; it is the isolated lab
 # network's host-side gateway (see infra/provider.py). The shellcode is
@@ -36,12 +39,45 @@ SOURCE_FILES = (
     "common/utils.h",
 )
 ARTIFACT_NAMES = ("shellcode_inject_fa", "victim")
-REMOTE_ARTIFACTS = tuple(f"/tmp/ptrace_fa-{name}" for name in ARTIFACT_NAMES)
+VICTIM_ARTIFACTS = tuple(f"/tmp/ptrace_fa-{name}" for name in ARTIFACT_NAMES)
 
 # Backgrounded, nohup'd, and disowned so the victim (and the shell it later
 # forks) survive the terminal closing while the run continues toward
 # acquisition.
-START_VICTIM_COMMAND = f"nohup ./victim >{REMOTE_ROOT}/victim.log 2>&1 & disown; echo $!"
+START_VICTIM_COMMAND = f"nohup ./victim >{VICTIM_ROOT}/victim.log 2>&1 & disown; echo $!"
+
+
+def build(ssh: SSHClient, staging: Path) -> tuple[tuple[Path, Path], str]:
+    """Build the ptrace binaries on the builder VM."""
+    artifacts = tuple(staging / name for name in ARTIFACT_NAMES)
+    ssh.run_checked(
+        f"rm -rf {_BUILDER_SOURCE_ROOT} && "
+        f"mkdir -p {_BUILDER_SOURCE_ROOT}/src {_BUILDER_SOURCE_ROOT}/common"
+    )
+    for name in SOURCE_FILES:
+        ssh.put(FILES_DIR / name, f"{_BUILDER_SOURCE_ROOT}/{name}")
+    ssh.put(BUILD_SCRIPT, _BUILDER_SCRIPT)
+    stdout = ssh.run_checked(
+        f"bash {_BUILDER_SCRIPT} {_BUILDER_SOURCE_ROOT} {_BUILDER_BUILD_ROOT} "
+        f"{shellcode.target_hex(LISTENER_HOST, LISTENER_PORT)}",
+        timeout=1800,
+    )
+    for name, artifact in zip(ARTIFACT_NAMES, artifacts, strict=True):
+        ssh.get(f"{_BUILDER_BUILD_ROOT}/{name}", artifact)
+    return artifacts, stdout
+
+
+def build_source() -> dict:
+    """Return hashes of the exact source files uploaded to the builder."""
+    return {"files": {name: file_sha256(FILES_DIR / name) for name in SOURCE_FILES}}
+
+
+def build_recipe() -> dict:
+    """Return the exact scenario-owned build recipe recorded by the host."""
+    return {
+        "sha256": file_sha256(BUILD_SCRIPT),
+        "target_hex": shellcode.target_hex(LISTENER_HOST, LISTENER_PORT),
+    }
 
 
 def run_ptrace_fa(
@@ -94,14 +130,14 @@ def run_ptrace_fa(
             record_operation(command_log_path, "verify_guest_identity")
 
             console.scope("GUEST", "prepare binaries")
-            run_logged_command(terminal, command_log_path, f"mkdir -p {REMOTE_ROOT}")
-            for source, name in zip(REMOTE_ARTIFACTS, ARTIFACT_NAMES, strict=True):
+            run_logged_command(terminal, command_log_path, f"mkdir -p {VICTIM_ROOT}")
+            for source, name in zip(VICTIM_ARTIFACTS, ARTIFACT_NAMES, strict=True):
                 run_logged_command(
                     terminal,
                     command_log_path,
-                    f"install -m 0755 {source} {REMOTE_ROOT}/{name}",
+                    f"install -m 0755 {source} {VICTIM_ROOT}/{name}",
                 )
-            run_logged_command(terminal, command_log_path, f"cd {REMOTE_ROOT}")
+            run_logged_command(terminal, command_log_path, f"cd {VICTIM_ROOT}")
 
             console.scope("GUEST", "start victim")
             identity = run_logged_command(
@@ -173,7 +209,7 @@ def _upload_artifacts(
     console.step("uploading ptrace_fa artifacts...")
     try:
         for artifact, remote_path in zip(
-            artifact_paths, REMOTE_ARTIFACTS, strict=True
+            artifact_paths, VICTIM_ARTIFACTS, strict=True
         ):
             ssh.put(artifact, remote_path)
     except Exception as exc:
