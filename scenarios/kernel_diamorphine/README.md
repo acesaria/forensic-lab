@@ -14,10 +14,13 @@ path, pristine-source hash, and patch hash. The victim never builds.
 
 Before victim reset, `run` verifies and stages the artifact and record
 byte-exact. Before upload, the runner checks the guest kernel and requires
-module loading to be enabled. It then validates only:
+module loading to be enabled. The treatment represents an attacker who already
+has temporary administrative execution and prepares a host-survey note
+containing the hostname, kernel, and execution identity before loading the
+implant. It then validates only:
 
-- ordinary listings omit the default-prefix directory and file while direct
-  access to the known file still works;
+- ordinary listings omit the default-prefix reconnaissance directory and note
+  beneath `/tmp` while direct access to the known note still works;
 - `lsmod` omits the loaded module; and
 - signal 64 changes only a dedicated non-root child shell's credentials to UID
   0, after which that helper exits.

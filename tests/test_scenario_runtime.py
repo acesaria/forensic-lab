@@ -96,6 +96,58 @@ def test_diamorphine_runner_owns_builder_mechanics(tmp_path: Path):
         diamorphine.build_target({})
 
 
+def test_diamorphine_uses_direct_tmp_reconnaissance_note(tmp_path: Path, monkeypatch):
+    ssh = MagicMock()
+    terminal = ssh.open_terminal.return_value
+    terminal.transcript = "transcript"
+    survey = (
+        "hostname=lab-debian-13\n"
+        "kernel=test-kernel\n"
+        "identity=uid=1000(labuser) gid=1000(labuser)"
+    )
+    outputs = [
+        "test-kernel",
+        "0",
+        "",
+        survey,
+        f"{diamorphine.RECON_DIRECTORY_NAME}\n",
+        f"{diamorphine.RECON_NOTE_NAME}\n",
+        "",
+        "",
+        "",
+        survey,
+        "pid=123\nbefore_uid=1000\nbefore=user\nafter_uid=0\nafter=root",
+        "Module Size Used by",
+    ]
+    results = [MagicMock(combined_output=output) for output in outputs]
+    run_command = MagicMock(side_effect=results)
+    monkeypatch.setattr(diamorphine, "run_logged_command", run_command)
+    artifact = tmp_path / diamorphine.ARTIFACT_NAME
+    artifact.write_bytes(b"module")
+
+    facts, _cleanup = diamorphine.run_diamorphine(
+        ssh,
+        tmp_path / "transcript.txt",
+        command_log_path=tmp_path / "command_log.jsonl",
+        artifact_path=artifact,
+        build_record={"target": {"kernel": "test-kernel"}},
+    )
+
+    commands = [item.args[2] for item in run_command.call_args_list]
+    assert diamorphine.RECON_PARENT == "/tmp"
+    assert "mkdir -p -- /tmp/diamorphine_secret_dir" in commands
+    assert any(
+        "recon_hostname=$(uname -n)" in command
+        and "recon_kernel=$(uname -r)" in command
+        and "| tee -- /tmp/diamorphine_secret_dir/" in command
+        for command in commands
+    )
+    note = "cat -- /tmp/diamorphine_secret_dir/diamorphine_secret_file.txt"
+    assert commands.count(note) == 1
+    assert facts["reconnaissance_note_validated"] is True
+    assert facts["reconnaissance_parent_path"] == "/tmp"
+
+
 def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
     ssh = MagicMock()
     ssh.run_checked.side_effect = ["", "builder output"]

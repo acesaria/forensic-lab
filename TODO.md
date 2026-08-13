@@ -144,3 +144,9 @@ authoritative matrix):**
   architecture rewrites, major dependencies, and cosmetic CLI work; and
 - read-only permissions for accepted memory/EWF files. This is optional
   defense-in-depth, not evidence immutability or an acceptance condition.
+
+## Runtime-path cleanup
+
+- Remove `/tmp/forensic-lab` from remaining victim-side scenario paths as each
+  scenario is revised. Some treatments already stage directly beneath `/tmp`;
+  immutable historical locators remain unchanged.

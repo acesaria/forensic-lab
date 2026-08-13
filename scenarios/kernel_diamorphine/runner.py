@@ -27,12 +27,11 @@ _BUILDER_PATCH = "/tmp/diamorphine-compatibility.patch"
 
 VICTIM_ARTIFACT = f"/tmp/{ARTIFACT_NAME}"
 
-PROBE_PARENT = "/tmp/forensic-lab/diamorphine-probe"
-PROBE_DIRECTORY_NAME = "diamorphine_secret_dir"
-PROBE_FILE_NAME = "diamorphine_secret_file.txt"
-PROBE_DIRECTORY = f"{PROBE_PARENT}/{PROBE_DIRECTORY_NAME}"
-PROBE_FILE = f"{PROBE_DIRECTORY}/{PROBE_FILE_NAME}"
-PROBE_CONTENT = "diamorphine-probe"
+RECON_PARENT = "/tmp"
+RECON_DIRECTORY_NAME = "diamorphine_secret_dir"
+RECON_NOTE_NAME = "diamorphine_secret_file.txt"
+RECON_DIRECTORY = f"{RECON_PARENT}/{RECON_DIRECTORY_NAME}"
+RECON_NOTE = f"{RECON_DIRECTORY}/{RECON_NOTE_NAME}"
 MODULE_NAME = "diamorphine"
 
 
@@ -116,47 +115,59 @@ def run_diamorphine(
             console.scope("HOST", "stage Diamorphine module")
             _upload_artifact(ssh, command_log_path, artifact_path)
 
-            console.scope("GUEST", "prepare hiding probe")
+            console.scope("GUEST", "prepare hidden reconnaissance note")
             run_logged_command(
-                terminal, command_log_path, f"mkdir -p -- {PROBE_DIRECTORY}", timeout=180
+                terminal, command_log_path, f"mkdir -p -- {RECON_DIRECTORY}", timeout=180
             )
-            run_logged_command(
-                terminal, command_log_path,
-                f"printf '%s\\n' {PROBE_CONTENT} > {PROBE_FILE}", timeout=180
-            )
+            reconnaissance_note = run_logged_command(
+                terminal,
+                command_log_path,
+                f"recon_hostname=$(uname -n) && recon_kernel=$(uname -r) && "
+                f"recon_identity=$(id) && "
+                f"printf 'hostname=%s\\nkernel=%s\\nidentity=%s\\n' "
+                f'"$recon_hostname" "$recon_kernel" "$recon_identity" '
+                f"| tee -- {RECON_NOTE}",
+                timeout=180,
+            ).combined_output.strip()
+            if f"kernel={guest_kernel}" not in reconnaissance_note.splitlines():
+                raise RuntimeError("Reconnaissance note did not record the guest kernel")
             parent_before = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {PROBE_PARENT}", timeout=180
+                terminal, command_log_path, f"ls -1 -- {RECON_PARENT}", timeout=180
             ).combined_output
             directory_before = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {PROBE_DIRECTORY}", timeout=180
+                terminal, command_log_path, f"ls -1 -- {RECON_DIRECTORY}", timeout=180
             ).combined_output
-            if PROBE_DIRECTORY_NAME not in parent_before:
-                raise RuntimeError("Probe directory was not visible before module load")
-            if PROBE_FILE_NAME not in directory_before:
-                raise RuntimeError("Probe file was not visible before module load")
+            if RECON_DIRECTORY_NAME not in parent_before:
+                raise RuntimeError(
+                    "Reconnaissance directory was not visible before module load"
+                )
+            if RECON_NOTE_NAME not in directory_before:
+                raise RuntimeError("Reconnaissance note was not visible before module load")
 
             console.scope("GUEST", "load and validate Diamorphine")
             run_logged_command(
                 terminal, command_log_path, f"sudo -n insmod {VICTIM_ARTIFACT}", timeout=180
             )
             parent_after = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {PROBE_PARENT}", timeout=180
+                terminal, command_log_path, f"ls -1 -- {RECON_PARENT}", timeout=180
             ).combined_output
             directory_after = run_logged_command(
-                terminal, command_log_path, f"ls -1 -- {PROBE_DIRECTORY}", timeout=180
+                terminal, command_log_path, f"ls -1 -- {RECON_DIRECTORY}", timeout=180
             ).combined_output
             direct_access = run_logged_command(
                 terminal,
                 command_log_path,
-                f"cat -- {PROBE_FILE}",
+                f"cat -- {RECON_NOTE}",
                 timeout=180,
             ).combined_output.strip()
-            if PROBE_DIRECTORY_NAME in parent_after:
-                raise RuntimeError("Probe directory remained visible after module load")
-            if PROBE_FILE_NAME in directory_after:
-                raise RuntimeError("Probe file remained visible after module load")
-            if direct_access != PROBE_CONTENT:
-                raise RuntimeError("Direct access to the hidden probe file failed")
+            if RECON_DIRECTORY_NAME in parent_after:
+                raise RuntimeError(
+                    "Reconnaissance directory remained visible after module load"
+                )
+            if RECON_NOTE_NAME in directory_after:
+                raise RuntimeError("Reconnaissance note remained visible after module load")
+            if direct_access != reconnaissance_note:
+                raise RuntimeError("Direct access to the hidden reconnaissance note failed")
 
             helper_output = run_logged_command(
                 terminal,
@@ -196,12 +207,13 @@ def run_diamorphine(
         "guest_kernel_release": guest_kernel,
         "kernel_preflight_passed": True,
         "module_loading_preflight_passed": True,
-        "probe_parent_path": PROBE_PARENT,
-        "hidden_directory_path": PROBE_DIRECTORY,
-        "hidden_file_path": PROBE_FILE,
+        "reconnaissance_parent_path": RECON_PARENT,
+        "hidden_directory_path": RECON_DIRECTORY,
+        "hidden_file_path": RECON_NOTE,
         "directory_hiding_validated": True,
         "file_hiding_validated": True,
         "direct_access_validated": True,
+        "reconnaissance_note_validated": True,
         "module_hidden_at_scenario_completion": True,
         "signal_64_helper_pid": int(helper["pid"]),
         "signal_64_identity_before": helper["before"],
