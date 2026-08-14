@@ -537,10 +537,48 @@ disagreement is reported. They use **different time bases** — filesystem/journ
 wall-clock on disk versus in-memory kernel task times reconstructed by
 Volatility — so sub-second values are not flattened together.
 
+The pre-existing `vol3_timeliner.txt` lacked a recorded producing command in
+the earlier notebooks. Before using it here, I reproduced it byte-for-byte with
+the accepted memory image and the local ISF. The recorded command below creates
+`vol3_timeliner_reproduced.txt`; both files are 12,118,401 bytes with SHA-256
+`e8814a9d…5ad15cb`, and `cmp` returns 0. This closes the provenance gap without
+changing or overwriting the earlier derived output.
+
+```bash {"name":"T-04b-Vol3-Provenance","promptEnv":"never"}
+set -euo pipefail
+
+VOL3_BIN='/home/anto/.local/bin/vol3'
+MEMORY="$RUN_DIR/dumps/memory/mem.raw"
+ISF_DIR='shared/isf'
+VOL3_ORIGINAL="$TIMELINE_DIR/vol3_timeliner.txt"
+VOL3_REPRO="$TIMELINE_DIR/vol3_timeliner_reproduced.txt"
+export VOL3_BIN MEMORY ISF_DIR VOL3_ORIGINAL VOL3_REPRO
+
+[[ -s "$VOL3_REPRO" ]] || "$VOL3_BIN" --offline -f "$MEMORY" -s "$ISF_DIR" \
+  timeliner.Timeliner >"$VOL3_REPRO"
+head -1 "$VOL3_REPRO"
+stat -c '%n %s bytes' "$VOL3_ORIGINAL" "$VOL3_REPRO"
+sha256sum "$VOL3_ORIGINAL" "$VOL3_REPRO"
+cmp -s "$VOL3_ORIGINAL" "$VOL3_REPRO"
+printf 'cmp_exit=%s\n' "$?"
+```
+
+**Output**
+
+```text {"ignore":"true"}
+Volatility 3 Framework 2.28.0
+shared/investigations/ubuntu-22.04_userland_father_ldpreload_20260813-224442/derived/timeline/vol3_timeliner.txt 12118401 bytes
+shared/investigations/ubuntu-22.04_userland_father_ldpreload_20260813-224442/derived/timeline/vol3_timeliner_reproduced.txt 12118401 bytes
+e8814a9d6489de9da5b03392c5fef627befd5cc90b2cf00a47e2d01765ad15cb  .../vol3_timeliner.txt
+e8814a9d6489de9da5b03392c5fef627befd5cc90b2cf00a47e2d01765ad15cb  .../vol3_timeliner_reproduced.txt
+cmp_exit=0
+```
+
 ```bash {"name":"T-04b-Vol3-Comparison","promptEnv":"never"}
 set -euo pipefail
 
-VOL3="$TIMELINE_DIR/vol3_timeliner.txt"
+VOL3_REPRO="$TIMELINE_DIR/vol3_timeliner_reproduced.txt"
+VOL3="$VOL3_REPRO"
 echo '--- memory (vol3 PsList): backdoor process creation times ---'
 grep -E 'PsList	Process (1054|1056)/' "$VOL3" | awk -F'\t' '{print $2"  Created "$3}'
 echo '--- memory (vol3 Files): cached-inode MAC for /usr/lib/selinux.so.3 (Modified|Accessed|Changed) ---'

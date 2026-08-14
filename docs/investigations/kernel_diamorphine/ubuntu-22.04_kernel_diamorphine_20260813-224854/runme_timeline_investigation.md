@@ -566,13 +566,16 @@ or any LaTeX file.
 2. **Matrix D01 / D02, Timeline column.** From `--` to **P** with the locators in
    the T-05 table (D01: `insmod`+taint+`.ko` crtime; D02: kernel taints, with the
    sysfs/procfs negative as the missing element). D03/D04 stay `--`.
-3. **`U/C/S` for D02's taint facet.** Currently D01/D02 are memory-**S**
-   (specialized). If Timeline is re-scoped, the **taint** attribute of D02
-   becomes **C** (corroborated: disk `kern.log` + memory `modxview`, independent
-   acquisitions). This is the one place combining sources corroborates rather
-   than merely adding a source. Recompute the source metric summary accordingly
-   (Timeline row would become O 0 / P 2 / N 0 / TF 0, Found 2/2; Memory row
-   unchanged; the union `C` count rises by the taint facet). `X` stays 0.
+3. **`U/C/S` and the independence caveat.** Under the fixed target-level
+   contract, re-scoping Timeline makes both D01 and D02 mechanically **C**:
+   Timeline finds a proper subset (`P`) and Memory finds the full compound
+   target (`O`). Recompute the source and union partitions as `U/C/S: 0/2/0`
+   (Timeline O 0 / P 2 / N 0 / TF 0, Found 2/2; Memory counts unchanged);
+   `X` stays 0. This mechanical classification is not itself an independence
+   claim. Only D02's **taint** attribute is the same attribute corroborated by
+   disk `kern.log` and memory `modxview` across independent acquisitions. D01's
+   Timeline result dates loading but does not establish the compound target's
+   runtime hiding facet.
 4. **Concealed-artifact note.** Record in the matrix or conclusion that the disk
    timeline dates `/tmp/diamorphine_secret_dir` (inode 258128) and its note
    (258129) at `20:48:54.18–.20`, the artifacts the live `getdents` hook hides —
