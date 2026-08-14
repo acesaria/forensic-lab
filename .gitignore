@@ -74,3 +74,13 @@ ideas.txt
 shared/known_hashes/*
 .codex/*
 .claude/worktrees/
+
+# Local working notes and editor/assistant configuration (not part of the codebase)
+AGENTS.md
+CLAUDE.md
+General-Context.md
+TODO.md
+.claudeignore
+.claude/
+.github/copilot-instructions.md
+docs/archive/

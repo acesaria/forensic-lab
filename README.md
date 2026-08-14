@@ -123,18 +123,59 @@ cp config.yaml.example config.yaml
 # Evidence: shared/experiments/<run_id>/
 ```
 
-Host prerequisites include KVM/QEMU with libvirt, `cloud-localds`, `ewfacquire`,
-the configured forensic tools, and an SSH key for the lab VM. Passwordless sudo
-inside the disposable guest is a documented deployment precondition, not an
+### Host prerequisites
+
+The host runs Linux with KVM available. On Debian/Ubuntu:
+
+```bash
+sudo apt install qemu-kvm libvirt-daemon-system virtinst cloud-image-utils \
+                 libewf-dev sleuthkit plaso-tools ansible python3-venv
+pipx install volatility3          # or any install exposing the vol3 binary
+sudo usermod -aG libvirt,kvm "$USER" && newgrp libvirt
+```
+
+The lab VM is reached over SSH with a dedicated key, whose paths are declared in
+`config.yaml`:
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/forensics-lab -N ""
+```
+
+`cli.py` verifies, before each command, only the binaries that command will
+actually use, and stops with an explicit list if any is missing. Passwordless
+sudo inside the disposable guest is a documented deployment precondition, not an
 emulation of initial compromise.
+
+Volatility symbol tables (ISF) are **generated**, not distributed: `cli.py setup`
+builds the table for the guest kernel and writes it under `shared/isf/`. A fresh
+clone therefore starts without them, by design.
 
 ## Documentation
 
-- `AGENTS.md` is the only repository-agent entry point.
-- `METHODOLOGY.md` defines the thesis and investigation method.
-- `TODO.md` contains mutable priorities and delivery milestones.
-- Scenario-specific documentation explains controlled treatment behavior.
+- `METHODOLOGY.md` defines the thesis and investigation method, including the
+  evidence-status vocabulary and the fixed result-reporting contract.
+- `GUIDELINES.md` defines how a manual investigation notebook is produced.
+- `docs/investigations/` holds the accepted case summaries, the source notebooks
+  and the single cross-case comparative table.
+- `scenarios/<id>/README.md` documents each controlled treatment's behaviour.
 - Named investigation documents apply only to their cited immutable runs.
+
+## Third-party components
+
+Compromise techniques are not reimplemented here. Each scenario vendors a
+pristine upstream archive pinned to a specific commit and verified by hash; the
+pin, the archive hash and the licence are recorded in the scenario's
+`*.lock.yml`, and the prepared artefact is built on a separate builder VM that
+never becomes the system under examination.
+
+| Scenario | Upstream project | Licence |
+|---|---|---|
+| `userland_father_ldpreload` | [Father](https://github.com/mav8557/Father) | Unlicense |
+| `kernel_diamorphine` | [Diamorphine](https://github.com/m0nad/Diamorphine) | BSD-3-Clause |
+| `kernel_ebpf_badbpf` | [bad-bpf](https://github.com/pathtofile/bad-bpf) | BSD-3-Clause / GPL-2.0 |
+
+The forensic toolchain (The Sleuth Kit, Plaso, Volatility 3, libewf, libvirt,
+QEMU) is used unmodified and is not redistributed by this repository.
 
 Previous automatic detection, matching, scoring, and reconstruction work is
 historical. Its final checkpoint is preserved by the immutable
