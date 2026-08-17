@@ -662,13 +662,13 @@ collection omitted nothing material in-window.
 
 | Target | Status | Durable locator / explicit bound |
 |---|---|---|
-| **M05** — library installed and mapped | **O** (install/activation facet) | Journal `sudo … COMMAND=/usr/bin/install -m 0644 /tmp/rk.so /lib/selinux.so.3` (PID 1040) `20:44:43.374899`; `filestat` inode `74172` `/usr/lib/selinux.so.3` Creation Time `20:44:43.372000` (`t-03-persistence-inodes.jsonl`). **Bound:** the timeline dates the install and the restart that loads it; the in-RAM *mapping* is not timeline-observable (memory `proc.Maps`). `filestat` replicates TSK over one disk image (same acquisition). |
+| **M05** — library installed and mapped | **P** (install facet only) | Journal `sudo … COMMAND=/usr/bin/install -m 0644 /tmp/rk.so /lib/selinux.so.3` (PID 1040) `20:44:43.374899`; `filestat` inode `74172` `/usr/lib/selinux.so.3` Creation Time `20:44:43.372000` (`t-03-persistence-inodes.jsonl`). **Missing element:** the in-RAM *mapping*, which is not timeline-observable and is supplied only by memory `proc.Maps`. The timeline dates the install and the restart that loads it, which is a material proper subset of the compound target, so `METHODOLOGY.md`'s status rule gives `P`, not `O`. **Bound:** `filestat` replicates TSK over one disk image (same acquisition). |
 | **M08** — interactive command activity | **N** | `bash:history:entry` parser produced **0** events (`t-04-bash-history-negative.jsonl`); `.bash_history` has no `#<epoch>` lines. **Bound:** the journal/syslog `sudo COMMAND=` records are privileged-invocation records (the class `auth.log` already showed), not an interactive shell command stream; negative is bounded to the `bash_history` parser and the syslog/journal reporters. |
 | **M11** — SSH restart during activation | **O** | Journal `sudo … COMMAND=/usr/bin/systemctl restart ssh.service` (PID 1049) `20:44:43.453084`; `sshd` PID 655 `Received signal 15; terminating` `20:44:43.464985`; `sshd` PID 1054 `Server listening on 0.0.0.0 port 22` `20:44:43.488536` (`t-03-sshd-restart-syslog-journal.jsonl`); `utmp` `labuser`/`pts/0` USER `42.856` → DEAD `43.823` (`t-03-utmp-sessions.jsonl`). Read from the same disk image as `auth.log`, so replication vs the disk notebook; the journal source and sub-second times are the addition. |
 
-M05 and M11 agree with the fixed case summary (O/O). M08 agrees (N). See the
-recommended human edits below for the one place the timeline could sharpen the
-existing M05 locator, and for an optional stricter reading of M05.
+These three statuses agree with the fixed case summary: M05 `P`, M11 `O`,
+M08 `N`. Timeline totals are therefore `O 1 / P 1 / N 1`, `Found 2 / A 3`
+(66.7%).
 
 ### Declared bounds carried from earlier sections
 
@@ -697,45 +697,14 @@ store was made. **TTF: not measured** — no `TTF-START`/`TTF-FIRST` lines were
 recorded prospectively for this timeline examination, so per METHODOLOGY.md it
 is not reconstructed after the fact.
 
-### Recommended human edits (do not edit these files automatically)
+### Carry-over into the case record (applied)
 
-These are for a human to apply; this notebook does not modify
-`runme_case_summary.md`, `COMPARATIVE_RESULTS.md`, or any LaTeX file.
-
-1. **`runme_case_summary.md`, "Metric contract → Timeline scope for this run".**
-   The paragraph "A full Plaso timeline was not regenerated for this exact run.
-   The temporal ('TL') column is bounded system-log context (`auth.log`,
-   `syslog`) …" is now **superseded**: a curated Plaso store
-   (`derived/timeline/timeline.plaso`, sha256 `682dd82a…18d0b`, 16,483 events)
-   and an unfiltered control (`father.plaso`, 310,316 events) exist, examined in
-   this notebook. Re-word to reference this timeline notebook, and keep the
-   same-acquisition caveat (timeline still shares the disk acquisition; memory
-   remains the only independent one).
-2. **`runme_case_summary.md`, M05 row, Timeline locator.** Current text
-   "TL `sudo`/`sshd` restart at `20:44:43Z`". Add the sub-second journal +
-   filestat locators: install PID 1040 `20:44:43.374899`, inode 74172 crtime
-   `20:44:43.372000`, and name the systemd journal (not only `auth.log`).
-   *Optional stricter reading:* if the reviewer scores the compound "installed
-   **and** mapped" strictly against a single source, the log timeline supports
-   only "installed" → **P** (missing element: in-RAM mapping). This notebook
-   keeps **O** to match the current fixed table and the union outcome; flagging
-   the alternative for auditability.
-3. **`runme_case_summary.md`, M11 row, Timeline locator.** Current text is
-   `auth.log`-only. Add the systemd journal source and sub-second times: `sshd`
-   655 `SIGTERM` `20:44:43.464985`, `sshd` 1054 listening `20:44:43.488536`,
-   `systemctl restart` PID 1049 `20:44:43.453084`, plus the `utmp` `pts/0`
-   bracket.
-4. **`runme_case_summary.md`, source metric summary, "Timeline (log)" row,
-   Principal methods.** Current "on-disk `auth.log`/`syslog` (no Plaso store)"
-   is now inaccurate. Replace with: "Plaso 20260512 curated `timeline.plaso`
-   (`filestat`, `syslog_traditional`, `systemd_journal`, `utmp`) + unfiltered
-   `father.plaso` control; `psort` event filters". Status counts (O 2 / N 1) are
-   unchanged. TTF remains `not measured`.
-5. **`runme_case_summary.md`, M06 limitation (optional).** M06 stays
-   filesystem-specialized, but the timeline adds ordering context worth a note:
-   the surviving `/etc/ld.so.preload` inode 74210 MAC time (`20:44:46.472`)
-   postdates the activation-time `tee` command (`20:44:43.429`, journal) by ~3 s;
-   MAC time alone mis-dates the configuration.
-6. **`COMPARATIVE_RESULTS.md`.** If the Timeline cell for this run cites "no
-   Plaso store", update it to reflect the curated `timeline.plaso`; no status,
-   union, or `X` value changes (Timeline O/P/N/TF unchanged at 2/0/1/0).
+The edits this notebook recommended to `runme_case_summary.md` and
+`COMPARATIVE_RESULTS.md` have been applied: the timeline-scope paragraph now
+names the curated `timeline.plaso` and the unfiltered `father.plaso` control,
+the M05 and M11 rows carry the sub-second journal/`filestat` locators, the M06
+limitation records the ~3 s MAC-time offset against the `tee` command, and the
+Timeline principal-methods cell names the Plaso stores and parsers. The stricter
+reading of the compound M05 target was adopted, so the timeline scores `P` there
+rather than `O`; this notebook's T-05 table above states it that way. This
+notebook does not itself modify those files.

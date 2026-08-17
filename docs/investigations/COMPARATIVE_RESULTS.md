@@ -25,7 +25,7 @@ artifact classes or on parser-level replication.
 
 | Run | Case | Layer / technique | Filesystem `O/P/N/TF; Found/A (Cov)` | Timeline `O/P/N/TF; Found/A (Cov)` | Memory `O/P/N/TF; Found/A (Cov)` | Union `O/P/N/TF; Found/A (Cov)` | Cross-source | Rejected candidates | TTF | Principal methods |
 |---|---|---|---|---|---|---|---|---|---|---|
-| ubuntu-22.04_userland_father_ldpreload_20260813-224442 | userland_father_ldpreload (vanilla) | Userland / system-wide `LD_PRELOAD` | `3/1/4/0`; `4/8` (50.0%) | `1/1/1/0`; `2/3` (66.7%) | `3/0/1/0`; `3/4` (75.0%) | `6/1/4/0`; `7/11` (63.6%) | `U/C/S: 1/1/5`; `X: 0`; gain `+3` (M09, M10, M11) | FS `0`; TL `N/A`; Mem `0`; union `0` | not measured | FS: TSK 4.15.0; TL: Plaso 20260512 curated store plus unfiltered control, bounded `psort`; Mem: Volatility 3 2.28.0 |
+| ubuntu-22.04_userland_father_ldpreload_20260813-224442 | userland_father_ldpreload (vanilla) | Userland / system-wide `LD_PRELOAD` | `3/1/0/0`; `4/4` (100.0%) | `1/1/1/0`; `2/3` (66.7%) | `3/0/1/0`; `3/4` (75.0%) | `6/1/0/0`; `7/7` (100.0%) | `U/C/S: 1/1/5`; `X: 0`; gain `+3` (M09, M10, M11) | FS `0`; TL `N/A`; Mem `0`; union `0` | not measured | FS: TSK 4.15.0; TL: Plaso 20260512 curated store plus unfiltered control, bounded `psort`; Mem: Volatility 3 2.28.0 |
 | ubuntu-22.04_ptrace_fa_20260813-224646 | ptrace_fa (vanilla) | Process / `ptrace` foreign-allocation shellcode injection | `--`; out of scope | `--`; out of scope | `5/0/0/0`; `5/5` (100.0%) | `5/0/0/0`; `5/5` (100.0%) | `U/C/S: 0/0/5`; `X: 0`; gain `+0` | FS `N/A`; TL `N/A`; Mem `2`; union `2` | not measured | Mem: Volatility 3 2.28.0 (`malfind`,`proc.Maps`,`pslist`,`pstree`,`sockstat`) |
 | ubuntu-22.04_kernel_diamorphine_20260813-224854 | kernel_diamorphine (vanilla) | Kernel / self-hiding LKM rootkit | `--`; out of scope | `0/2/0/0`; `2/2` (100.0%) | `2/0/2/0`; `2/4` (50.0%) | `2/0/2/0`; `2/4` (50.0%) | `U/C/S: 0/2/0`; `X: 0`; gain `+0` | FS `N/A`; TL `N/A`; Mem `0`; union `0` | not measured | TL: Plaso 20260512 curated store plus unfiltered control; Mem: Volatility 3 2.28.0 (`lsmod`,`check_modules`,`hidden_modules`,`modxview`,`check_syscall`,`CheckFtrace`) |
 | ubuntu-22.04_kernel_ebpf_badbpf_20260813-225102 | kernel_ebpf_badbpf (vanilla) | Kernel / eBPF process hiding | `--`; out of scope | `--`; out of scope | `5/0/0/0`; `5/5` (100.0%) | `5/0/0/0`; `5/5` (100.0%) | `U/C/S: 0/0/5`; `X: 0`; gain `+0` | FS `N/A`; TL `N/A`; Mem `0`; union `0` | not measured | Mem: Volatility 3 2.28.0 (`pslist`,`psaux`,`proc.Maps`,`ebpf`,`sockstat`) |
@@ -37,7 +37,15 @@ non-cleanup scenario; commit `2e5dadc`). Its temporal column now comes from a
 bounded full Plaso examination, including `filestat`, system logs, the systemd
 journal and `utmp`, checked against an unfiltered control. Filesystem and
 timeline still read the same acquired disk image and are not independent;
-memory is the independent acquisition. Its `+3` union gain (M09, M10, M11)
+memory is the independent acquisition. Its applicability set is M05–M11 only:
+the pre-registered staging/build targets M01–M04 are `--` because the current
+scenario builds `rk.so` on a separate builder VM and ships only the finished
+object to the victim, so no source archive, build tree, `config.h`, or
+compilation event ever exists on the acquired image. The resulting 100%
+filesystem and union coverage therefore measures a small, well-exposed treatment
+surface, not better recovery than the earlier Father rows, whose inventories
+included a victim-side build; the three Father cases are not comparable on
+coverage. Its `+3` union gain (M09, M10, M11)
 is entirely source-exclusive — targets outside filesystem applicability — rather
 than targets an applicable source missed; the single such "applicable-but-missed"
 target is M08, classed `U`. No `O`/`P` rests on ground-truth-guided recovery;

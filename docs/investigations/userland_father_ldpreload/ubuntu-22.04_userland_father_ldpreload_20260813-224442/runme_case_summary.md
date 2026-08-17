@@ -37,12 +37,27 @@ re-verified against the acquisition sidecar before analysis.
 
 The M01–M11 target inventory is the pre-registered Father inventory (commit
 `011db22`, 2026-07-24), reused unchanged; this base run does not use the
-C01–C03 cleanup extension. Applicability is fixed by source capability before
-examination:
+C01–C03 cleanup extension. Applicability is fixed by source capability and by
+scenario design before examination:
 
-- filesystem: M01–M08;
+- filesystem: M05–M08;
 - log timeline: M05, M08, M11; and
 - memory: M05, M08, M09, M10.
+
+**Why M01–M04 are not applicable to this run.** The inventory was frozen when
+Father was compiled on the victim, so the four staging/build targets described
+events that then happened on the acquired host. Under the current prebuilt-
+artifact design they do not. `scenarios/userland_father_ldpreload/runner.py`
+confines archive upload, extraction, the `config.h` edit and `make` to `build()`
+on a separate builder VM (`_BUILDER_ARCHIVE`, `_BUILDER_SCRIPT`,
+`_BUILDER_BUILD_ROOT`, and `files/build.sh`). The victim receives exactly one
+object — the finished `rk.so` uploaded to `/tmp/rk.so` — so no source archive,
+build tree, modified `config.h`, or compilation event ever exists on the
+acquired image. Per `METHODOLOGY.md` these are `--` (not applicable), not `N`:
+the sources cannot answer a question the treatment never posed to them. They
+therefore leave the denominators, and this case's coverage figures are **not**
+comparable with the earlier calibration or cleanup Father runs, whose
+inventories did include a victim-side build.
 
 **Timeline scope for this run.** The timeline notebook examines a curated Plaso
 20260512 store (`derived/timeline/timeline.plaso`, SHA-256
@@ -63,10 +78,10 @@ locator.
 
 | ID | Phase/category | Expected artifact or fact | Filesystem | Timeline | Memory | Contribution | Principal method(s) | Accepted locator or limitation |
 |---|---|---|---:|---:|---:|---:|---|---|
-| M01 | Staging/build | Source archive staged | N | -- | -- | -- | TSK `fls` | Staging removed by scenario; not exposed under `/tmp` within bounds; unallocated recovery not pursued. |
-| M02 | Staging/build | Build tree extracted | N | -- | -- | -- | TSK `fls` | Not present on the live filesystem; unallocated/journal recovery out of this case's bound. |
-| M03 | Staging/build | Modified `config.h` | N | -- | -- | -- | TSK `fls`/`blkls` | Not recovered within bounds. |
-| M04 | Staging/build | `rk.so` built | N | -- | -- | -- | TSK `fls` | Installed copy survives (M05); the build event is not independently dated. |
+| M01 | Staging/build | Source archive staged | -- | -- | -- | -- | -- | Not applicable: `father-upstream-4eb2712.tar` is uploaded only to the builder VM (`_BUILDER_ARCHIVE`); it never reaches the acquired host. |
+| M02 | Staging/build | Build tree extracted | -- | -- | -- | -- | -- | Not applicable: `files/build.sh` extracts under `_BUILDER_BUILD_ROOT` on the builder VM; no build tree exists on the acquired host. |
+| M03 | Staging/build | Modified `config.h` | -- | -- | -- | -- | -- | Not applicable: the `STRING` edit is applied by `files/build.sh` on the builder VM; no `config.h` exists on the acquired host. |
+| M04 | Staging/build | `rk.so` built | -- | -- | -- | -- | -- | Not applicable: `make father` runs on the builder VM. The victim receives the finished object by upload, so no compilation event exists on the acquired host; the installed copy is M05. |
 | M05 | Persistence/activation | Library installed and mapped | O | P | O | C | TSK `ifind`/`istat`/`icat`; Plaso `filestat`/`systemd_journal`; Vol3 `proc.Maps` | FS inode `74172`, 32,784 B, SHA-256 `87fece49…0711` = manifest `rk.so`; TL install PID 1040 at `20:44:43.374899` and inode-74172 crtime `20:44:43.372000`, but no in-RAM mapping; Mem five-segment mapping of inode `74172` in PID 1054/1056. |
 | M06 | Persistence/activation | `/etc/ld.so.preload` configured | O | -- | -- | S | TSK `istat`/`icat` | FS inode `74210`, content `/lib/selinux.so.3` (resolves via `/lib`→`/usr/lib` symlink). Timeline context: its MAC time `20:44:46.472` postdates the journal `tee` command (`20:44:43.429`) by about 3 s, so MAC time alone mis-orders configuration. |
 | M07 | Persistence/activation | Concealable file created | O | -- | -- | S | TSK `fls`/`istat` | FS `/tmp/__malicious_file` inode `74173`, visible offline though the `readdir` hook would hide it live. Filename matches the disclosed `__malicious_` prefix (ground-truth-informed name). |
@@ -82,18 +97,27 @@ union row carries the case-wide partition. `Union gain` is on the union row.
 
 | Source | O | P | N | TF | Found / A | Coverage | U / C / S | X | Union gain | Rejected candidates | TTF | Principal methods |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
-| Filesystem | 3 | 1 | 4 | 0 | 4 / 8 | 50.0% | 1 / 1 / 2 | 0 | -- | 0 | not measured | TSK 4.15.0 (`fls`,`ifind`,`istat`,`icat`,`fsstat`) |
-| Timeline | 1 | 1 | 1 | 0 | 2 / 3 | 66.7% | 0 / 1 / 1 | 0 | -- | N/A | not measured | Plaso 20260512 curated `timeline.plaso` (`filestat`,`syslog_traditional`,`systemd_journal`,`utmp`) plus unfiltered control; bounded `psort` filters |
+| Filesystem | 3 | 1 | 0 | 0 | 4 / 4 | 100.0% | 1 / 1 / 2 | 0 | -- | 0 | not measured | TSK 4.15.0 (`mmls`,`fsstat`,`fls`,`ifind`,`istat`,`icat`) |
+| Timeline | 1 | 1 | 1 | 0 | 2 / 3 | 66.7% | 0 / 1 / 1 | 0 | -- | N/A | not measured | Plaso 20260512 curated `timeline.plaso` (`filestat`,`syslog_traditional`,`systemd_journal`,`utmp`; `bash_history` enabled, 0 events) plus unfiltered control; bounded `psort` filters |
 | Memory | 3 | 0 | 1 | 0 | 3 / 4 | 75.0% | 0 / 1 / 2 | 0 | -- | 0 | not measured | Volatility 3 2.28.0 (`proc.Maps`,`pslist`,`pstree`,`psaux`,`sockstat`,`bash`,`timeliner.Timeliner`) |
-| Union | 6 | 1 | 4 | 0 | 7 / 11 | 63.6% | 1 / 1 / 5 | 0 | +3 (M09, M10, M11) | 0 case-wide | not measured | TSK + Plaso 20260512 + Volatility 3 |
+| Union | 6 | 1 | 0 | 0 | 7 / 7 | 100.0% | 1 / 1 / 5 | 0 | +3 (M09, M10, M11) | 0 case-wide | not measured | TSK + Plaso 20260512 + Volatility 3 |
 
-Category-level union results: staging/build `0 / 4` (0.0%),
-persistence/activation `4 / 5` (80.0%; three observed plus one partial, M08),
-runtime `2 / 2` (100.0%).
+Category-level union results: staging/build has no applicable target and drops
+out of the case entirely; persistence/activation `5 / 5` (100.0%; four observed
+plus one partial, M08), runtime `2 / 2` (100.0%).
+
+**What the 100% figures do and do not mean.** Every applicable target was
+reached by at least one source, but the applicability set is the seven targets
+M05–M11 that the prebuilt-artifact design actually produces. The full coverage
+records that the surviving treatment surface is small and well exposed, not that
+recovery improved: the four staging/build targets left the denominator because
+the events moved to the builder VM, not because a method found them. Coverage is
+descriptive inside this declared set and must not be read against the earlier
+Father runs or against another source family.
 
 **Robustness readings.** Counting only `O`, the observed-only lower bound is
-filesystem `3 / 8` (37.5%), timeline `1 / 3` (33.3%), memory `3 / 4` (75.0%),
-union `6 / 11` (54.5%). No accepted `O`/`P` in this run rests on
+filesystem `3 / 4` (75.0%), timeline `1 / 3` (33.3%), memory `3 / 4` (75.0%),
+union `6 / 7` (85.7%). No accepted `O`/`P` in this run rests on
 ground-truth-guided *recovery*; the only ground-truth touch point is the M07
 filename match, which validates a name after technique-led discovery of the
 file and does not change any status.
@@ -133,8 +157,11 @@ union gain reflects source-exclusive targets rather than a recovery an applicabl
 source missed. Keeping this distinction explicit is the methodological point of
 the case. No materially contradictory accepted observation was recorded (`X` 0).
 
-Declared limitations: build staging is not recovered within the bounded methods
-(M01–M04 negative); command history preserves text but not per-command times
+Declared limitations: this run cannot speak to build staging at all, because the
+build happens on a separate builder VM and M01–M04 are not applicable rather
+than negative — a design boundary, not a recovery failure, and the reason this
+case's coverage is not comparable with the earlier Father runs; command history
+preserves text but not per-command times
 (M08 partial/negative across sources); static ELF inspection proves capability,
 not hook execution; no memory mapping was hashed, so library identity is
 disk-derived only; and Plaso shares the disk acquisition with TSK. The cause of
