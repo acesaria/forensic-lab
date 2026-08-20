@@ -1,5 +1,8 @@
 # Prompt for Claude — ICM Cleanup & Review (Phase 1)
 
+> **Status:** completed historical prompt. Do not execute it as current work;
+> use `ai/INDEX.md` for current routing.
+
 **Context:** We are working on a cybersecurity/DFIR thesis project. The ICM (Inter-Contextual Memory) structure organizes documentation, experiments, investigations, and thesis work. The structure has grown organically and now contains obsolete files, duplicates, and unverified assertions. We need to clean it up before proceeding with metrics definition.
 
 **Your role:** You are a technical reviewer and archivist. Your task is to read, map, and clean the ICM structure to make it coherent, minimal, and "agent-friendly".

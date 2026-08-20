@@ -37,19 +37,19 @@ propagation). That pattern was hard to execute reliably, reuse across
 - **Explicit limitations and human interpretation**, stated in both the
   notebook and each phase's generated `investigation-summary.md`.
 
-Reference implementation: `investigations/father/`. The same phase-script
-shape is intended to be reused for the other three scenarios
-(`kernel_diamorphine`, `ptrace_fa`, and the second Father variant) by adapting
-the scenario-specific artifact list and tool commands, not by building a
-generic framework — see
-`ai/03_investigation/output/investigation-layer-refactor.md`.
+Reference implementation: `investigations/father/`. Investigation workflows
+for `ptrace_fa`, `kernel_diamorphine`, and `kernel_ebpf_badbpf` are not yet
+present in this checkout. When added, reuse the understandable phase shape and
+adapt scenario-specific questions/tool commands without building a generic
+framework.
 
 ## Disk-phase architecture update (2026-08-19, Father only)
 
 The Father scenario's **disk phase only** was further refactored from the
 Bash `runme_disk.sh` + `metrics/disk_metrics.py` pair into a Python-orchestrated
-Jupyter notebook. Father's memory and timeline phases, and all other scenarios,
-still use the Bash-phase-script architecture above.
+Jupyter notebook. Father's memory and timeline phases still use the
+Bash-phase-script architecture above; the other scenario workflows are not yet
+implemented.
 
 - `investigations/father/disk_investigation.ipynb` is now the disk phase's
   single canonical workflow: a linear, restartable notebook that invokes

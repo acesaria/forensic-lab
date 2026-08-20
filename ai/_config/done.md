@@ -12,9 +12,9 @@ Done means:
 
 ## 02_experiments
 Done means:
-- scenario run or investigation step completed and recorded
+- scenario run/acquisition completed and recorded
 - artifact paths captured
-- metrics/results summarized factually
+- validated scenario behaviour and acquisition status summarized factually
 - per-scenario note written under `ai/02_experiments/output/<scenario>/`
 
 ## 03_investigation
@@ -23,6 +23,9 @@ Done means:
 - derived outputs land only under `shared/investigations/<RUN_ID>/`
 - each finding points to an evidence/output file
 - limitations and unperformed checks are explicit
+- the two active result tables are completed when the task reaches reporting
+- partial/recovery/disputed classifications and arithmetic receive the bounded
+  review required by `references/results-tables-methodology.md`
 - handoff note written to `ai/03_investigation/output/`
 
 ## 04_docs

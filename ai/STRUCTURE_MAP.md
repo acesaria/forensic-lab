@@ -1,97 +1,77 @@
-# ICM Structure Map
+# ICM structure map
 
-Produced during the 2026-08-20 ICM cleanup. Maps `ai/` as it exists, flags
-source-of-truth vs generated files, and lists inconsistencies. `ai/` is
-local-only (gitignored).
+Current map of the tracked internal coordination layer. Enter through
+`ai/INDEX.md`; do not load this map unless structural review is needed.
 
-## Per-directory map
+## Authority order
 
-### `_config/` — workspace rules
-- **Source of truth:** `conventions.md`, `scope.md`, `done.md`,
-  `review-report.md`.
-- No `output/`/`references/`.
+1. The user's exact task and stop gate.
+2. `ai/DECISIONS.md`.
+3. The selected stage's `CONTEXT.md` and stable `references/`.
+4. Validated run/investigation artifacts outside `ai/` for factual results.
+5. Stage `output/` handoffs.
+6. `ai/archive/`, historical prompts/reports, and the historical thesis plan.
 
-### `01_refactor` — bounded refactors
-- Purpose: behavior-preserving code refactors, minimal diffs.
-- `output/father-rootkit-integration.md` — **generated** handoff (Phase B
-  result). Keep (documents completed work).
-- No `references/`.
+An ICM note never overrides current code, manifests, acquisition records, or
+accepted forensic evidence.
 
-### `02_experiments` — scenario execution
-- Purpose: run + record one scenario experiment; acquire evidence.
-- `output/father/` — **generated** handoffs: `experiment-summary.md`,
-  `artifacts.md`, `metrics.md`, `handoff.md` (run `father-u22-20260818-01`).
-  Keep.
-- No `references/`.
+## Directories
 
-### `03_investigation` — forensic analysis
-- Purpose: disk/memory/timeline investigation per `RUN_ID`.
-- `references/` — **stable:**
-  - `linux-dfir-artifacts.md` (reusable artifact-source table)
-  - `tsk-ext4-cheatsheet.md` (imported TSK/ext4 runbook)
-  - `investigation-architecture.md` (architecture-of-record, relocated from
-    CONTEXT.md in this cleanup)
-- `output/` — **generated** handoffs, chronological refactor trail:
-  - `notebook-implementation.md` — **superseded** (documents
-    `runme_investigate.md`, which was renamed to `history_seed_notebook.md`;
-    the executable-Markdown approach was replaced). → archive candidate.
-  - `investigation-layer-refactor.md` — partially superseded (its disk portion
-    was replaced by the disk notebook) but memory/timeline content still
-    current. Keep.
-  - `disk-notebook-refactor.md` — current disk-phase implementation record.
-    Keep.
-  - `disk-investigation-refactor-plan.md` — current planning doc with
-    **unresolved open decisions** (§8). Keep.
+| Directory | Purpose | Current state |
+|---|---|---|
+| `_config/` | Small global scope, conventions, and done criteria | Active rules; `review-report.md` is historical |
+| `01_refactor/` | Bounded behavior-preserving code changes | One historical Father handoff |
+| `02_experiments/` | Scenario execution and acquisition | Historical Father handoff; task selects the active run |
+| `03_investigation/` | Per-run disk, memory, and timeline work | Father only implemented; active results contract in `references/` |
+| `04_docs/` | Simple project/scenario documentation | No handoff yet |
+| `05_thesis/` | Bounded `.tex` fragments from validated evidence | No handoff yet |
+| `archive/` | Superseded methodology and completed prompts/plans | Background only |
 
-### `04_docs` — project documentation
-- Purpose: simple README/module/scenario docs from validated outputs.
-- No `output/`/`references/` yet (nothing produced).
+## Stable files
 
-### `05_thesis` — thesis fragments
-- Purpose: `.tex` fragments from validated outputs.
-- No `output/`/`references/` yet.
+- `INDEX.md`: single entry point and short executor-prompt rule.
+- `IDENTITY.md`: global boundaries and read order.
+- `ROUTING.md`: stage selection and handoff chain.
+- `DECISIONS.md`: active/superseded decisions.
+- `_config/{conventions,scope,done}.md`: small workspace rules.
+- every stage `CONTEXT.md`: short stage-specific authority.
+- `03_investigation/references/investigation-architecture.md`: current
+  investigation implementation shape.
+- `03_investigation/references/investigation-guidelines.md`: notebook style.
+- `03_investigation/references/results-tables-methodology.md`: active RQs,
+  tables, coverage, triage/rejected-candidate, recovery, and review rules.
+- `05_thesis/references/thesis-review-checklist.md`: portable scientific and
+  presentation gate, loaded only for thesis audit/refactor/final review.
+- source-specific technical references in `03_investigation/references/`, read
+  only when a task needs them.
 
-## Source-of-truth files (keep, edit carefully)
+## Generated or historical material
 
-`IDENTITY.md`, `ROUTING.md`, `DECISIONS.md`, `INDEX.md`, `STRUCTURE_MAP.md`,
-`_config/*`, every `CONTEXT.md`, and `03_investigation/references/*`.
+- Files under a stage `output/` are task handoffs/research notes, not automatic
+  authority for later tasks.
+- `03_investigation/output/metrics-methodology-deep-research-report.md` is
+  background; the simpler results-methodology reference supersedes it.
+- `thesis-finalization-plan.md` is a historical planning snapshot and is not
+  loaded by default.
+- `icm-cleanup-prompt.md` and `_config/review-report.md` document the completed
+  Phase-1 cleanup.
+- `archive/` is never an active entry point.
 
-## Generated output (regenerable handoffs)
+## Real work products
 
-Everything under any `*/output/` directory.
+- Experiments/evidence: `shared/experiments/<RUN_ID>/`.
+- Derived investigations: `shared/investigations/<RUN_ID>/`.
+- Reusable investigation workflows: `investigations/<scenario>/`.
+- Project documentation: `docs/` and repository README/scenario docs.
+- Thesis sources: the active thesis tree named by the stage-05 task.
 
-## Inconsistencies found (fixed in this cleanup unless noted)
+## Current known boundaries
 
-1. **Stage-numbering drift** — `_config/done.md` and `DECISIONS.md` used the old
-   4-stage numbering (`03_docs`, `04_thesis`) instead of the actual 5 stages.
-   **Fixed.**
-2. **`ai/ai/` double-path bug** — `02_experiments/CONTEXT.md`,
-   `phase-a-inspect.md`, `phase-b-implement.md` referenced non-existent
-   `ai/ai/...` paths. Fixed in `02_experiments/CONTEXT.md` (rewritten); the two
-   phase-* files are archive candidates (see below), not path-fixed.
-3. **Stale CONTEXT titles** — `04_docs/CONTEXT.md` was titled "03 Docs";
-   `05_thesis/CONTEXT.md` was "04 Thesis". **Fixed.**
-4. **Oversized CONTEXT** — `03_investigation/CONTEXT.md` (274 lines) held four
-   architecture-of-record sections. **Moved** to
-   `references/investigation-architecture.md`; CONTEXT trimmed. No content lost.
-5. **`gitignore.snippet` stale/redundant** — lists old dir names and duplicates
-   the real `.gitignore` (which already has `/ai/`). Delete candidate (see
-   below).
-6. **Doc drift (outside write scope, noted only):** `investigations/father/`
-   `README.md` mentions `save_raw_output`; the actual helper is `save_raw`
-   (per `disk-investigation-refactor-plan.md` §1). Not changed here.
-7. **Convention vs reality:** `conventions.md` says every stage must contain
-   `references/` and `output/`; `01`, `04`, `05` do not yet. Left as-is (empty
-   dirs add no value); noted for awareness.
-
-## Archive / delete candidates (NOT acted on — awaiting confirmation)
-
-Move to a proposed `ai/archive/`:
-- `ai/03_investigation/output/notebook-implementation.md` (superseded draft)
-- `ai/phase-a-inspect.md`, `ai/phase-b-implement.md` (Father refactor complete;
-  historical prompts, also carry the `ai/ai/` bug)
-- `ai/father-refactor-plan.md` (Father refactor complete; keep as historical
-  decision record, or archive)
-
-Delete permanently:
-- `ai/gitignore.snippet` (stale + redundant with the real `.gitignore`)
+- Only `investigations/father/` exists; the ptrace, Diamorphine, and BadBPF
+  investigation workflows still need bounded scenario-specific work.
+- Father disk and deleted-content recovery work is incomplete; no ICM summary
+  may promote provisional observations to final results.
+- Cross-distribution results are descriptive and compared within the same
+  scenario using the same reconstruction-item list/procedure.
+- Claude is routed with a short task prompt through `ai/INDEX.md`; it does not
+  load unrelated stages or receive duplicated project summaries.

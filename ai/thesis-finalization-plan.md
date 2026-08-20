@@ -1,6 +1,12 @@
 # Thesis finalization plan
 
-Updated 2026-08-20. This is the sole active delivery plan.
+> **Status:** historical planning snapshot. It contains completed older-run and
+> Ubuntu-only assumptions that are not the current investigation authority.
+> Current tasks are controlled by `ai/INDEX.md`, `ai/DECISIONS.md`, the selected
+> stage `CONTEXT.md`, and the exact supervisor/task prompt. Load this file only
+> when a task explicitly asks to reconcile the delivery plan.
+
+Updated 2026-08-20.
 
 **Schedule slip (2026-08-20):** the 2026-08-19 first administrative milestone /
 supervisor checkpoint was **missed** — the supervisor package (Phase 6) was not

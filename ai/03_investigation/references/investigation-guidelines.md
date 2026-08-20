@@ -3,8 +3,8 @@
 > ICM reference — migrated 2026-08-20 from the repo-root `GUIDELINES.md` during
 > the public-surface cleanup. Authoring guidance for producing the
 > `docs/investigations/<scenario>/<run_id>/runme_*.md` notebooks. Stable;
-> update carefully. Reporting rules and status vocabulary remain in the
-> repo-root `../../archive/METHODOLOGY.md` (public, cited by the accepted case reports).
+> update carefully. Active reporting tables and status vocabulary are in
+> `results-tables-methodology.md`.
 
 Read this file before performing an investigation or creating or editing a
 Runme investigation notebook.
@@ -46,9 +46,9 @@ Before investigating, confirm what `run_id` actually is:
   `dumps/acquisition.json`.
 
 Older `shared/investigations/<run_id>/` trees predating the `derived/
-<source>/` convention above (`*-worklog.md`, `commands.txt`, `SHA256SUMS`)
-are superseded, gitignored, and carry no provenance; leave or prune them
-freely.
+<source>/` convention above (`*-worklog.md`, `commands.txt`, `SHA256SUMS`) are
+not accepted evidence without provenance verification. Do not use or delete
+them merely because they are present.
 
 ## Shell history and Linux log examination
 

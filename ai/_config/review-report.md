@@ -1,5 +1,8 @@
 # ICM Cleanup — Review Report (Phase 1)
 
+> **Status:** historical Phase-1 report. Current routing and decisions live in
+> `ai/INDEX.md`, `ai/DECISIONS.md`, and the stage `CONTEXT.md` files.
+
 Date: 2026-08-20. Scope: read/map/clean the `ai/` ICM workspace before metrics
 definition. `ai/` is local-only (gitignored).
 

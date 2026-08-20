@@ -1,6 +1,8 @@
 # Identity
 
-This is a local-only AI workspace used to finish and stabilize the linux-multisource-dfir-lab project efficiently.
+This is the repository's internal AI coordination workspace for finishing and
+stabilizing the linux-multisource-dfir-lab project efficiently. It is tracked
+for agent handoffs, but it is not forensic evidence or a thesis deliverable.
 
 The goal is not to redesign the project. The goal is to:
 
@@ -17,23 +19,20 @@ The goal is not to redesign the project. The goal is to:
 - Do not add more tests unless strictly required to confirm an actual breakage.
 - Do not mix stages in one task.
 - Do not scan the whole repository unless the current stage explicitly requires it.
-- Read only:
-   1. `ai/IDENTITY.md`
-   2. `ai/ROUTING.md`
-   3. the current stage `CONTEXT.md`
-   4. explicitly named task files
+- Enter through `ai/INDEX.md`; then read only the files in the order below.
 
 - Use each stage `output/` directory as the handoff point.
 - LaTeX writing is allowed only after validated experiment outputs and/or documentation exist.
-- This workspace is local-only and not part of the thesis deliverable.
+- This workspace is not an authority for run-specific findings.
 
 ## Read order
 
 Always read in this order:
 
-1. `IDENTITY.md`
-2. `ROUTING.md`
-3. current stage `CONTEXT.md`
-4. files explicitly listed by the task
+1. `ai/INDEX.md`
+2. `ai/IDENTITY.md`
+3. `ai/ROUTING.md`
+4. the current stage `CONTEXT.md`
+5. files explicitly listed by the task
 
 If a file is not required by the current stage, do not load it.

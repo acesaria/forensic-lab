@@ -2,7 +2,7 @@
 
 ## Navigation
 
-- New here? Read `ai/INDEX.md` first (overview + directory table + agent rules).
+- Enter through `ai/INDEX.md`, then follow its short read order.
 - Structure map and source-of-truth vs generated files: `ai/STRUCTURE_MAP.md`.
 
 ## Stage order
@@ -22,6 +22,17 @@
 | Runme investigation workflow or DF evidence analysis | `ai/03_investigation` |
 | Simple README/module/scenario documentation | `ai/04_docs` |
 | LaTeX chapter/subsection writing | `ai/05_thesis` |
+
+## Claude task prompts
+
+Keep executor prompts short. Name the objective, stage, allowed files, required
+validation, and stop gate; then tell Claude to start at `ai/INDEX.md`. The ICM
+files supply project context. Save a reusable prompt under the selected stage's
+`output/` only when it is itself a handoff artifact.
+
+Do not paste large repository summaries into executor prompts or let Claude
+load unrelated stages. Claude is an optional executor/reviewer, not a required
+runtime dependency.
 
 ## Handoff chain
 
