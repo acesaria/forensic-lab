@@ -130,9 +130,32 @@ The host runs Linux with KVM available. On Debian/Ubuntu:
 ```bash
 sudo apt install qemu-kvm libvirt-daemon-system virtinst cloud-image-utils \
                  libewf-dev sleuthkit plaso-tools ansible python3-venv
-pipx install volatility3          # or any install exposing the vol3 binary
+pipx install volatility3          # installs the "vol" command, not "vol3"
+ln -s "$(command -v vol)" "$(dirname "$(command -v vol)")/vol3"
 sudo usermod -aG libvirt,kvm "$USER" && newgrp libvirt
 ```
+
+The alias above exists because every command in this repository — `config.yaml`'s
+`vol_bin`, the orchestrator's setup-time probe, and every investigation
+notebook's manual commands — was written against the name `vol3`, which is not
+what upstream Volatility 3 actually installs (its `pyproject.toml` defines only
+`vol` and `volshell`). Renaming every reference instead of aliasing the binary
+would touch already-written investigation notebooks for no benefit; the alias
+keeps every existing command reproducible as written.
+
+Installing `libewf-dev` alongside `sleuthkit` does **not** guarantee the
+distribution's prebuilt `sleuthkit` package was itself compiled against
+libewf; that is decided at the distribution's own build time, not by what is
+installed afterwards. Verify explicitly before relying on it:
+
+```bash
+mmls -i list        # must list "ewf" among the supported image types
+```
+
+If it does not, `cli.py setup` will fail loudly on its first toolchain probe
+(`mmls` against an acquired `.E01` image) rather than mid-scenario. The fix is
+to build Sleuth Kit from source against `libewf-dev`, or install a build known
+to include EWF support (some distributions ship one via a PPA or backports).
 
 The lab VM is reached over SSH with a dedicated key, whose paths are declared in
 `config.yaml`:
@@ -154,7 +177,6 @@ clone therefore starts without them, by design.
 
 - `METHODOLOGY.md` defines the thesis and investigation method, including the
   evidence-status vocabulary and the fixed result-reporting contract.
-- `GUIDELINES.md` defines how a manual investigation notebook is produced.
 - `docs/investigations/` holds the accepted case summaries, the source notebooks
   and the single cross-case comparative table.
 - `scenarios/<id>/README.md` documents each controlled treatment's behaviour.

@@ -2,7 +2,7 @@
 
 This document defines the thesis and manual Linux DFIR investigation method for
 **Linux Multi-Source DFIR Lab**. Verify mutable implementation details from the
-current source and use `TODO.md` for current priorities.
+current source.
 
 ## Thesis boundary
 

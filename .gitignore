@@ -79,8 +79,17 @@ shared/known_hashes/*
 AGENTS.md
 CLAUDE.md
 General-Context.md
-TODO.md
 .claudeignore
 .claude/
 .github/copilot-instructions.md
 docs/archive/
+
+# Local ICM workspace
+/ai/
+
+# Claude runtime state
+/.claude/worktrees/
+
+# Optional local agent configuration
+/.agents/
+/.codex/agents/
