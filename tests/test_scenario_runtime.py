@@ -19,10 +19,10 @@ from scenarios.userland_father_ldpreload import runner as father
 def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
     caches = {}
     for scenario_id, filenames in (
-        ("userland_father_ldpreload", ("rk.so",)),
-        ("kernel_diamorphine", ("diamorphine.ko",)),
+        ("user_ldpreload_father", ("rk.so",)),
+        ("kernel_lkm_diamorphine", ("diamorphine.ko",)),
         ("kernel_ebpf_badbpf", badbpf.ARTIFACT_NAMES),
-        ("ptrace_fa", ("shellcode_inject_fa", "victim")),
+        ("user_procinj_ptracefa", ("shellcode_inject_fa", "victim")),
     ):
         cache = tmp_path / "prebuilt/ubuntu-22.04" / scenario_id
         cache.mkdir(parents=True)
@@ -45,7 +45,7 @@ def prebuilt_caches(tmp_path: Path) -> dict[str, tuple[Path, list[Path]]]:
             },
             "source": {},
         }
-        if scenario_id == "kernel_diamorphine":
+        if scenario_id == "kernel_lkm_diamorphine":
             build_meta["target"]["kernel"] = "test"
             build_meta["recipe"] = {
                 "sha256": file_sha256(diamorphine.BUILD_SCRIPT)
@@ -222,11 +222,14 @@ def test_father_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
     ssh = MagicMock()
     terminal = ssh.open_terminal.return_value
     terminal.transcript = "transcript"
-    listing = f"-rw-r--r-- 1 labuser labuser 0 {father.HIDDEN_FILE_NAME}"
+    listing = "\n".join(
+        f"-rw-r--r-- 1 labuser labuser 0 {name}"
+        for name in father.STAGED_FILE_NAMES
+    )
     outputs = {
         father.LIST_HIDDEN_DIR: [listing, "total 0"],
     }
-    default = iter(["ubuntu-22.04 x86_64"] + [""] * 20)
+    default = iter(["ubuntu-22.04 x86_64"] + [""] * 40)
 
     def fake_run(_terminal, _log, command, **_kwargs):
         queue = outputs.get(command)
@@ -234,7 +237,10 @@ def test_father_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
         return MagicMock(combined_output=output)
 
     run_command = MagicMock(side_effect=fake_run)
-    monkeypatch.setattr(father, "run_logged_command", run_command)
+    # Father runs every command through CommandLog, so patch the primitive it
+    # delegates to rather than a name in the runner module.
+    monkeypatch.setattr("scenarios.command_log.run_logged_command", run_command)
+    monkeypatch.setattr(father.time, "sleep", lambda *_a, **_k: None)
     monkeypatch.setattr(
         father, "_validate_backdoor", lambda _ssh: (MagicMock(), {"client_port": 54321})
     )
@@ -249,11 +255,20 @@ def test_father_victim_commands_use_direct_tmp(tmp_path: Path, monkeypatch):
 
     assert father.VICTIM_ARTIFACT == "/tmp/rk.so"
     assert father.HIDDEN_DIR == "/tmp"
+    assert father.HARVEST_PATH == "/tmp/__malicious_harvest"
+    assert father.RECON_STAGE_PATH == "/tmp/__malicious_recon"
     ssh.put.assert_called_once_with(tmp_path / father.ARTIFACT_NAME, "/tmp/rk.so")
     commands = [item.args[2] for item in run_command.call_args_list]
-    assert f"touch /tmp/{father.HIDDEN_FILE_NAME}" in commands
+    assert f"sudo -n install -m 0600 /etc/shadow {father.HARVEST_PATH}" in commands
+    # Recon is staged, not discarded: id/uname/os-release tee to console and
+    # file; the account database is staged only, without echoing it in full.
+    assert f"cat /etc/passwd >> {father.RECON_STAGE_PATH}" in commands
+    assert f"id | tee -a {father.RECON_STAGE_PATH}" in commands
+    assert f"sudo -n touch -r {father.LIBC_REFERENCE} {father.INSTALLED_LIBRARY}" in commands
     assert "ls -la -- /tmp" in commands
     assert "rm -f -- /tmp/rk.so" in commands
+    # Default cleanup preserves auth.log/syslog for investigation.
+    assert not any("truncate" in command for command in commands)
     blob = "\n".join([*commands, father.VICTIM_ARTIFACT])
     assert "forensic-lab" not in blob
     assert "mkdir" not in blob
@@ -379,18 +394,18 @@ def test_ptrace_runner_owns_builder_mechanics(tmp_path: Path):
     [
         ("interactive_shell", True, "acquisition", 0, False, "on"),
         ("interactive_shell", False, None, 0, False, "on"),
-        ("userland_father_ldpreload", False, None, 1, True, "off"),
-        ("userland_father_ldpreload", False, "scenario", 1, False, "off"),
-        ("userland_father_ldpreload", True, "acquisition", 1, True, "off"),
+        ("user_ldpreload_father", False, None, 1, True, "off"),
+        ("user_ldpreload_father", False, "scenario", 1, False, "off"),
+        ("user_ldpreload_father", True, "acquisition", 1, True, "off"),
         ("interactive_shell", False, "scenario", 0, False, "on"),
         ("interactive_shell", True, None, 0, False, "off"),
-        ("ptrace_fa", False, None, 1, True, "off"),
-        ("ptrace_fa", False, "scenario", 1, False, "off"),
-        ("ptrace_fa", True, None, 0, True, "off"),
-        ("ptrace_fa", True, "acquisition", 1, True, "off"),
-        ("kernel_diamorphine", False, None, 1, True, "off"),
-        ("kernel_diamorphine", False, "scenario", 1, False, "off"),
-        ("kernel_diamorphine", True, "acquisition", 1, True, "off"),
+        ("user_procinj_ptracefa", False, None, 1, True, "off"),
+        ("user_procinj_ptracefa", False, "scenario", 1, False, "off"),
+        ("user_procinj_ptracefa", True, None, 0, True, "off"),
+        ("user_procinj_ptracefa", True, "acquisition", 1, True, "off"),
+        ("kernel_lkm_diamorphine", False, None, 1, True, "off"),
+        ("kernel_lkm_diamorphine", False, "scenario", 1, False, "off"),
+        ("kernel_lkm_diamorphine", True, "acquisition", 1, True, "off"),
         ("kernel_ebpf_badbpf", False, None, 1, True, "off"),
         ("kernel_ebpf_badbpf", False, "scenario", 1, False, "off"),
         ("kernel_ebpf_badbpf", True, "acquisition", 1, True, "off"),
@@ -469,7 +484,7 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             return {"distro": "Ubuntu", "kernel": "test", "timezone": "UTC"}
 
         def _run_acquisition(
-            self, _vm_name, run_id, _scenario_id, *, before_shutdown=None
+            self, _vm_name, run_id, *, before_shutdown=None
         ):
             assert fake_vm.state == "on"
             if cleanup_socket is not None:
@@ -579,7 +594,6 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
             (cache / "build.json").read_bytes()
         ).hexdigest()
     assert fake_vm.shutdowns == expected_shutdowns
-    assert manifest["acquisition_requested"] is acquire
     assert manifest["repository"]["commit"] == "test-commit"
     assert manifest["artifacts"]["command_log"] == "command_log.jsonl"
     assert manifest["artifacts"]["terminal_transcript"] == "terminal_transcript.txt"
@@ -616,9 +630,9 @@ def test_explicit_scenarios_preserve_lifecycle_differences(
 @pytest.mark.parametrize(
     "scenario_id",
     (
-        "userland_father_ldpreload",
-        "ptrace_fa",
-        "kernel_diamorphine",
+        "user_ldpreload_father",
+        "user_procinj_ptracefa",
+        "kernel_lkm_diamorphine",
         "kernel_ebpf_badbpf",
     ),
 )
@@ -676,7 +690,7 @@ def test_father_wrong_image_does_not_reset_victim(
         ForensicOrchestrator.run_experiment(
             FakeOrchestrator(),
             "ubuntu-22.04",
-            "userland_father_ldpreload",
+            "user_ldpreload_father",
         )
     assert not resets and not FakePaths.experiments_dir.exists()
 

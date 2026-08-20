@@ -50,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  .venv/bin/python cli.py init\n"
             "  .venv/bin/python cli.py setup --distro ubuntu-22.04\n"
             "  .venv/bin/python cli.py run --distro ubuntu-22.04 "
-            "--scenario kernel_diamorphine"
+            "--scenario kernel_lkm_diamorphine"
         ),
     )
     parser.add_argument(
@@ -101,7 +101,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--distro", default="ubuntu-22.04", help="Distro ID")
     run.add_argument(
         "--scenario",
-        default="userland_father_ldpreload",
+        default="user_ldpreload_father",
         choices=SCENARIO_CHOICES,
         help="Controlled scenario key to run",
     )

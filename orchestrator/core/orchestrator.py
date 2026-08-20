@@ -36,13 +36,14 @@ acquisition is skipped or a step fails
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import Any
+from typing import Any, TypeAlias
 
 from orchestrator.core.config import (
     BASELINE_SNAPSHOT,
@@ -73,6 +74,141 @@ from scenarios.kernel_diamorphine import runner as diamorphine
 from scenarios.kernel_ebpf_badbpf import runner as badbpf
 from scenarios.ptrace_fa import runner as ptrace
 from scenarios.userland_father_ldpreload import runner as father
+
+CleanupCallback: TypeAlias = Callable[[], None]
+# (ssh, transcript_path, command_log_path, staged artifacts, build record)
+ScenarioExecutor: TypeAlias = Callable[
+    [SSHClient, Path, Path, tuple[Path, ...], dict],
+    tuple[dict, CleanupCallback],
+]
+
+
+@dataclass(frozen=True)
+class PreparedScenario:
+    """A scenario that runs from a published build and cleans up before shutdown."""
+
+    artifact_names: tuple[str, ...]
+    execute: ScenarioExecutor
+    # Raises when the published build no longer matches its recipe.
+    check_record: Callable[[dict], None] | None
+
+
+@dataclass(frozen=True)
+class PreparedRun:
+    """One scenario's verified prebuilt input, resolved before the VM starts."""
+
+    scenario: PreparedScenario
+    artifacts: tuple[Path, ...]
+    build_record: dict
+
+
+def _run_father(
+    ssh: SSHClient,
+    transcript_path: Path,
+    command_log_path: Path,
+    artifacts: tuple[Path, ...],
+    build_record: dict,
+) -> tuple[dict, CleanupCallback]:
+    (artifact,) = artifacts
+    return father.run_father(
+        ssh,
+        transcript_path,
+        command_log_path=command_log_path,
+        artifact_path=artifact,
+        build_record=build_record,
+    )
+
+
+def _run_ptrace_fa(
+    ssh: SSHClient,
+    transcript_path: Path,
+    command_log_path: Path,
+    artifacts: tuple[Path, ...],
+    build_record: dict,
+) -> tuple[dict, CleanupCallback]:
+    injector, victim = artifacts
+    return ptrace.run_ptrace_fa(
+        ssh,
+        transcript_path,
+        command_log_path=command_log_path,
+        artifact_paths=(injector, victim),
+        build_record=build_record,
+    )
+
+
+def _run_badbpf(
+    ssh: SSHClient,
+    transcript_path: Path,
+    command_log_path: Path,
+    artifacts: tuple[Path, ...],
+    build_record: dict,
+) -> tuple[dict, CleanupCallback]:
+    return badbpf.run_badbpf(
+        ssh,
+        transcript_path,
+        command_log_path=command_log_path,
+        artifact_paths=artifacts,
+        build_record=build_record,
+    )
+
+
+def _run_diamorphine(
+    ssh: SSHClient,
+    transcript_path: Path,
+    command_log_path: Path,
+    artifacts: tuple[Path, ...],
+    build_record: dict,
+) -> tuple[dict, CleanupCallback]:
+    (artifact,) = artifacts
+    return diamorphine.run_diamorphine(
+        ssh,
+        transcript_path,
+        command_log_path=command_log_path,
+        artifact_path=artifact,
+        build_record=build_record,
+    )
+
+
+def _require_current_badbpf(build_record: dict) -> None:
+    if not badbpf.build_record_is_current(build_record, badbpf.verify_source()):
+        raise RuntimeError(
+            "published bad-bpf build uses a stale recipe; rerun the build"
+        )
+
+
+def _require_current_diamorphine(build_record: dict) -> None:
+    if not diamorphine.build_record_is_current(
+        build_record, diamorphine.verify_source()
+    ):
+        raise RuntimeError(
+            "published Diamorphine build uses a stale recipe; rerun the build"
+        )
+
+
+# The one scenario table. interactive_shell is deliberately absent: it needs no
+# published build and no cleanup, which is exactly what "not in here" means.
+PREPARED_SCENARIOS: dict[str, PreparedScenario] = {
+    father.SCENARIO_ID: PreparedScenario(
+        artifact_names=(father.ARTIFACT_NAME,),
+        execute=_run_father,
+        check_record=None,
+    ),
+    ptrace.SCENARIO_ID: PreparedScenario(
+        artifact_names=ptrace.ARTIFACT_NAMES,
+        execute=_run_ptrace_fa,
+        check_record=None,
+    ),
+    badbpf.SCENARIO_ID: PreparedScenario(
+        artifact_names=badbpf.ARTIFACT_NAMES,
+        execute=_run_badbpf,
+        check_record=_require_current_badbpf,
+    ),
+    diamorphine.SCENARIO_ID: PreparedScenario(
+        artifact_names=(diamorphine.ARTIFACT_NAME,),
+        execute=_run_diamorphine,
+        check_record=_require_current_diamorphine,
+    ),
+}
 
 
 class ForensicOrchestrator:
@@ -161,126 +297,119 @@ class ForensicOrchestrator:
         record under shared/prebuilt/. Never overwrites. Builder ends OFF.
         """
         source = father.verify_source()
-        published = self._resolve_prebuilt_input(
-            distro_id, father.SCENARIO_ID, (father.ARTIFACT_NAME,)
+
+        def build_artifacts(
+            ssh: SSHClient, staging: Path, vm_name: str
+        ) -> tuple[tuple[Path, ...], str]:
+            artifact, stdout = father.build(ssh, staging, source)
+            return (artifact,), stdout
+
+        return self._publish_scenario_build(
+            distro_id,
+            father.SCENARIO_ID,
+            (father.ARTIFACT_NAME,),
+            build=build_artifacts,
+            record_source=source,
+            recipe=father.build_recipe(),
         )
-        if published is not None:
-            artifacts, _record = published
-            console.info(f"already published: {self._display(artifacts[0])}")
-            return artifacts[0]
-
-        vm_name = self._ensure_builder_vm(distro_id)
-        with tempfile.TemporaryDirectory() as staging:
-            try:
-                with self.vm_manager.open_ssh(vm_name) as ssh:
-                    artifact, stdout = father.build(ssh, Path(staging), source)
-            finally:
-                self.vm_manager.shutdown_vm(vm_name)
-
-            record = self._build_record(
-                distro_id,
-                father.SCENARIO_ID,
-                (artifact,),
-                source,
-                father.build_recipe(),
-                _builder_facts(stdout),
-            )
-            cache_dir = self._publish_build(
-                distro_id, father.SCENARIO_ID, (artifact,), record
-            )
-
-        return cache_dir / father.ARTIFACT_NAME
 
     def build_ptrace_fa(self, distro_id: str) -> Path:
         """Build and publish the two ptrace_fa binaries. Builder ends OFF."""
-        published = self._resolve_prebuilt_input(
-            distro_id, ptrace.SCENARIO_ID, ptrace.ARTIFACT_NAMES
+
+        def build_artifacts(
+            ssh: SSHClient, staging: Path, vm_name: str
+        ) -> tuple[tuple[Path, ...], str]:
+            console.step(f"building ptrace_fa on {vm_name}...")
+            return ptrace.build(ssh, staging)
+
+        return self._publish_scenario_build(
+            distro_id,
+            ptrace.SCENARIO_ID,
+            ptrace.ARTIFACT_NAMES,
+            build=build_artifacts,
+            record_source=ptrace.build_source(),
+            recipe=ptrace.build_recipe(),
         )
-        if published is not None:
-            artifacts, _record = published
-            console.info(f"already published: {self._display(artifacts[0])}")
-            return artifacts[0]
-
-        vm_name = self._ensure_builder_vm(distro_id)
-        with tempfile.TemporaryDirectory() as staging:
-            try:
-                with self.vm_manager.open_ssh(vm_name) as ssh:
-                    console.step(f"building ptrace_fa on {vm_name}...")
-                    artifacts, stdout = ptrace.build(ssh, Path(staging))
-            finally:
-                self.vm_manager.shutdown_vm(vm_name)
-
-            record = self._build_record(
-                distro_id,
-                ptrace.SCENARIO_ID,
-                artifacts,
-                ptrace.build_source(),
-                ptrace.build_recipe(),
-                _builder_facts(stdout),
-            )
-            cache_dir = self._publish_build(
-                distro_id, ptrace.SCENARIO_ID, artifacts, record
-            )
-
-        return cache_dir / ptrace.ARTIFACT_NAMES[0]
 
     def build_badbpf(self, distro_id: str) -> Path:
         """Build and publish Bad-BPF and XCrypto. Builder ends OFF."""
         source = badbpf.verify_source()
-        published = self._resolve_prebuilt_input(
-            distro_id, badbpf.SCENARIO_ID, badbpf.ARTIFACT_NAMES
+
+        def build_artifacts(
+            ssh: SSHClient, staging: Path, vm_name: str
+        ) -> tuple[tuple[Path, ...], str]:
+            return badbpf.build(ssh, staging, source)
+
+        return self._publish_scenario_build(
+            distro_id,
+            badbpf.SCENARIO_ID,
+            badbpf.ARTIFACT_NAMES,
+            build=build_artifacts,
+            # Bad-BPF's source record names the vendored archive and the
+            # lab-owned payload only; the rest of verify_source() is local.
+            record_source={
+                "repository": source["repository"],
+                "commit": source["commit"],
+                "archive_sha256": source["archive_sha256"],
+                "xcrypto_sha256": source["xcrypto_sha256"],
+            },
+            recipe=badbpf.build_recipe(),
+            is_current=lambda record: badbpf.build_record_is_current(record, source),
+            target_facts=badbpf.build_target,
         )
-        if published is not None:
-            artifacts, record = published
-            if not badbpf.build_record_is_current(record, source):
-                raise RuntimeError(
-                    "published bad-bpf build uses a stale recipe; remove "
-                    f"{self._display(artifacts[0].parent)} and rerun the build"
-                )
-            console.info(f"already published: {self._display(artifacts[0])}")
-            return artifacts[0]
-
-        vm_name = self._ensure_builder_vm(distro_id)
-        with tempfile.TemporaryDirectory() as staging:
-            try:
-                with self.vm_manager.open_ssh(vm_name) as ssh:
-                    artifacts, stdout = badbpf.build(ssh, Path(staging), source)
-            finally:
-                self.vm_manager.shutdown_vm(vm_name)
-
-            facts = _builder_facts(stdout)
-            target = badbpf.build_target(facts)
-            record = self._build_record(
-                distro_id,
-                badbpf.SCENARIO_ID,
-                artifacts,
-                {
-                    "repository": source["repository"],
-                    "commit": source["commit"],
-                    "archive_sha256": source["archive_sha256"],
-                    "xcrypto_sha256": source["xcrypto_sha256"],
-                },
-                badbpf.build_recipe(),
-                facts,
-            )
-            record["target"].update(target)
-            cache_dir = self._publish_build(
-                distro_id, badbpf.SCENARIO_ID, artifacts, record
-            )
-
-        return cache_dir / badbpf.ARTIFACT_NAMES[0]
 
     def build_diamorphine(self, distro_id: str) -> Path:
         """Build and publish Diamorphine for the builder's exact kernel."""
         source = diamorphine.verify_source()
+
+        def build_artifacts(
+            ssh: SSHClient, staging: Path, vm_name: str
+        ) -> tuple[tuple[Path, ...], str]:
+            artifact, stdout = diamorphine.build(ssh, staging, source)
+            return (artifact,), stdout
+
+        return self._publish_scenario_build(
+            distro_id,
+            diamorphine.SCENARIO_ID,
+            (diamorphine.ARTIFACT_NAME,),
+            build=build_artifacts,
+            record_source=source,
+            recipe=diamorphine.build_recipe(),
+            is_current=lambda record: diamorphine.build_record_is_current(
+                record, source
+            ),
+            target_facts=diamorphine.build_target,
+        )
+
+    def _publish_scenario_build(
+        self,
+        distro_id: str,
+        scenario_id: str,
+        artifact_names: tuple[str, ...],
+        *,
+        build: Callable[[SSHClient, Path, str], tuple[tuple[Path, ...], str]],
+        record_source: dict,
+        recipe: dict,
+        is_current: Callable[[dict], bool] | None = None,
+        target_facts: Callable[[dict[str, str]], dict[str, str]] | None = None,
+    ) -> Path:
+        """
+        The lifecycle every build_<scenario>() shares: reuse a trusted published
+        build, else build once on the builder VM, record it, and publish it
+        atomically. Builder ends OFF. Returns the primary artifact path.
+
+        Each keyword marks a real difference between the scenarios: how the
+        builder is driven, what source and recipe the record names, whether a
+        published build can go stale, and which target facts it must carry.
+        """
         published = self._resolve_prebuilt_input(
-            distro_id, diamorphine.SCENARIO_ID, (diamorphine.ARTIFACT_NAME,)
+            distro_id, scenario_id, artifact_names
         )
         if published is not None:
             artifacts, record = published
-            if not diamorphine.build_record_is_current(record, source):
+            if is_current is not None and not is_current(record):
                 raise RuntimeError(
-                    "published Diamorphine build uses a stale recipe; remove "
+                    f"published {scenario_id} build uses a stale recipe; remove "
                     f"{self._display(artifacts[0].parent)} and rerun the build"
                 )
             console.info(f"already published: {self._display(artifacts[0])}")
@@ -290,28 +419,23 @@ class ForensicOrchestrator:
         with tempfile.TemporaryDirectory() as staging:
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
-                    artifact, stdout = diamorphine.build(
-                        ssh, Path(staging), source
-                    )
+                    artifacts, stdout = build(ssh, Path(staging), vm_name)
             finally:
                 self.vm_manager.shutdown_vm(vm_name)
 
             facts = _builder_facts(stdout)
-            target = diamorphine.build_target(facts)
             record = self._build_record(
                 distro_id,
-                diamorphine.SCENARIO_ID,
-                (artifact,),
-                source,
-                diamorphine.build_recipe(),
+                scenario_id,
+                artifacts,
+                record_source,
+                recipe,
                 facts,
+                target_facts(facts) if target_facts is not None else {},
             )
-            record["target"].update(target)
-            cache_dir = self._publish_build(
-                distro_id, diamorphine.SCENARIO_ID, (artifact,), record
-            )
+            cache_dir = self._publish_build(distro_id, scenario_id, artifacts, record)
 
-        return cache_dir / diamorphine.ARTIFACT_NAME
+        return cache_dir / artifact_names[0]
 
     def _build_record(
         self,
@@ -321,7 +445,8 @@ class ForensicOrchestrator:
         source: dict,
         recipe: dict,
         facts: dict[str, str],
-    ) -> dict:
+        target_facts: dict[str, str],
+    ) -> dict[str, Any]:
         profile = load_profile(self.repo_root, distro_id)
         return {
             "schema": "forensic-lab.build_manifest.v1",
@@ -335,6 +460,7 @@ class ForensicOrchestrator:
                 "distro_id": distro_id,
                 "image_checksum": profile["image"]["checksum"],
                 "arch": facts["arch"].strip(),
+                **target_facts,
             },
             "source": source,
             "recipe": recipe,
@@ -421,70 +547,39 @@ class ForensicOrchestrator:
         acquire: bool = True,
     ) -> str | None:
         """Run one explicit scenario through the full experiment lifecycle."""
-        is_father = scenario_id == father.SCENARIO_ID
-        is_ptrace_fa = scenario_id == ptrace.SCENARIO_ID
-        is_diamorphine = scenario_id == diamorphine.SCENARIO_ID
-        is_badbpf = scenario_id == badbpf.SCENARIO_ID
-        # Father and ptrace keep a connection open through memory capture;
-        # Diamorphine uses a no-op callback to share their OFF lifecycle.
-        has_scenario_cleanup = (
-            is_father or is_ptrace_fa or is_diamorphine or is_badbpf
-        )
-        if scenario_id != INTERACTIVE_SHELL_SCENARIO and not has_scenario_cleanup:
+        scenario = PREPARED_SCENARIOS.get(scenario_id)
+        if scenario is None and scenario_id != INTERACTIVE_SHELL_SCENARIO:
             raise RuntimeError(f"Unknown scenario: {scenario_id}")
 
-        if is_father:
-            build_scenario = father.SCENARIO_ID
-            artifact_names = (father.ARTIFACT_NAME,)
-        elif is_ptrace_fa:
-            build_scenario = ptrace.SCENARIO_ID
-            artifact_names = ptrace.ARTIFACT_NAMES
-        elif is_diamorphine:
-            build_scenario = diamorphine.SCENARIO_ID
-            artifact_names = (diamorphine.ARTIFACT_NAME,)
-        elif is_badbpf:
-            build_scenario = badbpf.SCENARIO_ID
-            artifact_names = badbpf.ARTIFACT_NAMES
-        else:
-            build_scenario = None
-            artifact_names = ()
-        prepared_input = (
-            self._resolve_prebuilt_input(distro_id, build_scenario, artifact_names)
-            if build_scenario
-            else None
-        )
-        if build_scenario and prepared_input is None:
-            raise RuntimeError(
-                f"{build_scenario} build missing; run: .venv/bin/python cli.py build "
-                f"--distro {distro_id} --scenario {build_scenario}"
+        # Resolved before anything touches the victim: a missing or stale build
+        # must never cost a baseline.
+        prepared_run = None
+        if scenario is not None:
+            resolved = self._resolve_prebuilt_input(
+                distro_id, scenario_id, scenario.artifact_names
             )
-        if is_diamorphine and not diamorphine.build_record_is_current(
-            prepared_input[1], diamorphine.verify_source()
-        ):
-            raise RuntimeError(
-                "published Diamorphine build uses a stale recipe; rerun the build"
-            )
-        if is_badbpf and not badbpf.build_record_is_current(
-            prepared_input[1], badbpf.verify_source()
-        ):
-            raise RuntimeError(
-                "published bad-bpf build uses a stale recipe; rerun the build"
-            )
+            if resolved is None:
+                raise RuntimeError(
+                    f"{scenario_id} build missing; run: .venv/bin/python cli.py build "
+                    f"--distro {distro_id} --scenario {scenario_id}"
+                )
+            artifacts, build_record = resolved
+            if scenario.check_record is not None:
+                scenario.check_record(build_record)
+            prepared_run = PreparedRun(scenario, artifacts, build_record)
 
-        # Every run records the revision it ran from; "-dirty" marks a run made
-        # from uncommitted code. A run that cannot record this is not a run.
-        revision = command_output(
-            ["git", "-C", str(self.repo_root),
-             "describe", "--always", "--dirty", "--abbrev=40", "--match="]
-        )
-        if revision is None:
-            raise RuntimeError(
-                f"cannot record the repository revision of {self.repo_root}"
-            )
+        repository = _repository_state(self.repo_root)
 
         vm_name = f"{LAB_VM_PREFIX}-{distro_id}"
         vm_off = False
-        backdoor_cleanup: Callable[[], None] | None = None
+        before_shutdown_cleanup: CleanupCallback | None = None
+
+        def run_cleanup() -> None:
+            """Run the scenario's before-shutdown cleanup at most once."""
+            nonlocal before_shutdown_cleanup
+            callback, before_shutdown_cleanup = before_shutdown_cleanup, None
+            if callback is not None:
+                callback()
 
         try:
             console.section(
@@ -499,7 +594,9 @@ class ForensicOrchestrator:
             finally:
                 console.section_end()
 
-            run_id = _make_run_id(distro_id, scenario_id)
+            run_id, sequence = _make_run_id(
+                self._paths.experiments_dir, distro_id, scenario_id
+            )
             run_root = self._paths.experiments_dir / run_id
             # exist_ok=False: an accepted run directory is never written twice.
             run_root.mkdir(parents=True)
@@ -509,105 +606,49 @@ class ForensicOrchestrator:
             command_log_path.touch()
 
             input_record = None
-            if prepared_input is not None:
+            staged_artifacts: tuple[Path, ...] = ()
+            if prepared_run is not None:
                 input_record = self._stage_run_inputs(
-                    run_root, scenario_id, prepared_input[0]
+                    run_root, scenario_id, prepared_run.artifacts
                 )
-                if [item["sha256"] for item in input_record["artifacts"]] != [
-                    item["sha256"] for item in prepared_input[1]["artifacts"]
-                ]:
-                    raise RuntimeError("staged artifacts differ from verified build")
+                staged_artifacts = _verified_staged_artifacts(
+                    run_root, input_record, prepared_run.build_record
+                )
 
-            manifest = {
-                "schema": "forensic-lab.run_manifest",
-                "version": 3,
-                "run_id": run_id,
-                "scenario_id": scenario_id,
-                "platform": {
-                    "distro_id": distro_id,
-                    "guest_os": None,
-                    "kernel": None,
-                    "timezone": "UTC",
-                    "profile": "vanilla",
-                },
-                "repository": {
-                    "commit": revision,
-                },
-                "timestamps": {
-                    "scenario_started_at": utc_now(),
-                },
-                "status": "running",
-                "scenario_status": "running",
-                "acquisition_requested": acquire,
-                "artifacts": {
-                    "command_log": command_log_path.name,
-                    "terminal_transcript": transcript_path.name,
-                },
-                "baseline": {
-                    "vm_name": vm_name,
-                    "snapshot": BASELINE_SNAPSHOT,
-                    "snapshot_created_at": snapshot_created_at,
-                },
-            }
-            if input_record is not None:
-                manifest["inputs"] = [input_record]
+            manifest = _new_run_manifest(
+                run_id=run_id,
+                scenario_id=scenario_id,
+                distro_id=distro_id,
+                sequence=sequence,
+                repository=repository,
+                command_log_name=command_log_path.name,
+                transcript_name=transcript_path.name,
+                vm_name=vm_name,
+                snapshot_created_at=snapshot_created_at,
+                input_record=input_record,
+            )
             _write_run_manifest(manifest_path, manifest)
 
             console.step_header("scenario execution")
+            scenario_facts = None
             try:
                 with self.vm_manager.open_ssh(vm_name) as ssh:
                     guest = self._guest_facts(ssh)
-                    if is_father:
-                        assert prepared_input is not None and input_record is not None
-                        facts, backdoor_cleanup = father.run_father(
-                            ssh,
-                            transcript_path,
-                            command_log_path=command_log_path,
-                            artifact_path=(
-                                run_root / input_record["artifacts"][0]["path"]
-                            ),
-                            build_record=prepared_input[1],
-                        )
-                    elif is_ptrace_fa:
-                        assert prepared_input is not None and input_record is not None
-                        facts, backdoor_cleanup = ptrace.run_ptrace_fa(
-                            ssh,
-                            transcript_path,
-                            command_log_path=command_log_path,
-                            artifact_paths=tuple(
-                                run_root / item["path"]
-                                for item in input_record["artifacts"]
-                            ),
-                            build_record=prepared_input[1],
-                        )
-                    elif is_diamorphine:
-                        assert prepared_input is not None and input_record is not None
-                        facts, backdoor_cleanup = diamorphine.run_diamorphine(
-                            ssh,
-                            transcript_path,
-                            command_log_path=command_log_path,
-                            artifact_path=(
-                                run_root / input_record["artifacts"][0]["path"]
-                            ),
-                            build_record=prepared_input[1],
-                        )
-                    elif is_badbpf:
-                        assert prepared_input is not None and input_record is not None
-                        facts, backdoor_cleanup = badbpf.run_badbpf(
-                            ssh,
-                            transcript_path,
-                            command_log_path=command_log_path,
-                            artifact_paths=tuple(
-                                run_root / item["path"]
-                                for item in input_record["artifacts"]
-                            ),
-                            build_record=prepared_input[1],
-                        )
-                    else:
+                    if prepared_run is None:
                         run_interactive_shell(
                             ssh,
                             transcript_path,
                             command_log_path=command_log_path,
+                        )
+                    else:
+                        scenario_facts, before_shutdown_cleanup = (
+                            prepared_run.scenario.execute(
+                                ssh,
+                                transcript_path,
+                                command_log_path,
+                                staged_artifacts,
+                                prepared_run.build_record,
+                            )
                         )
             except Exception:
                 ended_at = utc_now()
@@ -628,8 +669,8 @@ class ForensicOrchestrator:
                 kernel=guest.get("kernel"),
                 timezone=guest.get("timezone"),
             )
-            if has_scenario_cleanup:
-                manifest["scenario_facts"] = facts
+            if prepared_run is not None:
+                manifest["scenario_facts"] = scenario_facts
             manifest["scenario_status"] = "completed"
             manifest["timestamps"]["scenario_ended_at"] = utc_now()
             _write_run_manifest(manifest_path, manifest)
@@ -640,8 +681,9 @@ class ForensicOrchestrator:
                     acquisition_path, _, _ = self._run_acquisition(
                         vm_name,
                         run_id,
-                        scenario_id,
-                        before_shutdown=backdoor_cleanup,
+                        before_shutdown=(
+                            run_cleanup if prepared_run is not None else None
+                        ),
                     )
                     vm_off = True
                     manifest["artifacts"]["acquisition_manifest"] = str(
@@ -653,9 +695,8 @@ class ForensicOrchestrator:
                     manifest["timestamps"]["run_ended_at"] = utc_now()
                     _write_run_manifest(manifest_path, manifest)
                     raise
-            elif has_scenario_cleanup:
-                assert backdoor_cleanup is not None
-                backdoor_cleanup()
+            elif prepared_run is not None:
+                run_cleanup()
                 self.vm_manager.shutdown_vm(vm_name)
                 vm_off = True
 
@@ -673,10 +714,9 @@ class ForensicOrchestrator:
             console.section_end()
             return acquisition_path
         finally:
-            if has_scenario_cleanup:
+            if prepared_run is not None:
                 try:
-                    if backdoor_cleanup is not None:
-                        backdoor_cleanup()
+                    run_cleanup()
                 finally:
                     if not vm_off:
                         self.vm_manager.shutdown_vm(vm_name)
@@ -684,7 +724,8 @@ class ForensicOrchestrator:
     def _stage_run_inputs(
         self, run_root: Path, scenario_id: str, artifacts: tuple[Path, ...]
     ) -> dict[str, Any]:
-        inputs_dir = run_root / "inputs" / scenario_id
+        scenario_short = _SCENARIO_SHORT[scenario_id]
+        inputs_dir = run_root / "inputs" / scenario_short
         inputs_dir.mkdir(parents=True)
         staged_build = inputs_dir / "build.json"
         staged_artifacts = []
@@ -694,7 +735,7 @@ class ForensicOrchestrator:
             staged_artifacts.append(staged_artifact)
         shutil.copy2(artifacts[0].parent / "build.json", staged_build)
         return {
-            "scenario": scenario_id,
+            "scenario": scenario_short,
             "artifacts": [
                 {
                     "path": str(artifact.relative_to(run_root)),
@@ -709,7 +750,7 @@ class ForensicOrchestrator:
         }
 
     @staticmethod
-    def _guest_facts(ssh: SSHClient) -> dict[str, Any]:
+    def _guest_facts(ssh: SSHClient) -> dict[str, str | None]:
         cmd = (
             ". /etc/os-release 2>/dev/null; "
             'printf "distro=%s\\n" "${PRETTY_NAME:-unknown}"; '
@@ -718,7 +759,7 @@ class ForensicOrchestrator:
             '"$(cat /etc/timezone 2>/dev/null || '
             'timedatectl show -p Timezone --value 2>/dev/null || echo UTC)"'
         )
-        facts: dict[str, Any] = {
+        facts: dict[str, str | None] = {
             "distro": None,
             "kernel": None,
             "timezone": "UTC",
@@ -857,19 +898,21 @@ class ForensicOrchestrator:
         successful probe its directory is deleted. It is kept on failure so
         the dumps/ and analysis/ output remain available for debugging.
         """
-        assert self._vol_runner is not None and self._sleuth_runner is not None
+        vol_runner, sleuth_runner = self._vol_runner, self._sleuth_runner
+        if vol_runner is None or sleuth_runner is None:
+            raise RuntimeError(
+                "verify_pipeline needs the Volatility and SleuthKit runners"
+            )
         vm_name = self._reset_lab(distro_id)
         # Compute run_id ONCE so dumps/ and analysis/ share the same timestamp.
-        run_id = _make_run_id(distro_id, VERIFY_SCENARIO)
+        run_id, _ = _make_run_id(self._paths.experiments_dir, distro_id, VERIFY_SCENARIO)
         run_dir = self._paths.experiments_dir / run_id
 
-        _, memory_path, disk_path = self._run_acquisition(
-            vm_name, run_id, VERIFY_SCENARIO
-        )
+        _, memory_path, disk_path = self._run_acquisition(vm_name, run_id)
 
         console.step(f"probing acquired images for {distro_id}...")
-        self._vol_runner.probe(memory_path, distro_id)
-        self._sleuth_runner.probe(disk_path)
+        vol_runner.probe(memory_path, distro_id)
+        sleuth_runner.probe(disk_path)
         # Plaso probe: confirm the toolchain can ingest the disk and emit events.
         self._build_timeline(disk_path, self._paths.run_analysis_dir(run_id))
         shutil.rmtree(run_dir, ignore_errors=True)
@@ -893,7 +936,6 @@ class ForensicOrchestrator:
         self,
         vm_name: str,
         run_id: str,
-        scenario_id: str,
         *,
         before_shutdown: Callable[[], None] | None = None,
     ) -> tuple[str, Path, Path]:
@@ -921,15 +963,95 @@ class ForensicOrchestrator:
                 before_shutdown()
             self.vm_manager.shutdown_vm(vm_name)
             disk_meta = self.dumper.acquire_disk(vm_disk_path, disk_dump_path)
-            manifest_path = self.dumper.write_manifest(
-                run_id, scenario_id, memory_meta, disk_meta
-            )
+            manifest_path = self.dumper.write_manifest(run_id, memory_meta, disk_meta)
             return manifest_path, memory_dump_path, Path(disk_meta.path)
         finally:
             console.section_end()
 
 
 # --- module helpers ------------------------------------------------------
+
+
+def _repository_state(repo_root: Path) -> dict[str, str]:
+    """
+    The exact commit a run was made from, plus whether the working tree had
+    uncommitted changes at run time. A run that cannot record this is not a
+    run. Kept as two separate fields rather than a synthetic "<hash>-dirty"
+    string: a modified tree is not the commit, and squashing the two loses
+    the distinction between "this code" and "this code, plus unknown local
+    changes".
+    """
+    commit = command_output(["git", "-C", str(repo_root), "rev-parse", "HEAD"])
+    if commit is None:
+        raise RuntimeError(f"cannot record the repository commit of {repo_root}")
+    status = command_output(["git", "-C", str(repo_root), "status", "--porcelain"])
+    if status is None:
+        raise RuntimeError(f"cannot record the working tree state of {repo_root}")
+    return {
+        "commit": commit.strip(),
+        "working_tree": "modified" if status.strip() else "clean",
+    }
+
+
+def _verified_staged_artifacts(
+    run_root: Path, input_record: dict[str, Any], build_record: dict
+) -> tuple[Path, ...]:
+    """Locate the staged copies, refusing any that differ from the build."""
+    if [item["sha256"] for item in input_record["artifacts"]] != [
+        item["sha256"] for item in build_record["artifacts"]
+    ]:
+        raise RuntimeError("staged artifacts differ from verified build")
+    return tuple(run_root / item["path"] for item in input_record["artifacts"])
+
+
+def _new_run_manifest(
+    *,
+    run_id: str,
+    scenario_id: str,
+    distro_id: str,
+    sequence: int,
+    repository: dict[str, str],
+    command_log_name: str,
+    transcript_name: str,
+    vm_name: str,
+    snapshot_created_at: str,
+    input_record: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """The running manifest, written before the scenario touches the guest."""
+    manifest: dict[str, Any] = {
+        "run_id": run_id,
+        "scenario": _SCENARIO_SHORT[scenario_id],
+        "distro_token": _DISTRO_SHORT[distro_id],
+        "date": datetime.now().strftime("%Y-%m-%d"),
+        "sequence": sequence,
+        "platform": {
+            "distro_id": distro_id,
+            "guest_os": None,
+            "kernel": None,
+            "timezone": "UTC",
+            "profile": "vanilla",
+        },
+        "repository": repository,
+        "timestamps": {
+            "scenario_started_at": utc_now(),
+        },
+        "status": "running",
+        "scenario_status": "running",
+        "artifacts": {
+            "command_log": command_log_name,
+            "terminal_transcript": transcript_name,
+        },
+        # The snapshot this run reverted to before touching the guest --
+        # not "baseline" in the abstract, the actual starting point.
+        "starting_snapshot": {
+            "vm": vm_name,
+            "name": BASELINE_SNAPSHOT,
+            "created_at": snapshot_created_at,
+        },
+    }
+    if input_record is not None:
+        manifest["inputs"] = [input_record]
+    return manifest
 
 
 def _builder_facts(stdout: str) -> dict[str, str]:
@@ -960,12 +1082,43 @@ def _isf_filename(distro_id: str, kernel_release: str) -> str:
     return f"{family}_{safe_kernel}.json"
 
 
-def _make_run_id(distro_id: str, scenario_id: str) -> str:
+_SCENARIO_SHORT = {
+    "user_ldpreload_father": "father",
+    "kernel_ebpf_badbpf": "badbpf",
+    "kernel_lkm_diamorphine": "diamorphine",
+    "user_procinj_ptracefa": "ptrace",
+    "interactive_shell": "shell",
+    "verify": "verify",
+}
+_DISTRO_SHORT = {
+    "ubuntu-22.04": "u22",
+    "ubuntu-24.04": "u24",
+    "debian-13": "deb13",
+}
+
+
+def _make_run_id(
+    experiments_dir: Path, distro_id: str, scenario_id: str
+) -> tuple[str, int]:
     """
-    Build the stable per-run identifier:
-        "{distro_id}_{scenario_id}_{YYYYMMDD-HHMMSS}"
-    Used as the experiment directory name under experiments_dir; its dumps/
-    and analysis/ subtrees stay in lockstep for a given run.
+    Build the short per-run identifier:
+        "{scenario_short}-{distro_short}-{YYYYMMDD}-{NN}"
+    NN is a two-digit, per-day sequence starting at 01: one past the highest
+    sequence already present under experiments_dir for the same
+    scenario/distro/date prefix. Used as the experiment directory name under
+    experiments_dir; its dumps/ and analysis/ subtrees stay in lockstep for a
+    given run. Returns (run_id, sequence).
     """
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
-    return f"{distro_id}_{scenario_id}_{ts}"
+    scenario_short = _SCENARIO_SHORT[scenario_id]
+    distro_short = _DISTRO_SHORT[distro_id]
+    date_str = datetime.now().strftime("%Y%m%d")
+    prefix = f"{scenario_short}-{distro_short}-{date_str}-"
+    existing_seqs = [
+        int(p.name[len(prefix) :])
+        for p in experiments_dir.glob(f"{prefix}[0-9][0-9]")
+        if p.is_dir()
+    ]
+    sequence = max(existing_seqs, default=0) + 1
+    if sequence > 99:
+        raise RuntimeError(f"run-id sequence exhausted for prefix {prefix!r}")
+    return f"{prefix}{sequence:02d}", sequence

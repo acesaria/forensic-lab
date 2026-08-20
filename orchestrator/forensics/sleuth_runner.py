@@ -33,12 +33,23 @@ class SleuthKitRunner:
         return resolved
 
     def probe(self, disk_path: Path) -> None:
-        cmd = [self._mmls_bin, *_image_type_flag(disk_path), str(disk_path)]
+        image_flag = _image_type_flag(disk_path)
+        cmd = [self._mmls_bin, *image_flag, str(disk_path)]
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
+            hint = ""
+            if "-i" in image_flag:
+                hint = (
+                    " This image is EWF (.E01); a distribution's prebuilt "
+                    "sleuthkit package is not guaranteed to be compiled "
+                    "against libewf even if libewf-dev is installed "
+                    "separately. Run 'mmls -i list' to confirm 'ewf' is "
+                    "listed as a supported type; if not, rebuild Sleuth Kit "
+                    "from source against libewf-dev."
+                )
             raise RuntimeError(
                 f"mmls probe failed for {disk_path.name}:\n"
-                f"{result.stderr.strip() or '(no output)'}"
+                f"{result.stderr.strip() or '(no output)'}{hint}"
             )
         console.ok(f"disk probe passed: filesystem readable ({disk_path.name})")
 

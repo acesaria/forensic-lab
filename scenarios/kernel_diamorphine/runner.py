@@ -12,7 +12,7 @@ from orchestrator.core.provenance import file_sha256
 from orchestrator.core.ssh_client import SSHClient
 from scenarios.command_log import record_operation, run_logged_command
 
-SCENARIO_ID = "kernel_diamorphine"
+SCENARIO_ID = "kernel_lkm_diamorphine"
 ROOT = Path(__file__).resolve().parent
 ARCHIVE = ROOT / "files/diamorphine-upstream-af494fa.tar"
 BUILD_SCRIPT = ROOT / "files/build.sh"

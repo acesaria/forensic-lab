@@ -12,7 +12,7 @@ from orchestrator.core.ssh_client import SSHClient
 from scenarios.command_log import record_operation, run_logged_command
 from scenarios.ptrace_fa import shellcode
 
-SCENARIO_ID = "ptrace_fa"
+SCENARIO_ID = "user_procinj_ptracefa"
 ROOT = Path(__file__).resolve().parent
 FILES_DIR = ROOT / "files"
 BUILD_SCRIPT = FILES_DIR / "build.sh"

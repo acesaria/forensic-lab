@@ -38,13 +38,17 @@ def test_memory_dump_precreates_readable_user_file_without_sudo(
 
     metadata = dumper.acquire_memory("lab-vm", dest)
 
+    digest = hashlib.sha256(payload).hexdigest()
     assert dest.read_bytes() == payload
-    assert metadata.sha256 == hashlib.sha256(payload).hexdigest()
+    assert metadata["sha256"] == digest
+    assert metadata["verified"] is False
     assert all(command[0] != "sudo" for command in commands)
-    status = json.loads(
-        (dest.parent / "virsh_dump_status.json").read_text(encoding="utf-8")
+    # virsh_dump_status.json is a failure sidecar only; a successful run
+    # leaves no status file, but does leave a checkable hashes.txt.
+    assert not (dest.parent / "virsh_dump_status.json").exists()
+    assert (dest.parent / "hashes.txt").read_text(encoding="utf-8") == (
+        f"{digest}  {dest.name}\n"
     )
-    assert status["status"] == "completed"
 
 
 def test_ewfverify_failure_is_preserved(
@@ -66,6 +70,7 @@ def test_ewfverify_failure_is_preserved(
             object.__new__(Dumper),
             first_segment,
             str(tmp_path / "evidence"),
+            segment_metadata=[],
         )
 
     status = json.loads(
@@ -94,26 +99,31 @@ def test_ewfverify_calculated_sha256_is_preserved(
         )
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    record, calculated = Dumper._run_ewfverify(
-        object.__new__(Dumper), first_segment, str(tmp_path / "evidence")
+    verification = Dumper._run_ewfverify(
+        object.__new__(Dumper),
+        first_segment,
+        str(tmp_path / "evidence"),
+        segment_metadata=[],
     )
 
-    assert record["status"] == "completed"
-    assert calculated == digest
-    # The hash stays in the sidecar; only the embedded copy is dropped.
-    status = json.loads(
-        (tmp_path / "ewfverify_status.json").read_text(encoding="utf-8")
-    )
-    assert status["calculated_sha256"] == digest
+    assert verification["calculated_sha256"] == digest
+    # ewfverify_status.json is a failure sidecar only; a successful verify
+    # leaves no status file.
+    assert not (tmp_path / "ewfverify_status.json").exists()
 
     monkeypatch.setattr(
         subprocess,
         "run",
-        lambda command, **_kwargs: subprocess.CompletedProcess(command, 0, "", ""),
+        lambda command, **_kwargs: subprocess.CompletedProcess(
+            command, 0, "no hash here\n", ""
+        ),
     )
-    with pytest.raises(RuntimeError, match="did not report a calculated SHA-256"):
+    with pytest.raises(RuntimeError, match="ewfverify failed"):
         Dumper._run_ewfverify(
-            object.__new__(Dumper), first_segment, str(tmp_path / "evidence")
+            object.__new__(Dumper),
+            first_segment,
+            str(tmp_path / "evidence"),
+            segment_metadata=[],
         )
 
 

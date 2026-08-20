@@ -19,6 +19,7 @@ import subprocess
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Any
 
 from orchestrator.core import console
 from orchestrator.core.paths import ProjectPaths
@@ -29,6 +30,23 @@ from orchestrator.core.provenance import command_output, command_result, file_sh
 _RAW_STAGING_DIR = Path("/dev/shm")
 
 _log = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ImageMetadata:
+    path: str
+    segments: list[str]
+    segment_metadata: list[dict[str, Any]]
+    tool: str
+    sha256: str
+    size_bytes: int | None
+    timestamp: float
+    acquisition_seconds: float
+    commands: list[dict[str, Any]]
+    verification: dict[str, Any]
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
 
 
 def _format_bytes(size: int | None) -> str:
@@ -44,41 +62,6 @@ def _format_bytes(size: int | None) -> str:
     if unit == "B":
         return f"{int(value)} {unit}"
     return f"{value:.1f} {unit}"
-
-
-@dataclass
-class ImageMetadata:
-    # Absolute path. The manifest is a per-machine artifact -- no point in
-    # carrying a relative form that would just need re-anchoring on every read.
-    path: str
-    tool: str
-    sha256: str | None
-    size_bytes: int | None
-    timestamp: float
-    acquisition_seconds: float | None = None
-    # Per-command provenance; the tool version and argv live inside each entry.
-    commands: list[dict[str, object]] | None = None
-    # Disk only. Unset keys are dropped when the manifest is written.
-    segment_metadata: list[dict[str, object]] | None = None
-    verification: dict[str, object] | None = None
-
-
-@dataclass
-class AcquisitionManifest:
-    # run_id is the unique per-run label "{distro}_{scenario}_{ts}" used as
-    # the experiment directory name under experiments_dir, which holds the
-    # dumps/ subtree.
-    run_id: str
-    # scenario_id is the bare explicit scenario name (or "verify"); never has
-    # a timestamp baked in. Use this for semantic queries / grouping.
-    scenario_id: str
-    created_at: float
-    memory_image: ImageMetadata
-    disk_image: ImageMetadata
-    # Acquisition provenance: the disk image is taken host-side from the
-    # powered-off guest's qcow2 (clean, no QEMU lock held).
-    disk_acquisition_mode: str = "offline"
-    disk_preparation: str = "powered_off"
 
 
 class Dumper:
@@ -97,9 +80,23 @@ class Dumper:
         (d / "disk").mkdir(parents=True, exist_ok=True)
         return d
 
+    @staticmethod
+    def _relative_to_dumps(path: Path) -> str:
+        # dest lives at <dumps>/{memory,disk}/<file>; two parents up is <dumps>.
+        # acquisition.json lives at <dumps>/acquisition.json, so this is the
+        # path a reader of that file should join against its own location.
+        p = Path(path)
+        return str(p.relative_to(p.parent.parent))
+
+    @staticmethod
+    def _write_hashes_file(directory: Path, entries: list[tuple[str, str]]) -> None:
+        # sha256sum -c compatible: "<hash>  <filename>" per line.
+        lines = "".join(f"{sha256}  {name}\n" for name, sha256 in entries)
+        (directory / "hashes.txt").write_text(lines, encoding="utf-8")
+
     # --- memory (VM must be ON) ------------------------------------------
 
-    def acquire_memory(self, domain: str, dest: Path) -> ImageMetadata:
+    def acquire_memory(self, domain: str, dest: Path) -> dict[str, Any]:
         """
         Dump live RAM via virsh. Domain must be ON.
         dest is pre-created by the calling user so libvirt preserves its ownership.
@@ -147,24 +144,29 @@ class Dumper:
             self._write_status(status_path, record)
             raise RuntimeError("Memory dump failed: output file is not readable")
 
+        # status_path is a failure sidecar only: on success, the same
+        # command record isn't kept anywhere else, since there's nothing
+        # else to cross-check it against for memory (unlike disk, which
+        # gets an independent ewfverify pass).
         elapsed = time.time() - started
         size_bytes = dest.stat().st_size
         sha256 = file_sha256(dest)
-        completed_at = time.time()
-        self._write_status(status_path, record)
+        self._write_hashes_file(dest.parent, [(dest.name, sha256)])
         console.ok(
             f"memory dump done ({elapsed:.1f}s): "
             f"{self._display(dest)}, {_format_bytes(size_bytes)}"
         )
-        return ImageMetadata(
-            path=str(dest),
-            tool="virsh dump --memory-only",
-            sha256=sha256,
-            size_bytes=size_bytes,
-            timestamp=completed_at,
-            acquisition_seconds=elapsed,
-            commands=[record],
-        )
+        return {
+            "path": self._relative_to_dumps(dest),
+            "tool": "virsh dump --memory-only",
+            "tool_version": tool_version,
+            "size_bytes": size_bytes,
+            "sha256": sha256,
+            # No independent re-read verification pass exists for memory
+            # (unlike disk's ewfverify) -- this hash is recorded at
+            # acquisition time, not independently confirmed.
+            "verified": False,
+        }
 
     # --- disk (VM must be OFF) -------------------------------------------
 
@@ -194,8 +196,8 @@ class Dumper:
             return self._wrap_raw_to_ewf(
                 raw_path, ewf_prefix, started, virtual_size,
                 tool=(
-                    "qemu-img convert -O raw; ewfacquire -u -c empty-block; "
-                    "ewfverify"
+                    "qemu-img convert -O raw; ewfacquire -u -d sha256 "
+                    "-c empty-block -j nproc; ewfverify"
                 ),
                 prior_commands=[qemu_result],
             )
@@ -212,7 +214,7 @@ class Dumper:
         started: float,
         virtual_size: int | None,
         tool: str,
-        prior_commands: list[dict[str, object]] | None = None,
+        prior_commands: list[dict[str, Any]] | None = None,
     ) -> ImageMetadata:
         # Wrap the staged raw image to EWF, validate the segments, and build
         # the manifest metadata. ewfacquire runs as the calling user.
@@ -221,25 +223,33 @@ class Dumper:
         self._validate_ewf_segments(ewf_segments, ewf_prefix)
         segment_metadata = [
             {
-                "path": str(Path(segment)),
+                "path": self._relative_to_dumps(Path(segment)),
                 "size_bytes": Path(segment).stat().st_size,
                 "sha256": file_sha256(Path(segment)),
             }
             for segment in ewf_segments
         ]
-        verification, calculated_sha256 = self._run_ewfverify(
-            Path(ewf_segments[0]), ewf_prefix
+        verification = self._run_ewfverify(
+            Path(ewf_segments[0]),
+            ewf_prefix,
+            segment_metadata=segment_metadata,
         )
 
         elapsed = time.time() - started
         ewf_total_size = sum(int(segment["size_bytes"]) for segment in segment_metadata)
         self._log_disk_result(elapsed, ewf_segments, virtual_size, ewf_total_size)
+        self._write_hashes_file(
+            Path(ewf_prefix).parent,
+            [(Path(segment).name, meta["sha256"])
+             for segment, meta in zip(ewf_segments, segment_metadata)],
+        )
 
         return ImageMetadata(
-            path=str(Path(ewf_segments[0])),
+            path=self._relative_to_dumps(Path(ewf_segments[0])),
+            segments=[self._relative_to_dumps(Path(s)) for s in ewf_segments],
             segment_metadata=segment_metadata,
             tool=tool,
-            sha256=calculated_sha256,
+            sha256=verification["calculated_sha256"],
             size_bytes=virtual_size,
             timestamp=time.time(),
             acquisition_seconds=elapsed,
@@ -252,36 +262,32 @@ class Dumper:
     def write_manifest(
         self,
         run_id: str,
-        scenario_id: str,
-        memory_meta: ImageMetadata,
-        disk_meta: ImageMetadata,
+        memory: dict[str, Any],
+        disk: ImageMetadata,
     ) -> str:
-        """Write AcquisitionManifest to disk. Returns the manifest path as str."""
-        manifest = AcquisitionManifest(
-            run_id=run_id,
-            scenario_id=scenario_id,
-            created_at=time.time(),
-            memory_image=memory_meta,
-            disk_image=disk_meta,
-        )
+        """
+        Write the acquisition record to disk. Returns the manifest path as str.
+        Only called after both memory and disk acquisition have already
+        succeeded, so status is always "completed" here -- a failed
+        acquisition's diagnostics live in the *_status.json sidecars instead,
+        since this file is never reached.
+        """
+        manifest = {
+            "status": "completed",
+            "memory": memory,
+            "disk": disk.to_dict(),
+        }
         manifest_path = self.run_dir(run_id) / "acquisition.json"
-        with open(manifest_path, "w") as f:
-            # Drop unset keys: one ImageMetadata serves memory and disk, and a
-            # null field in an evidence record reads as an observation.
-            json.dump(
-                asdict(
-                    manifest,
-                    dict_factory=lambda kv: {k: v for k, v in kv if v is not None},
-                ),
-                f,
-                indent=2,
-            )
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
         console.ok(f"acquisition manifest written: {self._display(manifest_path)}")
         return str(manifest_path)
 
     # --- private: disk acquisition steps ---------------------------------
 
     def _clean_previous_output(self, ewf_prefix: str, raw_path: Path) -> None:
+        _log.debug("cleaning previous output: %s.E?? and %s", ewf_prefix, raw_path)
         for old_segment in glob.glob(f"{ewf_prefix}.E??"):
             os.remove(old_segment)
         if raw_path.exists():
@@ -293,47 +299,45 @@ class Dumper:
         raw_path: Path,
         *,
         status_path: Path,
-    ) -> dict[str, object]:
+    ) -> dict[str, Any]:
         # raw_path lives on tmpfs (see _RAW_STAGING_DIR) so this conversion
         # doesn't burn a second pass of physical disk I/O. For sparse qcow2
         # the actual bytes written are much smaller than the virtual size.
+        # status_path is a failure sidecar only -- on success this
+        # intermediate step leaves no artifact of its own; the disk hash
+        # that matters is the one ewfverify recomputes downstream.
         _log.debug("converting to raw: %s -> %s", disk_source, raw_path)
         command = [
             "qemu-img", "convert", "-O", "raw", str(disk_source), str(raw_path)
         ]
         result = subprocess.run(command, check=False, capture_output=True, text=True)
-        record = command_result(
-            command,
-            result,
-            tool_version=self._tool_version(["qemu-img", "--version"]),
-        )
-        self._write_status(status_path, record)
+        tool_version = self._tool_version(["qemu-img", "--version"])
+        record = command_result(command, result, tool_version=tool_version)
         if result.returncode != 0:
+            self._write_status(status_path, record)
             raise RuntimeError(
                 f"qemu-img convert failed for '{disk_source}'.\n"
                 f"{(result.stderr or '').strip()}"
             )
         return record
 
-    def _run_ewfacquire(
-        self, raw_path: Path, ewf_prefix: str
-    ) -> dict[str, object]:
+    def _run_ewfacquire(self, raw_path: Path, ewf_prefix: str) -> dict[str, Any]:
         """
         Wrap raw image into EWF format. Deletes raw_path when done (or on failure).
         ewf_prefix is the output path without extension; ewfacquire appends .E01, .E02, ...
+        Returns the ewfacquire command record.
         """
-        threads = str(os.cpu_count() or 4)
+        threads = max(1, (os.cpu_count() or 4) // 2)
+        tool_version = self._tool_version(["ewfacquire", "-V"])
         _log.debug("running ewfacquire: %s -> %s.E??", raw_path, ewf_prefix)
         try:
             command = [
                 "ewfacquire",
                 "-u",
-                "-c",
-                "empty-block",
-                "-j",
-                threads,
-                "-t",
-                ewf_prefix,
+                "-c", "empty-block",
+                "-d", "sha256",
+                "-j", str(threads),
+                "-t", ewf_prefix,
                 str(raw_path),
             ]
             result = subprocess.run(
@@ -342,14 +346,10 @@ class Dumper:
                 capture_output=True,
                 text=True,
             )
-            record = command_result(
-                command,
-                result,
-                tool_version=self._tool_version(["ewfacquire", "-V"]),
-            )
-            status_path = Path(ewf_prefix).parent / "ewfacquire_status.json"
-            self._write_status(status_path, record)
+            record = command_result(command, result, tool_version=tool_version)
             if result.returncode != 0:
+                status_path = Path(ewf_prefix).parent / "ewfacquire_status.json"
+                self._write_status(status_path, record)
                 raise RuntimeError(
                     f"ewfacquire failed (rc={result.returncode})\n"
                     f"stdout:\n{result.stdout or ''}\n"
@@ -367,9 +367,12 @@ class Dumper:
         self,
         first_segment: Path,
         ewf_prefix: str,
-    ) -> tuple[dict[str, object], str]:
+        segment_metadata: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Independently re-read and hash the written EWF. Returns the record."""
         command = ["ewfverify", "-d", "sha256", str(first_segment)]
         status_path = Path(ewf_prefix).parent / "ewfverify_status.json"
+        tool_version = self._tool_version(["ewfverify", "-V"])
         try:
             result = subprocess.run(
                 command,
@@ -377,11 +380,7 @@ class Dumper:
                 capture_output=True,
                 text=True,
             )
-            record = command_result(
-                command,
-                result,
-                tool_version=self._tool_version(["ewfverify", "-V"]),
-            )
+            record = command_result(command, result, tool_version=tool_version)
         except OSError as exc:
             record = {
                 "command": command,
@@ -389,33 +388,27 @@ class Dumper:
                 "exit_status": None,
                 "stdout": "",
                 "stderr": str(exc),
-                "tool_version": None,
+                "tool_version": tool_version,
             }
-        if record["status"] != "completed":
-            self._write_status(status_path, record)
-            raise RuntimeError(
-                f"ewfverify failed (rc={record['exit_status']}); "
-                f"details preserved in {status_path}"
+        
+        if record["status"] == "completed":
+            calculated_sha256 = _parse_ewfverify_sha256(
+                f"{record.get('stdout', '')}\n{record.get('stderr', '')}"
             )
-        calculated_sha256 = _parse_ewfverify_sha256(
-            f"{record.get('stdout', '')}\n{record.get('stderr', '')}"
+            if calculated_sha256:
+                record["calculated_sha256"] = calculated_sha256
+                # Cross-check against acquisition if possible? 
+                # ewfacquire's digest isn't easily parsed from stdout without more work
+                return record
+            else:
+                record["status"] = "failed"
+                record["error"] = "ewfverify did not report a calculated SHA-256"
+
+        self._write_status(status_path, record)
+        raise RuntimeError(
+            f"ewfverify failed (rc={record.get('exit_status')}); "
+            f"details preserved in {status_path}"
         )
-        if calculated_sha256 is None:
-            record.update(
-                {
-                    "status": "failed",
-                    "error": "ewfverify did not report a calculated SHA-256",
-                }
-            )
-            self._write_status(status_path, record)
-            raise RuntimeError(
-                f"ewfverify did not report a calculated SHA-256; "
-                f"details preserved in {status_path}"
-            )
-        # The hash belongs with the image: it is returned for ImageMetadata.sha256
-        # and kept in the sidecar, but not repeated inside the embedded record.
-        self._write_status(status_path, {**record, "calculated_sha256": calculated_sha256})
-        return record, calculated_sha256
 
     def _validate_ewf_segments(self, segments: list[str], ewf_prefix: str) -> None:
         if not segments:
