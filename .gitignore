@@ -85,7 +85,7 @@ General-Context.md
 docs/archive/
 
 # Local ICM workspace
-# /ai/
+/ai/
 
 # Claude runtime state
 /.claude/worktrees/
