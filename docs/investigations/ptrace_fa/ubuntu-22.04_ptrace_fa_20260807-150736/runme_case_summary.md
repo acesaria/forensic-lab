@@ -28,7 +28,7 @@ is fixed by source capability, not by tool success:
 - memory: P02, P05, P06, P07, P08.
 
 The fixed definitions and formulae are in
-[METHODOLOGY.md](../../../../METHODOLOGY.md). `O` means observed, `P`
+[METHODOLOGY.md](../../../../ai/archive/METHODOLOGY.md). `O` means observed, `P`
 partially observed, `N` not observed, `TF` tool failed, and `--` not
 applicable. `U`, `C`, `S` mean unique, corroborated, and specialized
 cross-source contribution; `X` counts contradictions separately. Scenario

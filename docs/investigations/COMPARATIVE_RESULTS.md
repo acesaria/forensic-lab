@@ -3,7 +3,7 @@
 Cross-run manual evidence-recovery results for accepted authoritative
 investigations. There is exactly one row per run ID; draft and superseded runs
 are excluded. The exact status, coverage, contribution, candidate, and timing
-definitions are fixed in [METHODOLOGY.md](../../METHODOLOGY.md). Each case's
+definitions are fixed in [METHODOLOGY.md](../../ai/archive/METHODOLOGY.md). Each case's
 target inventory, applicability decisions, evidence locators, and limitations
 remain auditable in its `runme_case_summary.md`.
 

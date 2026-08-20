@@ -13,7 +13,7 @@ docs/investigations/<scenario_id>/<run_id>/
 Create only the source notebooks that exist. Add `runme_case_summary.md` only
 after the applicable source notebooks have been accepted. Its two summary
 tables are the fixed per-artifact evidence matrix and the source metric summary
-defined in `METHODOLOGY.md`; cross-source interpretation follows them.
+defined in `../../ai/archive/METHODOLOGY.md`; cross-source interpretation follows them.
 A run-specific source notebook pins `RUN_ID` once, derives other case paths and
 parameters from the run metadata, and writes new output beneath:
 

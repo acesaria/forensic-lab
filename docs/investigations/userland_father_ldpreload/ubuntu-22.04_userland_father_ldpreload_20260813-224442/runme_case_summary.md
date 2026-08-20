@@ -53,7 +53,7 @@ on a separate builder VM (`_BUILDER_ARCHIVE`, `_BUILDER_SCRIPT`,
 `_BUILDER_BUILD_ROOT`, and `files/build.sh`). The victim receives exactly one
 object — the finished `rk.so` uploaded to `/tmp/rk.so` — so no source archive,
 build tree, modified `config.h`, or compilation event ever exists on the
-acquired image. Per `METHODOLOGY.md` these are `--` (not applicable), not `N`:
+acquired image. Per `../../../../ai/archive/METHODOLOGY.md` these are `--` (not applicable), not `N`:
 the sources cannot answer a question the treatment never posed to them. They
 therefore leave the denominators, and this case's coverage figures are **not**
 comparable with the earlier calibration or cleanup Father runs, whose
@@ -68,7 +68,7 @@ are **not** separate acquisitions: both read the same acquired disk image, so
 acquired memory image is compared separately, without treating unlike time
 bases as directly commensurable.
 
-Status codes follow `METHODOLOGY.md`: `O` observed, `P` partially observed, `N`
+Status codes follow `../../../../ai/archive/METHODOLOGY.md`: `O` observed, `P` partially observed, `N`
 not observed within the stated bound, `TF` tool failed, `--` not applicable.
 `U`/`C`/`S` are unique/corroborated/specialized; `X` counts contradictions.
 Scenario facts define the expected treatment and never count as a forensic

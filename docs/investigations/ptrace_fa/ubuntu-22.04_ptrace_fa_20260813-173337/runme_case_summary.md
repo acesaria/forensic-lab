@@ -42,7 +42,7 @@ the current prepared-binary executor:
 
 `O`, `P`, `N`, `TF`, applicability, coverage, contribution, contradiction,
 candidate, and timing rules are those in
-[METHODOLOGY.md](../../../../METHODOLOGY.md). Filesystem and timeline both read
+[METHODOLOGY.md](../../../../ai/archive/METHODOLOGY.md). Filesystem and timeline both read
 the acquired disk, so P01-P03 corroboration between TSK and Plaso is
 parser-level replication, not an independent acquisition. Memory independently
 corroborates P02 and is the only applicable source for P05-P08.

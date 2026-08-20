@@ -31,7 +31,7 @@ Source notebook:
 The P01–P05 inventory is fixed before the measured examination and scoped to the
 memory-resident behaviour the technique produces. Applicability: memory P01–P05;
 filesystem and timeline are declared out of scope for this run (no persistence to
-recover). Status codes and `U`/`C`/`S` follow `METHODOLOGY.md`. Scenario facts
+recover). Status codes and `U`/`C`/`S` follow `../../../../ai/archive/METHODOLOGY.md`. Scenario facts
 (victim PID 1044, listener `192.168.100.1:4444`, identity `labuser`) validate
 candidates only after technique-led selection and are never forensic locators.
 

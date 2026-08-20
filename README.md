@@ -175,7 +175,7 @@ clone therefore starts without them, by design.
 
 ## Documentation
 
-- `METHODOLOGY.md` defines the thesis and investigation method, including the
+- `ai/archive/METHODOLOGY.md` defines the thesis and investigation method, including the
   evidence-status vocabulary and the fixed result-reporting contract.
 - `docs/investigations/` holds the accepted case summaries, the source notebooks
   and the single cross-case comparative table.

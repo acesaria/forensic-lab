@@ -29,7 +29,7 @@ Applicability is fixed by source capability rather than by tool success:
 - memory: M05, M09, and M10.
 
 The fixed definitions and formulae are in
-[METHODOLOGY.md](../../../../METHODOLOGY.md). In the tables below, `O` means
+[METHODOLOGY.md](../../../../ai/archive/METHODOLOGY.md). In the tables below, `O` means
 observed, `P` partially observed, `N` not observed, `TF` tool failed, and `--`
 not applicable. `U`, `C`, and `S` mean unique, corroborated, and specialized
 cross-source contribution; `X` counts contradictions separately. Scenario

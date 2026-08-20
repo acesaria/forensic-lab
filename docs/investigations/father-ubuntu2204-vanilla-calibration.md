@@ -1,7 +1,7 @@
 # Father calibration — Ubuntu 22.04 vanilla
 
 > **Historical draft:** this older calibration report is not an accepted
-> authoritative investigation under the current `METHODOLOGY.md` reporting
+> authoritative investigation under the current `../../ai/archive/METHODOLOGY.md` reporting
 > contract and is excluded from `COMPARATIVE_RESULTS.md`. Its legacy DR/FP/TTD/
 > QoR table must not be used for thesis comparison.
 
