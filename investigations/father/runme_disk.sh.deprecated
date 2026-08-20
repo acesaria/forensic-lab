@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# DEPRECATED 2026-08-19 -- superseded by the Python-orchestrated disk
+# investigation notebook. This shell implementation is kept only as
+# historical reference; it is not executable (extension is .sh.deprecated,
+# not .sh, and its execute bit has been removed) and is no longer the
+# canonical disk workflow.
+#
+# Use instead:
+#   RUN_ID=<run_id> jupyter nbconvert --to notebook --execute \
+#       investigations/father/disk_investigation.ipynb
+#
+# See investigations/father/README.md for why: this script's fragmented
+# design (separate shell script + metrics/disk_metrics.py + generated
+# investigation-summary.md) was replaced by one notebook (Python
+# orchestration + investigation_utils.py) that also adds a real ext4
+# journal investigation this script never had (it stopped at recording
+# "recovery precondition: not-met").
+#
+# Original header, preserved for reference:
+# Father scenario — disk phase.
+# See investigations/father/disk_notebook.md for the human-readable
+# explanation of each step. This script only executes; it does not narrate.
+set -euo pipefail
+
+RUN_ID="${1:-${RUN_ID:-}}"
+: "${RUN_ID:?Usage: $0 RUN_ID   (or RUN_ID=... $0)}"
+
+RUNDIR="shared/experiments/${RUN_ID}"
+MANIFEST="${RUNDIR}/manifest.json"
+ACQUISITION="${RUNDIR}/dumps/acquisition.json"
+DISK_E01="${RUNDIR}/dumps/disk/evidence_disk.E01"
+COMMAND_LOG="${RUNDIR}/command_log.jsonl"
+
+for f in "$MANIFEST" "$ACQUISITION" "$DISK_E01"; do
+  [[ -f "$f" ]] || { echo "STOP: missing required input: $f" >&2; exit 1; }
+done
+
+DERIVED="shared/investigations/${RUN_ID}/derived/disk"
+RAW="${DERIVED}/raw"
+LOGDIR="shared/investigations/${RUN_ID}/logs"
+mkdir -p "$RAW" "$LOGDIR"
+
+CMDLOG="${LOGDIR}/disk-commands.log"
+: > "$CMDLOG"
+run() { echo "+ $*" >> "$CMDLOG"; "$@"; }
+
+echo "[disk] $RUN_ID: partition table"
+run mmls -i ewf "$DISK_E01" > "${RAW}/00-mmls.txt"
+
+# Root filesystem candidate = the largest real partition slot (Meta/Unallocated
+# rows excluded by the numeric-slot check). Column 3 is the start sector,
+# column 5 is the length in sectors.
+OFFSET_SECTOR=$(awk '$1 ~ /^[0-9]+:$/ && $2 ~ /^[0-9]+$/ {print $5, $3}' "${RAW}/00-mmls.txt" \
+  | sort -rn | head -1 | awk '{print $2}')
+[[ -n "$OFFSET_SECTOR" ]] || { echo "STOP: could not determine a root-partition offset from mmls output" >&2; exit 1; }
+echo "[disk] candidate root partition start sector: $OFFSET_SECTOR"
+
+echo "[disk] filesystem identity"
+run fsstat -o "$OFFSET_SECTOR" "$DISK_E01" > "${RAW}/01-fsstat.txt"
+
+echo "[disk] /etc/ld.so.preload"
+PRELOAD_INODE=$(run ifind -o "$OFFSET_SECTOR" -n /etc/ld.so.preload "$DISK_E01")
+run icat -o "$OFFSET_SECTOR" "$DISK_E01" "$PRELOAD_INODE" > "${RAW}/02-ld.so.preload"
+run istat -o "$OFFSET_SECTOR" "$DISK_E01" "$PRELOAD_INODE" > "${RAW}/02-istat-preload.txt"
+
+echo "[disk] installed library identity"
+LIB_PATH=$(tr -d '\n' < "${RAW}/02-ld.so.preload")
+# Ubuntu's /lib -> /usr/lib symlink; TSK addresses inodes, not symlinks, so
+# resolve the path before ifind.
+LIB_PATH_RESOLVED=$(printf '%s' "$LIB_PATH" | sed 's#^/lib/#/usr/lib/#')
+LIB_INODE=$(run ifind -o "$OFFSET_SECTOR" -n "$LIB_PATH_RESOLVED" "$DISK_E01")
+run icat -o "$OFFSET_SECTOR" "$DISK_E01" "$LIB_INODE" > "${RAW}/03-installed-lib.bin"
+sha256sum "${RAW}/03-installed-lib.bin" | awk '{print $1}' > "${RAW}/03-installed-lib.sha256"
+run istat -o "$OFFSET_SECTOR" "$DISK_E01" "$LIB_INODE" > "${RAW}/03-istat-lib.txt"
+jq -r '.inputs[0].artifacts[0].sha256' "$MANIFEST" > "${RAW}/03-manifest-input.sha256"
+
+echo "[disk] /tmp enumeration"
+# Known tool-behavior limitation on this image build: whole-disk recursive
+# `fls -r -p` does not descend into /tmp. Address the /tmp inode directly.
+TMP_INODE=$(run ifind -o "$OFFSET_SECTOR" -n /tmp "$DISK_E01")
+run fls -o "$OFFSET_SECTOR" -p "$DISK_E01" "$TMP_INODE" > "${RAW}/04-tmp-full.txt"
+grep '^r/r' "${RAW}/04-tmp-full.txt" > "${RAW}/04-tmp-listing.txt" || : > "${RAW}/04-tmp-listing.txt"
+
+echo "[disk] per-inode /tmp detail"
+while read -r _ inode name; do
+  inode="${inode%%:*}"
+  [[ -n "$inode" ]] || continue
+  run istat -o "$OFFSET_SECTOR" "$DISK_E01" "$inode" > "${RAW}/05-istat-tmp-${inode}.txt" 2>&1 || true
+done < "${RAW}/04-tmp-listing.txt"
+
+echo "[disk] deleted /tmp/rk.so — recovery precondition check"
+run fls -o "$OFFSET_SECTOR" -rd -p "$DISK_E01" "$TMP_INODE" > "${RAW}/06-fls-deleted-tmp.txt"
+
+PRECONDITION=$(python3 - "$COMMAND_LOG" <<'PY'
+import json, sys
+lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+rm_idx = next((i for i, d in enumerate(lines) if d.get("command") == "rm -f -- /tmp/rk.so"), None)
+if rm_idx is None:
+    print("unknown")
+else:
+    prior = lines[max(0, rm_idx - 3):rm_idx]
+    print("met" if any(d.get("command") == "sync" for d in prior) else "not-met")
+PY
+)
+echo "$PRECONDITION" > "${RAW}/06-recovery-precondition.txt"
+echo "[disk] recovery precondition: $PRECONDITION"
+
+# Per the task rule: only attempt journal/residual-block recovery when the
+# run's own command log discloses an explicit sync immediately before the rm.
+# Recovery technique itself is not implemented here (out of scope for this
+# refactor) — see disk_notebook.md limitations for what a "met" run requires.
+if [[ "$PRECONDITION" == "met" ]]; then
+  echo "recovery_attempted: precondition met, but content recovery is not implemented by this script (see disk_notebook.md)" > "${RAW}/06-recovery-result.txt"
+else
+  echo "recovery not_run: precondition '$PRECONDITION' (no disclosed sync before the rm of /tmp/rk.so in this run's command_log.jsonl)" > "${RAW}/06-recovery-result.txt"
+fi
+
+echo "[disk] writing findings.json"
+python3 "$(dirname "$0")/metrics/disk_metrics.py" --write-findings "$RUN_ID" "$DERIVED"
+
+echo "[disk] writing investigation-summary.md"
+python3 - "$RUN_ID" "$DERIVED" <<'PY'
+import json, sys, pathlib
+
+run_id, derived = sys.argv[1], pathlib.Path(sys.argv[2])
+findings = json.loads((derived / "findings.json").read_text())
+
+lines = [
+    f"# Disk phase — {run_id}",
+    "",
+    "Generated by `investigations/father/runme_disk.sh`. Raw command output is",
+    f"under `{derived}/raw/`. See `investigations/father/disk_notebook.md` for",
+    "the explanation of each step and its limitations.",
+    "",
+    "## Findings",
+    "",
+    f"- Root partition offset (sector): `{findings['partition']['offset_sector']}`",
+    f"- Filesystem: {findings['partition']['filesystem_summary']}",
+    f"- `/etc/ld.so.preload` inode `{findings['preload']['inode']}`, content: `{findings['preload']['content']}`",
+    f"- Installed library inode `{findings['library']['inode']}`, sha256 `{findings['library']['sha256']}`",
+    f"- Library hash matches manifest input: {findings['library']['matches_manifest_input']}",
+    f"- `/tmp` concealable artifacts found: {findings['tmp_artifacts']['count']} ({', '.join(findings['tmp_artifacts']['names']) or 'none'})",
+    f"- `/tmp/rk.so` live or deleted directory entry present: {findings['deleted_rk_so']['directory_entry_present']}",
+    f"- Deleted-object recovery precondition: {findings['deleted_rk_so']['recovery_precondition']}",
+    "",
+    "## Limitations",
+    "",
+    "- Content recovery of the deleted `/tmp/rk.so` is only attempted when the",
+    "  precondition above is `met`; this script does not implement the",
+    "  journal/residual-block recovery technique itself.",
+    "- Whole-disk recursive `fls -r -p` did not descend into `/tmp` on the",
+    "  original inspected image; this script addresses `/tmp` by its own inode",
+    "  (`ifind -n /tmp`) rather than relying on the recursive listing.",
+    "- Hash identity proves the installed object is byte-for-byte the known",
+    "  input; it does not by itself prove any hook executed (memory phase).",
+    "- No log reading (`auth.log`, journal) is performed in this phase; that",
+    "  is the timeline phase's contribution.",
+    "",
+]
+(derived / "investigation-summary.md").write_text("\n".join(lines) + "\n")
+print(f"wrote {derived}/investigation-summary.md")
+PY
+
+echo "[disk] computing metrics.json"
+python3 "$(dirname "$0")/metrics/disk_metrics.py" "$RUN_ID" "$DERIVED"
+
+echo "[disk] done: $DERIVED"

@@ -1,0 +1,163 @@
+#!/usr/bin/env python3
+"""DEPRECATED 2026-08-19 -- superseded by
+investigations/father/investigation_utils.py, used directly from
+investigations/father/disk_investigation.ipynb. Kept only as historical
+reference (renamed to .py.deprecated so it is not importable by its old
+name); paired with the now-deprecated runme_disk.sh.deprecated.
+
+Original docstring, preserved for reference:
+
+Father disk-phase metrics.
+
+Consumes the raw command output already written by runme_disk.sh under
+derived/disk/raw/. Never invokes a forensic tool itself.
+
+Two modes, both operating on the same DERIVED directory:
+
+    disk_metrics.py --write-findings RUN_ID DERIVED_DIR
+        Parse derived/disk/raw/* into a structured derived/disk/findings.json.
+
+    disk_metrics.py RUN_ID DERIVED_DIR
+        Read derived/disk/findings.json and write derived/disk/metrics.json.
+"""
+import json
+import re
+import sys
+from pathlib import Path
+
+
+def _read(path: Path) -> str:
+    return path.read_text(errors="replace") if path.exists() else ""
+
+
+def _istat_field(text: str, label: str) -> str | None:
+    m = re.search(rf"^{re.escape(label)}:\s*(.+)$", text, re.MULTILINE)
+    return m.group(1).strip() if m else None
+
+
+def write_findings(run_id: str, derived: Path) -> None:
+    raw = derived / "raw"
+
+    fsstat = _read(raw / "01-fsstat.txt")
+    fs_type = re.search(r"File System Type:\s*(\S+)", fsstat)
+    volume = re.search(r"Volume Name:\s*(\S+)", fsstat)
+    unmounted = "Unmounted properly" in fsstat
+
+    preload_content = _read(raw / "02-ld.so.preload").strip()
+    preload_istat = _read(raw / "02-istat-preload.txt")
+    preload_inode = re.search(r"(?i)^inode:\s*(\d+)", preload_istat, re.MULTILINE)
+
+    lib_sha = _read(raw / "03-installed-lib.sha256").strip()
+    manifest_sha = _read(raw / "03-manifest-input.sha256").strip()
+    lib_istat = _read(raw / "03-istat-lib.txt")
+    lib_inode = re.search(r"(?i)^inode:\s*(\d+)", lib_istat, re.MULTILINE)
+    mtime = _istat_field(lib_istat, "File Modified")
+    ctime = _istat_field(lib_istat, "Inode Modified")
+    crtime = _istat_field(lib_istat, "File Created")
+
+    tmp_listing = _read(raw / "04-tmp-listing.txt")
+    tmp_names = [
+        line.split("\t", 1)[1].strip()
+        for line in tmp_listing.splitlines()
+        if "\t" in line
+    ]
+
+    deleted_scan = _read(raw / "06-fls-deleted-tmp.txt")
+    rk_so_present = bool(re.search(r"\brk\.so\b", deleted_scan))
+    precondition = _read(raw / "06-recovery-precondition.txt").strip() or "unknown"
+
+    offset_line = _read(raw / "00-mmls.txt")
+    offset_sector = None
+    for line in offset_line.splitlines():
+        parts = line.split()
+        if len(parts) >= 5 and re.match(r"^\d+:$", parts[0]) and parts[1].isdigit():
+            offset_sector = parts[2]
+
+    findings = {
+        "run_id": run_id,
+        "partition": {
+            "offset_sector": offset_sector,
+            "filesystem_summary": f"{fs_type.group(1) if fs_type else 'unknown'}"
+            f", volume {volume.group(1) if volume else 'unknown'}"
+            f", {'unmounted properly' if unmounted else 'unmount state not confirmed'}",
+        },
+        "preload": {
+            "inode": preload_inode.group(1) if preload_inode else None,
+            "content": preload_content,
+        },
+        "library": {
+            "inode": lib_inode.group(1) if lib_inode else None,
+            "sha256": lib_sha or None,
+            "manifest_input_sha256": manifest_sha or None,
+            "matches_manifest_input": bool(lib_sha) and lib_sha == manifest_sha,
+            "file_modified": mtime,
+            "inode_modified": ctime,
+            "file_created": crtime,
+            "timestomp_suspected": bool(mtime and crtime and mtime != crtime),
+        },
+        "tmp_artifacts": {
+            "names": tmp_names,
+            "count": len(tmp_names),
+        },
+        "deleted_rk_so": {
+            "directory_entry_present": rk_so_present,
+            "recovery_precondition": precondition,
+        },
+    }
+
+    out = derived / "findings.json"
+    out.write_text(json.dumps(findings, indent=2) + "\n")
+    print(f"wrote {out}")
+
+
+def write_metrics(run_id: str, derived: Path) -> None:
+    findings_path = derived / "findings.json"
+    if not findings_path.exists():
+        raise SystemExit(f"missing {findings_path}; run with --write-findings first")
+    f = json.loads(findings_path.read_text())
+
+    expected_tmp_artifacts = {"__malicious_recon", "__malicious_harvest"}
+    present_expected = expected_tmp_artifacts & set(f["tmp_artifacts"]["names"])
+
+    metrics = {
+        "run_id": run_id,
+        "artifact_presence": {
+            "ld_so_preload": f["preload"]["inode"] is not None,
+            "installed_library": f["library"]["inode"] is not None,
+            "expected_tmp_artifacts_present": sorted(present_expected),
+            "expected_tmp_artifacts_missing": sorted(expected_tmp_artifacts - present_expected),
+        },
+        "library_identity": {
+            "sha256": f["library"]["sha256"],
+            "matches_manifest_input": f["library"]["matches_manifest_input"],
+        },
+        "timestomp": {
+            "suspected": f["library"]["timestomp_suspected"],
+            "file_modified": f["library"]["file_modified"],
+            "true_created": f["library"]["file_created"],
+        },
+        "malicious_tmp_artifact_count": f["tmp_artifacts"]["count"],
+        "deleted_object_recovery": {
+            "precondition": f["deleted_rk_so"]["recovery_precondition"],
+            "note": "met/not-met is read from this run's command_log.jsonl; "
+            "'unknown' means the rm command was not found in the log.",
+        },
+    }
+
+    out = derived / "metrics.json"
+    out.write_text(json.dumps(metrics, indent=2) + "\n")
+    print(f"wrote {out}")
+
+
+def main(argv: list[str]) -> int:
+    if argv and argv[0] == "--write-findings":
+        run_id, derived = argv[1], Path(argv[2])
+        write_findings(run_id, derived)
+        return 0
+    run_id, derived = argv[0], Path(argv[1])
+    write_metrics(run_id, derived)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
